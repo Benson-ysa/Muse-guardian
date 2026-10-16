@@ -1,0 +1,2854 @@
+@file:Suppress("TooGenericExceptionCaught", "ThrowsCount")
+
+package io.zer0.muse.backup
+
+import android.content.Context
+import android.net.Uri
+import androidx.room.withTransaction
+import io.zer0.memory.fact.FactDb
+import io.zer0.memory.fact.FactEntity
+import io.zer0.memory.summary.CompiledSectionEntity
+import io.zer0.memory.summary.ScopedCompiledSectionEntity
+import io.zer0.memory.summary.DailyStateEntity
+import io.zer0.memory.summary.MemoryDb
+import io.zer0.memory.summary.SessionSummaryEntity
+import io.zer0.memory.summary.ContextCheckpointEntity
+import io.zer0.muse.R
+import io.zer0.muse.data.SettingsRepository
+import io.zer0.muse.data.session.MuseDb
+import io.zer0.muse.data.stats.AutoBackupLogDao
+import io.zer0.muse.data.stats.AutoBackupLogEntity
+import io.zer0.muse.data.session.SessionEntity
+import io.zer0.muse.data.session.MessageEntity
+import io.zer0.muse.data.session.MessageImageStore
+import io.zer0.muse.data.assistant.AssistantEntity
+import io.zer0.muse.data.lorebook.LorebookEntity
+import io.zer0.muse.data.skill.SkillEntity
+import io.zer0.muse.data.artifact.ArtifactEntity
+import io.zer0.muse.data.quickmsg.QuickMessageEntity
+import io.zer0.muse.data.promptinjection.PromptInjectionEntity
+import io.zer0.muse.data.session.FolderEntity
+import io.zer0.muse.data.groupchat.GroupChatEntity
+import io.zer0.muse.data.groupchat.GroupChatMessageEntity
+import io.zer0.muse.data.schedule.ScheduledTaskEntity
+import io.zer0.muse.data.schedule.ScheduledTaskExecutionEntity
+import io.zer0.muse.data.knowledge.KnowledgeDocEntity
+import io.zer0.muse.data.knowledge.KnowledgeChunkEntity
+import io.zer0.muse.data.experience.ExperienceEntity
+import io.zer0.muse.data.milestone.MilestoneEntity
+import io.zer0.muse.data.moment.MomentEntity
+import io.zer0.muse.data.moment.MomentCommentEntity
+import io.zer0.muse.data.moment.MomentLikeEntity
+import io.zer0.muse.data.agentdm.AgentMessageEntity
+// P0-10: 此前缺失的会话域实体(备份补齐)
+import io.zer0.muse.data.session.ConversationEventEntity
+import io.zer0.muse.data.session.ConversationTurnEntity
+import io.zer0.muse.data.session.MessagePartEntity
+import io.zer0.muse.data.session.MessageOutboxEntity
+// P0-10: 其余缺失的用户数据实体(翻译历史/知识库/子线程/工具轮/分支头/群聊记忆)
+import io.zer0.muse.data.knowledge.KnowledgeBaseEntity
+import io.zer0.muse.data.session.ToolRoundEntity
+import io.zer0.muse.data.session.SessionBranchHeadEntity
+import io.zer0.muse.data.groupchat.GroupChatMemoryEntity
+import io.zer0.muse.data.subagent.SubagentThreadEntity
+import io.zer0.muse.ui.translate.TranslateHistoryEntity
+import io.zer0.common.Logger
+import io.zer0.common.resultOf
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.MapSerializer
+import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
+import java.io.BufferedWriter
+import java.io.BufferedInputStream
+import java.io.ByteArrayOutputStream
+import java.io.File
+import java.io.OutputStream
+import java.io.OutputStreamWriter
+import java.security.MessageDigest
+import java.util.UUID
+import java.util.zip.ZipInputStream
+
+/**
+ * Phase 5-I: 备份导出/导入服务。
+ *
+ * Phase 7 扩展:纳入 memory.db + facts.db 全量数据(4 张表)。
+ * Phase 8.9 扩展:增加 S3 / WebDAV 云端上传/下载。
+ * Phase 12 扩展:全表备份(MuseDb 全部用户数据表 + DataStore 设置快照)。
+ *
+ * 设计:
+ *  - 用 SAF (Storage Access Framework) 让用户选择导出/导入位置
+ *  - JSON 格式序列化所有会话 + 消息 + memory 数据 + 扩展表
+ *  - 版本号字段 [Backup.version] 便于后续迁移
+ *  - 三个独立 Room DB(MuseDb/MemoryDb/FactDb)分别开事务
+ *  - 云备份:本地序列化 → 字节 → CloudBackupService.uploadBackupWithLatest
+ *  - 云恢复:CloudBackupService.downloadLatestBackup → 字节 → 反序列化导入
+ *
+ * 限制:
+ *  - 大数据量(10000+ 消息)JSON 一次性序列化可能 OOM,留后续分片
+ *  - 不含图片二进制(只存 URL,URL 可能失效)
+ */
+internal suspend fun <T> withBackupImportWriteGate(block: suspend () -> T): T {
+    require(io.zer0.common.ProcessWriteGate.begin()) { "已有备份导入或恢复正在进行,请勿重复操作" }
+    return try {
+        block()
+    } finally {
+        io.zer0.common.ProcessWriteGate.end()
+    }
+}
+
+@Suppress(
+    "LongParameterList",
+    "TooGenericExceptionCaught",
+    "ThrowsCount",
+) // 依赖注入构造与跨存储恢复需要保留显式边界，避免大范围行为变更。
+class BackupService(
+    private val db: MuseDb,
+    private val memoryDb: MemoryDb,
+    private val factDb: FactDb,
+    private val cloudBackupService: CloudBackupService,
+    private val settings: SettingsRepository,
+    /** F-04: 备份记录持久化(诊断页可见 + 读回校验失败分类记录)。 */
+    private val autoBackupLogDao: AutoBackupLogDao,
+    /** v1.0.74: 导入后重建 FTS 索引(直插消息绕过 FTS 同步)。 */
+    private val sessionRepository: io.zer0.muse.data.session.SessionRepository,
+    /** 跨数据库恢复阶段账本；不保存备份正文或敏感设置值。 */
+    private val restoreJournal: RestoreJournal,
+    /** 跨进程保留目标备份与导入前恢复点。 */
+    private val restoreStagingStore: RestoreStagingStore,
+    /** F-27: 应用上下文 — 定位数据库文件路径与临时解压目录。 */
+    private val context: Context,
+    /** F-27: 事实存储 — 自动备份恢复后重建 facts FTS 索引。 */
+    private val factStore: io.zer0.memory.fact.FactStore,
+    /** P0-10: 分库提供者 — 子助手事实库(facts_<id>.db)的枚举/写入。 */
+    private val factDbProvider: io.zer0.memory.fact.FactDbProvider,
+    /** 恢复成功后清理旧消息不再引用的图片 sidecar。 */
+    private val messageImageStore: MessageImageStore,
+    /** 恢复后使 RagService 的派生 HNSW 状态失效；null 兼容测试/旧装配。 */
+    private val ragIndexInvalidator: (suspend () -> Unit)? = null,
+    /**
+     * B-23: 单 JSON 备份体量上限(字节)。
+     *
+     * 该上限仅作用于"确实需要全量解析"的路径(单 JSON 备份必须整份 decode 到内存,
+     * 否则恶意/损坏备份会把进程 OOM)。保持向后兼容,默认仍为 64MB;
+     * 若业务确实存在超过该体量的合法单 JSON 备份,允许通过构造参数调大。
+     * NDJSON 路径走流式逐行解析,不消耗该上限(天然防 OOM)。
+     */
+    private val singleJsonMaxBytes: Long = MAX_SINGLE_JSON_BACKUP_BYTES,
+) {
+    private val json = Json {
+        prettyPrint = true
+        ignoreUnknownKeys = true
+    }
+
+    /** F-27: 自动备份恢复的互斥锁,防止并发恢复/备份互相踩库文件。 */
+    private val autoRestoreLock = Any()
+
+    private suspend fun invalidateRagAfterRestore() {
+        resultOf { ragIndexInvalidator?.invoke() }
+            .onError { msg, _ -> Logger.w("BackupService", "恢复后 HNSW 索引失效处理失败: $msg") }
+    }
+
+    /**
+     * 备份数据结构。
+     *
+     * version=1: 仅 sessions + messages(Phase 5-I)
+     * version=2: 含 memory 数据(Phase 7)— 新字段带默认值,兼容旧备份导入
+     * version=3: 全表备份(Phase 12)— 新增所有 MuseDb 用户数据表 + DataStore 设置快照
+     */
+    @Serializable
+    data class Backup(
+        val version: Int = 3,
+        val exportedAt: Long,
+        // ── 原有字段(v1/v2) ──
+        val sessions: List<SessionEntity>,
+        val messages: List<MessageEntity>,
+        val sessionSummaries: List<SessionSummaryEntity> = emptyList(),
+        val contextCheckpoints: List<ContextCheckpointEntity> = emptyList(),
+        val dailyStates: List<DailyStateEntity> = emptyList(),
+        val compiledSections: List<CompiledSectionEntity> = emptyList(),
+        val scopedCompiledSections: List<ScopedCompiledSectionEntity> = emptyList(),
+        val facts: List<FactEntity> = emptyList(),
+        // ── v3 新增: MuseDb 扩展表 ──
+        val assistants: List<AssistantEntity> = emptyList(),
+        val lorebooks: List<LorebookEntity> = emptyList(),
+        val skills: List<SkillEntity> = emptyList(),
+        val artifacts: List<ArtifactEntity> = emptyList(),
+        val quickMessages: List<QuickMessageEntity> = emptyList(),
+        val promptInjections: List<PromptInjectionEntity> = emptyList(),
+        val folders: List<FolderEntity> = emptyList(),
+        val groupChats: List<GroupChatEntity> = emptyList(),
+        val groupChatMessages: List<GroupChatMessageEntity> = emptyList(),
+        val scheduledTasks: List<ScheduledTaskEntity> = emptyList(),
+        val scheduledTaskExecutions: List<ScheduledTaskExecutionEntity> = emptyList(),
+        val knowledgeDocs: List<KnowledgeDocEntity> = emptyList(),
+        val knowledgeChunks: List<KnowledgeChunkEntity> = emptyList(),
+        val experiences: List<ExperienceEntity> = emptyList(),
+        val milestones: List<MilestoneEntity> = emptyList(),
+        val agentMessages: List<AgentMessageEntity> = emptyList(),
+        // ── v1.0.74: 朋友圈三表(此前缺失,换机恢复丢数据)──
+        val moments: List<MomentEntity> = emptyList(),
+        val momentComments: List<MomentCommentEntity> = emptyList(),
+        val momentLikes: List<MomentLikeEntity> = emptyList(),
+        // ── P0-10: 此前缺失的实体(换机恢复丢数据)──
+        val quickNotes: List<io.zer0.muse.data.quicknote.QuickNoteEntity> = emptyList(),
+        val worldBookEntries: List<io.zer0.muse.worldbook.WorldBookEntryEntity> = emptyList(),
+        val conversationEvents: List<ConversationEventEntity> = emptyList(),
+        val conversationTurns: List<ConversationTurnEntity> = emptyList(),
+        val messageParts: List<MessagePartEntity> = emptyList(),
+        val messageOutboxes: List<MessageOutboxEntity> = emptyList(),
+        // P0-10: 此前缺失的实体(换机恢复丢数据)
+        val diaries: List<io.zer0.muse.data.diary.DiaryEntity> = emptyList(),
+        // P0-10: 子助手分库事实(facts_<id>.db)— assistantId → facts
+        val scopedFacts: Map<String, List<FactEntity>> = emptyMap(),
+        // P0-10: 其余此前缺失的用户数据实体(换机恢复丢数据)
+        val translateHistories: List<TranslateHistoryEntity> = emptyList(),
+        val knowledgeBases: List<KnowledgeBaseEntity> = emptyList(),
+        // v2.4.6: 知识库文件夹(含空文件夹) — 用户数据,随备份迁移
+        val knowledgeFolders: List<io.zer0.muse.data.knowledge.KnowledgeFolderEntity> = emptyList(),
+        val subagentThreads: List<SubagentThreadEntity> = emptyList(),
+        val toolRounds: List<ToolRoundEntity> = emptyList(),
+        val sessionBranchHeads: List<SessionBranchHeadEntity> = emptyList(),
+        val groupChatMemories: List<GroupChatMemoryEntity> = emptyList(),
+        // ── v3 新增: DataStore 设置快照 ──
+        val settingsSnapshot: Map<String, String> = emptyMap(),
+        // ── v4 新增: 文件型存储快照(文件名 → 内容)──
+        // 覆盖渠道/连接器/批注/收件箱/插件注册表与配置;凭据字段本身已是密文。
+        val fileStores: Map<String, String> = emptyMap(),
+    )
+
+    /** 空备份保护需要覆盖所有导出表,不能只检查 sessions/messages。 */
+    private fun Backup.hasAnyData(): Boolean = sessions.isNotEmpty() || messages.isNotEmpty() || sessionSummaries.isNotEmpty() ||
+        contextCheckpoints.isNotEmpty() ||
+        dailyStates.isNotEmpty() || compiledSections.isNotEmpty() || scopedCompiledSections.isNotEmpty() ||
+        facts.isNotEmpty() || assistants.isNotEmpty() || lorebooks.isNotEmpty() || skills.isNotEmpty() ||
+        artifacts.isNotEmpty() || quickMessages.isNotEmpty() || promptInjections.isNotEmpty() ||
+        folders.isNotEmpty() || groupChats.isNotEmpty() || groupChatMessages.isNotEmpty() ||
+        scheduledTasks.isNotEmpty() || scheduledTaskExecutions.isNotEmpty() || knowledgeDocs.isNotEmpty() ||
+        knowledgeChunks.isNotEmpty() || experiences.isNotEmpty() || milestones.isNotEmpty() ||
+        agentMessages.isNotEmpty() || moments.isNotEmpty() || momentComments.isNotEmpty() ||
+        momentLikes.isNotEmpty() || quickNotes.isNotEmpty() || worldBookEntries.isNotEmpty() ||
+        conversationEvents.isNotEmpty() || conversationTurns.isNotEmpty() || messageParts.isNotEmpty() ||
+        messageOutboxes.isNotEmpty() || diaries.isNotEmpty() || scopedFacts.isNotEmpty() ||
+        translateHistories.isNotEmpty() || knowledgeBases.isNotEmpty() || knowledgeFolders.isNotEmpty() ||
+        subagentThreads.isNotEmpty() ||
+        toolRounds.isNotEmpty() || sessionBranchHeads.isNotEmpty() || groupChatMemories.isNotEmpty() ||
+        settingsSnapshot.isNotEmpty() || fileStores.isNotEmpty()
+
+    /**
+     * 导出全部会话 + 消息 + memory 数据到指定 URI。
+     * @return 导出的会话数 + 消息数(用于 UI 提示)
+     */
+    suspend fun export(context: Context, uri: Uri): Pair<Int, Int> {
+        // P0-1: 密码失效(Keystore 丢失)时拒绝降级为明文导出,提示重新设置而非静默明文写盘
+        requireBackupPasswordAvailable(context)
+        val backup = buildBackup()
+        val text = json.encodeToString(Backup.serializer(), backup)
+        // F-28: 本地导出在配置了备份密码时使用与云备份相同的加密格式(MENC),兑现
+        // "备份文件加密,只有你的密码能解开"的产品承诺;未配置密码时保持明文兼容旧流程。
+        val password = settings.cloudBackupConfigFlow.first().backupPassword
+        withContext(Dispatchers.IO) {
+            context.contentResolver.openOutputStream(uri)?.use { os: OutputStream ->
+                if (password.isNotEmpty()) {
+                    val encrypted = BackupCrypto.encrypt(text.toByteArray(Charsets.UTF_8), password)
+                    os.write(encrypted)
+                } else {
+                    OutputStreamWriter(os, Charsets.UTF_8).use { writer ->
+                        writer.write(text)
+                    }
+                }
+            } ?: error(context.getString(R.string.backup_cannot_write, uri))
+        }
+        return backup.sessions.size to backup.messages.size
+    }
+
+    /**
+     * 从指定 URI 导入会话 + 消息 + memory 数据。
+     * 策略: 清空三个 DB 的全部表 → 插入备份数据(简化版,不做合并去重)。
+     * @param backupPassword B-8: 导入加密备份时的用户输入密码;为空时回退到云端备份配置中的密码。
+     * @return 导入的会话数 + 消息数
+     */
+    suspend fun import(context: Context, uri: Uri, backupPassword: String? = null): Pair<Int, Int> =
+        withContext(Dispatchers.IO) {
+            withBackupImportWriteGate {
+                val rawInput = context.contentResolver.openInputStream(uri)
+                    ?: error(context.getString(R.string.backup_cannot_read, uri))
+                rawInput.use { input ->
+                    val buffered = BufferedInputStream(input)
+                    buffered.mark(4)
+                    val magic = ByteArray(4)
+                    var read = 0
+                    while (read < magic.size) {
+                        val chunk = buffered.read(magic, read, magic.size - read)
+                        if (chunk < 0) break
+                        if (chunk == 0) continue
+                        read += chunk
+                    }
+                    buffered.reset()
+                    if (read == 4 && BackupCrypto.isEncrypted(magic)) {
+                        // F-28: 加密本地备份(MENC magic)——整读解密后走统一解析。
+                        // B-8: 优先使用用户输入的密码,便于找回忘密码前的旧加密备份。
+                        val password = backupPassword?.takeIf { it.isNotEmpty() }
+                            ?: settings.cloudBackupConfigFlow.first().backupPassword
+                        require(password.isNotEmpty()) {
+                            context.getString(R.string.backup_encrypted_need_password)
+                        }
+                        val rest = buffered.readBytes()
+                        check(rest.size.toLong() <= singleJsonMaxBytes) {
+                            singleJsonTooLargeConfiguredMessage(rest.size.toLong())
+                        }
+                        val decrypted = BackupCrypto.decrypt(magic + rest, password)
+                        val text = decrypted.toString(Charsets.UTF_8)
+                        importReader(context, java.io.BufferedReader(java.io.StringReader(text)))
+                    } else if (read == 4 && magic[0] == 'P'.code.toByte() && magic[1] == 'K'.code.toByte()) {
+                        // 兼容旧版/文件管理器导出的 ZIP 备份,选取首个 JSON 或 NDJSON 备份条目。
+                        ZipInputStream(buffered).use { zip ->
+                            var entry = zip.nextEntry
+                            while (entry != null && (entry.isDirectory || !isBackupEntry(entry.name))) {
+                                entry = zip.nextEntry
+                            }
+                            if (entry == null) {
+                                error(context.getString(R.string.backup_format_unrecognized))
+                            }
+                            importReader(context, zip.bufferedReader(Charsets.UTF_8))
+                        }
+                    } else {
+                        importReader(context, buffered.bufferedReader(Charsets.UTF_8))
+                    }
+                }
+            }
+        }
+
+    /** 识别本地备份 ZIP 中可能承载全量数据的 JSON/NDJSON 文件。 */
+    private fun isBackupEntry(name: String): Boolean {
+        val lower = name.lowercase()
+        val fileName = lower.substringAfterLast('/')
+        // ZIP 常带 manifest/metadata 文件,这些文件不是 Muse 全量备份正文。
+        if (fileName.startsWith("manifest.") || fileName.startsWith("metadata.") || fileName == "index.json") {
+            return false
+        }
+        return lower.endsWith(".json") || lower.endsWith(".ndjson") || lower.contains("backup")
+    }
+
+    /** 从已定位到正文开头的 reader 导入单 JSON 或 NDJSON。 */
+    private suspend fun importReader(context: Context, reader: java.io.BufferedReader): Pair<Int, Int> {
+        reader.use { source ->
+            val firstLine = generateSequence { source.readLine() }
+                .firstOrNull { !it.isNullOrBlank() }
+                ?: error(context.getString(R.string.backup_format_unrecognized))
+            val isNdJson = resultOf {
+                val obj = json.decodeFromString(JsonObject.serializer(), firstLine)
+                obj["type"]?.let { (it as? JsonPrimitive)?.content } == "meta"
+            }.getOrNull() ?: false
+            if (isNdJson) {
+                // B4-07: 首行已消费,继续从 reader 流式读取,不整读
+                val rest = sequence {
+                    while (true) {
+                        val line = source.readLine() ?: break
+                        yield(line)
+                    }
+                }
+                val imported = applyNdJsonStreamingWithImageCleanup(sequenceOf(firstLine) + rest)
+                warmUpRoomAfterImport()
+                return imported
+            }
+            // B-25: 单 JSON 备份防 OOM — 逐行读入时累计 UTF-8 体量,超过上限立即抛错。
+            val text = readSingleJsonWithLimit(source, firstLine)
+            val backup = resultOf { json.decodeFromString(Backup.serializer(), text) }
+                .onError { msg, t -> Logger.w("BackupService", "单 JSON 备份解析失败", t) }
+                .getOrNull()
+                ?: error(context.getString(R.string.backup_format_unrecognized))
+            if (!backup.hasAnyData()) {
+                error("空备份文件,已拒绝导入")
+            }
+            val imported = applyBackup(backup)
+            warmUpRoomAfterImport()
+            return imported
+        }
+    }
+
+    /**
+     * B-25: 读取单 JSON 备份文本并做体量上限校验。
+     *
+     * 逐行读入时按 UTF-8 字节累计 [第一行 + 后续行],一旦超过 [MAX_SINGLE_JSON_BACKUP_BYTES]
+     * 立即抛 [IllegalArgumentException] 给出明确上限,不再静默读入整份超大文本。
+     *
+     * @param reader 已消费过 [firstLine] 的 reader(首行在格式识别阶段读出)
+     * @param firstLine 已读出的首个非空行(计入体量)
+     */
+    private fun readSingleJsonWithLimit(reader: java.io.BufferedReader, firstLine: String): String {
+        var cumulative = firstLine.toByteArray(Charsets.UTF_8).size.toLong()
+        check(withinConfigurableLimit(cumulative, 0L)) {
+            singleJsonTooLargeConfiguredMessage(cumulative)
+        }
+        return buildString {
+            appendLine(firstLine)
+            while (true) {
+                val line = reader.readLine() ?: break
+                cumulative += line.toByteArray(Charsets.UTF_8).size.toLong()
+                check(withinConfigurableLimit(cumulative, 0L)) {
+                    singleJsonTooLargeConfiguredMessage(cumulative)
+                }
+                appendLine(line)
+            }
+        }
+    }
+
+    /**
+     * B-23: 以可配置的 [singleJsonMaxBytes] 为上限判断单 JSON 备份体量是否仍在允许范围内。
+     * [MAX_SINGLE_JSON_BACKUP_BYTES] 是向后兼容的默认上限,构造参数可调大以兼容更大合法备份。
+     */
+    private fun withinConfigurableLimit(cumulativeUtf8Bytes: Long, additionalUtf8Bytes: Long): Boolean =
+        cumulativeUtf8Bytes <= singleJsonMaxBytes - additionalUtf8Bytes
+
+    /** B-23: 生成单 JSON 备份超限错误信息,反映实例配置的实际上限(默认 64MB)。 */
+    private fun singleJsonTooLargeConfiguredMessage(cumulativeUtf8Bytes: Long): String =
+        "单 JSON 备份体量 ${(cumulativeUtf8Bytes + 1024 * 1024 - 1) / (1024 * 1024)}MB 超过上限 " +
+            "${singleJsonMaxBytes / (1024 * 1024)}MB,已拒绝导入"
+
+    /**
+     * Phase 11.2.2: 流式分片导出(NDJSON 格式)。
+     *
+     * 解决大数据量(10000+ 消息)一次性 JSON 序列化 OOM 问题。
+     * 格式:首行 meta({type:"meta",version,counts...}),后续每行一条记录。
+     *
+     * @return 导出的会话数 + 消息数
+     */
+    suspend fun exportStreaming(context: Context, uri: Uri): Pair<Int, Int> = withContext(Dispatchers.IO) {
+        // P0-1: 密码失效(Keystore 丢失)时拒绝降级为明文导出,与云上传走同一判定
+        requireBackupPasswordAvailable(context)
+        val summary = context.contentResolver.openOutputStream(uri)?.use { os: OutputStream ->
+            BufferedWriter(OutputStreamWriter(os, Charsets.UTF_8)).use { writer ->
+                val wrote = writeNdJson(writer)
+                writer.flush()
+                Logger.i("BackupService", "流式导出完成: ${wrote.sessions} 会话, ${wrote.messages} 消息")
+                wrote
+            }
+        } ?: error(context.getString(R.string.backup_cannot_write, uri))
+        summary.sessions to summary.messages
+    }
+
+    /**
+     * B-25: NDJSON 全量数据拉取 + 逐行写入的公共实现。
+     *
+     * 由 [exportStreaming](本地 SAF 文件)与 [exportToCloud](云端字节流)复用。
+     * 逐条序列化逐行写出,消息按会话分批拉取,不整份 buildBackup + encodeToString,
+     * 避免"Backup 全量对象 + 巨串 + 字节数组"三份内存同时驻留导致的 OOM。
+     *
+     * @return 各主要表计数(供调用方打印规模诊断日志)
+     */
+    private suspend fun writeNdJson(writer: BufferedWriter): NdJsonExportSummary {
+        // B-32: 全部 MuseDb 表读取包进单一事务,获得一致快照。
+        // 旧实现逐表非事务 getAll + 逐会话 observeBySession,与运行中写库并发时,
+        // 不同表/会话可能读到不同时间点的数据 → 产生 torn 备份。改为在 db.withTransaction
+        // 内一次读出全部 MuseDb 数据,事务提交后再流式写出 NDJSON,不占用事务期间的 IO 时间。
+        // 事务仅覆盖读取(很快),正式写出在事务外逐行流式进行,不影响流式导出防 OOM 的目标;
+        // 事务在 Dispatchers.IO 上执行,不阻塞主线程。
+        // memoryDb/factDb/settings 为独立库,无法并入 MuseDb 事务,仍各自读取。
+        val muse = db.withTransaction {
+            val s = db.sessionDao().observeAll().first()
+            val msgs = s.flatMap { db.messageDao().observeBySession(it.id).first() }
+            ExportedMuseSnapshot(
+                sessions = s,
+                messages = msgs,
+                assistants = db.assistantDao().getAll(),
+                lorebooks = db.lorebookDao().getAll(),
+                skills = db.skillDao().getAll(),
+                artifacts = db.artifactDao().getAll(),
+                quickMessages = db.quickMessageDao().getAll(),
+                promptInjections = db.promptInjectionDao().getAll(),
+                folders = db.folderDao().getAll(),
+                groupChats = db.groupChatDao().getAll(),
+                groupChatMessages = db.groupChatMessageDao().getAll(),
+                scheduledTasks = db.scheduledTaskDao().getAll(),
+                scheduledTaskExecutions = db.scheduledTaskExecutionDao().getAll(),
+                knowledgeDocs = db.knowledgeDocDao().getAll(),
+                knowledgeChunks = db.knowledgeChunkDao().getAll(),
+                experiences = db.experienceDao().getAll(),
+                milestones = db.milestoneDao().getAll(),
+                agentMessages = db.agentMessageDao().getAll(),
+                moments = db.momentDao().getAll(),
+                momentComments = db.momentDao().getAllComments(),
+                momentLikes = db.momentDao().getAllLikes(),
+                // P0-10: 此前缺失的实体(换机恢复丢数据)
+                quickNotes = db.quickNoteDao().getAll(),
+                worldBookEntries = db.worldBookDao().getAll(),
+                conversationEvents = db.conversationEventDao().getAll(),
+                conversationTurns = db.conversationTurnDao().getAll(),
+                messageParts = db.messagePartDao().getAll(),
+                messageOutboxes = db.messageOutboxDao().getAll(),
+                diaries = db.diaryDao().getAll(),
+                translateHistories = db.translateHistoryDao().getAll(),
+                knowledgeBases = db.knowledgeBaseDao().getAll(),
+                knowledgeFolders = db.knowledgeFolderDao().getAll(),
+                subagentThreads = db.subagentThreadDao().getAll(),
+                toolRounds = db.toolRoundDao().getAll(),
+                sessionBranchHeads = db.sessionBranchHeadDao().getAll(),
+                groupChatMemories = db.groupChatMemoryDao().getAll(),
+            )
+        }
+        val sessions = muse.sessions
+        val allMessages = muse.messages
+        val sessionSummaries = memoryDb.sessionSummaryDao().getAll()
+        val contextCheckpoints = memoryDb.contextCheckpointDao().getAll()
+        val compiledSections = memoryDb.compiledSectionDao().getAll()
+        val scopedCompiledSections = memoryDb.scopedCompiledSectionDao().getAll()
+        val dailyState = memoryDb.dailyStateDao().get()?.let { listOf(it) } ?: emptyList()
+        val facts = factDb.factDao().getAll()
+        val assistants = muse.assistants
+        val lorebooks = muse.lorebooks
+        val skills = muse.skills
+        val artifacts = muse.artifacts
+        val quickMessages = muse.quickMessages
+        val promptInjections = muse.promptInjections
+        val folders = muse.folders
+        val groupChats = muse.groupChats
+        val groupChatMessages = muse.groupChatMessages
+        val scheduledTasks = muse.scheduledTasks
+        val scheduledTaskExecutions = muse.scheduledTaskExecutions
+        val knowledgeDocs = muse.knowledgeDocs
+        val knowledgeChunks = muse.knowledgeChunks
+        val experiences = muse.experiences
+        val milestones = muse.milestones
+        val agentMessages = muse.agentMessages
+        val moments = muse.moments
+        val momentComments = muse.momentComments
+        val momentLikes = muse.momentLikes
+        // P0-10: 此前缺失的实体
+        val quickNotes = muse.quickNotes
+        val worldBookEntries = muse.worldBookEntries
+        val conversationEvents = muse.conversationEvents
+        val conversationTurns = muse.conversationTurns
+        val messageParts = muse.messageParts
+        val messageOutboxes = muse.messageOutboxes
+        val diaries = muse.diaries
+        val translateHistories = muse.translateHistories
+        val knowledgeBases = muse.knowledgeBases
+        val knowledgeFolders = muse.knowledgeFolders
+        val subagentThreads = muse.subagentThreads
+        val toolRounds = muse.toolRounds
+        val sessionBranchHeads = muse.sessionBranchHeads
+        val groupChatMemories = muse.groupChatMemories
+        // P0-10: 子助手分库(facts_<id>.db)
+        val scopedFactIds = listScopedFactDbIds()
+        val settingsSnapshot = settings.exportSettingsSnapshot()
+        val fileStores = readFileStores()
+
+        // Step 2: 写 meta 行
+        val meta = buildJsonObject {
+            put("type", "meta")
+            put("version", 4)
+            put("exportedAt", System.currentTimeMillis())
+            put("sessions", sessions.size)
+            put("messages", allMessages.size)
+            put("sessionSummaries", sessionSummaries.size)
+        put("contextCheckpoints", contextCheckpoints.size)
+            put("dailyStates", dailyState.size)
+            put("compiledSections", compiledSections.size)
+            put("scopedCompiledSections", scopedCompiledSections.size)
+            put("facts", facts.size)
+            put("assistants", assistants.size)
+            put("lorebooks", lorebooks.size)
+            put("skills", skills.size)
+            put("artifacts", artifacts.size)
+            put("quickMessages", quickMessages.size)
+            put("promptInjections", promptInjections.size)
+            put("folders", folders.size)
+            put("groupChats", groupChats.size)
+            put("groupChatMessages", groupChatMessages.size)
+            put("scheduledTasks", scheduledTasks.size)
+            put("scheduledTaskExecutions", scheduledTaskExecutions.size)
+            put("knowledgeDocs", knowledgeDocs.size)
+            put("knowledgeChunks", knowledgeChunks.size)
+            put("experiences", experiences.size)
+            put("milestones", milestones.size)
+            put("agentMessages", agentMessages.size)
+            put("moments", moments.size)
+            put("momentComments", momentComments.size)
+            put("momentLikes", momentLikes.size)
+            // P0-10: 此前缺失的实体
+            put("quickNotes", quickNotes.size)
+            put("worldBookEntries", worldBookEntries.size)
+            put("conversationEvents", conversationEvents.size)
+            put("conversationTurns", conversationTurns.size)
+            put("messageParts", messageParts.size)
+            put("messageOutboxes", messageOutboxes.size)
+            put("diaries", diaries.size)
+            put("scopedFacts", scopedFactIds.size)
+            put("translateHistories", translateHistories.size)
+            put("knowledgeBases", knowledgeBases.size)
+            put("knowledgeFolders", knowledgeFolders.size)
+            put("subagentThreads", subagentThreads.size)
+            put("toolRounds", toolRounds.size)
+            put("sessionBranchHeads", sessionBranchHeads.size)
+            put("groupChatMemories", groupChatMemories.size)
+            // settings 是一条可选记录，用 0/1 表示是否实际写出。
+            put("settings", if (settingsSnapshot.isEmpty()) 0 else 1)
+            put("fileStores", fileStores.size)
+        }
+        writer.write(meta.toString())
+        writer.newLine()
+
+        // Step 2.5: v4 文件型存储(小体积,直接内联写入)
+        fileStores.forEach { (name, content) ->
+            val line = buildJsonObject {
+                put("type", "fileStore")
+                put("name", name)
+                put("content", content)
+            }
+            writer.write(line.toString())
+            writer.newLine()
+        }
+
+        // Step 3: 写 sessions
+        var sessionCount = 0
+        sessions.forEach { session ->
+            val line = buildJsonObject {
+                put("type", "session")
+                put("data", json.encodeToJsonElement(SessionEntity.serializer(), session))
+            }
+            writer.write(line.toString())
+            writer.newLine()
+            sessionCount++
+        }
+
+        // Step 4: 写 messages(B-32: 直接写事务快照中的消息列表,不再逐会话重查)
+        var messageCount = 0
+        allMessages.forEach { msg ->
+            val line = buildJsonObject {
+                put("type", "message")
+                put("data", json.encodeToJsonElement(MessageEntity.serializer(), msg))
+            }
+            writer.write(line.toString())
+            writer.newLine()
+            messageCount++
+        }
+
+        // Step 5: 写 memory 数据
+        sessionSummaries.forEach { summary ->
+            val line = buildJsonObject {
+                put("type", "summary")
+                put("data", json.encodeToJsonElement(SessionSummaryEntity.serializer(), summary))
+            }
+            writer.write(line.toString())
+            writer.newLine()
+        }
+        contextCheckpoints.forEach { checkpoint ->
+            val line = buildJsonObject {
+                put("type", "contextCheckpoint")
+                put("data", json.encodeToJsonElement(ContextCheckpointEntity.serializer(), checkpoint))
+            }
+            writer.write(line.toString())
+            writer.newLine()
+        }
+        dailyState.forEach { ds ->
+            val line = buildJsonObject {
+                put("type", "dailyState")
+                put("data", json.encodeToJsonElement(DailyStateEntity.serializer(), ds))
+            }
+            writer.write(line.toString())
+            writer.newLine()
+        }
+        compiledSections.forEach { cs ->
+            val line = buildJsonObject {
+                put("type", "compiledSection")
+                put("data", json.encodeToJsonElement(CompiledSectionEntity.serializer(), cs))
+            }
+            writer.write(line.toString())
+            writer.newLine()
+        }
+        scopedCompiledSections.forEach { cs ->
+            val line = buildJsonObject {
+                put("type", "scopedCompiledSection")
+                put("data", json.encodeToJsonElement(ScopedCompiledSectionEntity.serializer(), cs))
+            }
+            writer.write(line.toString())
+            writer.newLine()
+        }
+
+        // Step 6: 写 facts
+        facts.forEach { fact ->
+            val line = buildJsonObject {
+                put("type", "fact")
+                put("data", json.encodeToJsonElement(FactEntity.serializer(), fact))
+            }
+            writer.write(line.toString())
+            writer.newLine()
+        }
+
+        // Step 7: 写扩展表(v3)
+        writeTypedLines(writer, "assistant", assistants, AssistantEntity.serializer())
+        writeTypedLines(writer, "lorebook", lorebooks, LorebookEntity.serializer())
+        writeTypedLines(writer, "skill", skills, SkillEntity.serializer())
+        writeTypedLines(writer, "artifact", artifacts, ArtifactEntity.serializer())
+        writeTypedLines(writer, "quickMessage", quickMessages, QuickMessageEntity.serializer())
+        writeTypedLines(writer, "promptInjection", promptInjections, PromptInjectionEntity.serializer())
+        writeTypedLines(writer, "folder", folders, FolderEntity.serializer())
+        writeTypedLines(writer, "groupChat", groupChats, GroupChatEntity.serializer())
+        writeTypedLines(writer, "groupChatMessage", groupChatMessages, GroupChatMessageEntity.serializer())
+        writeTypedLines(writer, "scheduledTask", scheduledTasks, ScheduledTaskEntity.serializer())
+        writeTypedLines(writer, "scheduledTaskExecution", scheduledTaskExecutions, ScheduledTaskExecutionEntity.serializer())
+        writeTypedLines(writer, "knowledgeDoc", knowledgeDocs, KnowledgeDocEntity.serializer())
+        writeTypedLines(writer, "knowledgeChunk", knowledgeChunks, KnowledgeChunkEntity.serializer())
+        writeTypedLines(writer, "experience", experiences, ExperienceEntity.serializer())
+        writeTypedLines(writer, "milestone", milestones, MilestoneEntity.serializer())
+        writeTypedLines(writer, "agentMessage", agentMessages, AgentMessageEntity.serializer())
+        // v1.0.74: 朋友圈三表
+        writeTypedLines(writer, "moment", moments, MomentEntity.serializer())
+        writeTypedLines(writer, "momentComment", momentComments, MomentCommentEntity.serializer())
+        writeTypedLines(writer, "momentLike", momentLikes, MomentLikeEntity.serializer())
+        // P0-10: 此前缺失的实体
+        writeTypedLines(writer, "quickNote", quickNotes, io.zer0.muse.data.quicknote.QuickNoteEntity.serializer())
+        writeTypedLines(writer, "worldBookEntry", worldBookEntries, io.zer0.muse.worldbook.WorldBookEntryEntity.serializer())
+        writeTypedLines(writer, "conversationEvent", conversationEvents, ConversationEventEntity.serializer())
+        writeTypedLines(writer, "conversationTurn", conversationTurns, ConversationTurnEntity.serializer())
+        writeTypedLines(writer, "messagePart", messageParts, MessagePartEntity.serializer())
+        writeTypedLines(writer, "messageOutbox", messageOutboxes, MessageOutboxEntity.serializer())
+        writeTypedLines(writer, "diary", diaries, io.zer0.muse.data.diary.DiaryEntity.serializer())
+        // P0-10: 其余此前缺失的用户数据实体
+        writeTypedLines(writer, "translateHistory", translateHistories, TranslateHistoryEntity.serializer())
+        writeTypedLines(writer, "knowledgeBase", knowledgeBases, KnowledgeBaseEntity.serializer())
+        writeTypedLines(
+            writer,
+            "knowledgeFolder",
+            knowledgeFolders,
+            io.zer0.muse.data.knowledge.KnowledgeFolderEntity.serializer(),
+        )
+        writeTypedLines(writer, "subagentThread", subagentThreads, SubagentThreadEntity.serializer())
+        writeTypedLines(writer, "toolRound", toolRounds, ToolRoundEntity.serializer())
+        writeTypedLines(writer, "sessionBranchHead", sessionBranchHeads, SessionBranchHeadEntity.serializer())
+        writeTypedLines(writer, "groupChatMemory", groupChatMemories, GroupChatMemoryEntity.serializer())
+        // P0-10: 子助手分库 — 每库一行,data 为该库全量 facts
+        scopedFactIds.forEach { id ->
+            val line = buildJsonObject {
+                put("type", "scopedFact")
+                put("scope", id)
+                put(
+                    "data",
+                    json.encodeToJsonElement(
+                        ListSerializer(FactEntity.serializer()),
+                        readScopedFacts(id),
+                    ),
+                )
+            }
+            writer.write(line.toString())
+            writer.newLine()
+        }
+
+        // Step 8: 写设置快照
+        if (settingsSnapshot.isNotEmpty()) {
+            val line = buildJsonObject {
+                put("type", "settings")
+                put(
+                    "data",
+                    json.encodeToJsonElement(
+                        MapSerializer(
+                            String.serializer(),
+                            String.serializer(),
+                        ),
+                        settingsSnapshot,
+                    ),
+                )
+            }
+            writer.write(line.toString())
+            writer.newLine()
+        }
+
+        return NdJsonExportSummary(
+            sessions = sessionCount,
+            messages = messageCount,
+            facts = facts.size,
+            groupChatMessages = groupChatMessages.size,
+        )
+    }
+
+    /**
+     * NDJSON 流式写入 helper: 逐条序列化写入 type + data 行。
+     */
+    private fun <T> writeTypedLines(
+        writer: BufferedWriter,
+        type: String,
+        items: List<T>,
+        serializer: kotlinx.serialization.KSerializer<T>,
+    ) {
+        items.forEach { item ->
+            val line = buildJsonObject {
+                put("type", type)
+                put("data", json.encodeToJsonElement(serializer, item))
+            }
+            writer.write(line.toString())
+            writer.newLine()
+        }
+    }
+
+    /**
+     * B-25: [writeNdJson] 的统计结果,供导出方打印规模诊断日志。
+     */
+    private data class NdJsonExportSummary(
+        val sessions: Int,
+        val messages: Int,
+        val facts: Int,
+        val groupChatMessages: Int,
+    )
+
+    /**
+     * B-32: [writeNdJson] 在单一 [MuseDb] 事务内读出的一致快照。
+     * 事务提交后据此流式写出 NDJSON;持有实体对象列表(轻量)而不持有序列化巨串,
+     * 兼顾一致快照与流式导出防 OOM 的目标。
+     */
+    private data class ExportedMuseSnapshot(
+        val sessions: List<SessionEntity>,
+        val messages: List<MessageEntity>,
+        val assistants: List<AssistantEntity>,
+        val lorebooks: List<LorebookEntity>,
+        val skills: List<SkillEntity>,
+        val artifacts: List<ArtifactEntity>,
+        val quickMessages: List<QuickMessageEntity>,
+        val promptInjections: List<PromptInjectionEntity>,
+        val folders: List<FolderEntity>,
+        val groupChats: List<GroupChatEntity>,
+        val groupChatMessages: List<GroupChatMessageEntity>,
+        val scheduledTasks: List<ScheduledTaskEntity>,
+        val scheduledTaskExecutions: List<ScheduledTaskExecutionEntity>,
+        val knowledgeDocs: List<KnowledgeDocEntity>,
+        val knowledgeChunks: List<KnowledgeChunkEntity>,
+        val experiences: List<ExperienceEntity>,
+        val milestones: List<MilestoneEntity>,
+        val agentMessages: List<AgentMessageEntity>,
+        val moments: List<MomentEntity>,
+        val momentComments: List<MomentCommentEntity>,
+        val momentLikes: List<MomentLikeEntity>,
+        // P0-10: 此前缺失的实体(换机恢复丢数据)
+        val quickNotes: List<io.zer0.muse.data.quicknote.QuickNoteEntity>,
+        val worldBookEntries: List<io.zer0.muse.worldbook.WorldBookEntryEntity>,
+        val conversationEvents: List<ConversationEventEntity>,
+        val conversationTurns: List<ConversationTurnEntity>,
+        val messageParts: List<MessagePartEntity>,
+        val messageOutboxes: List<MessageOutboxEntity>,
+        // P0-10: AI 日记本(此前缺失,换机恢复丢日记)
+        val diaries: List<io.zer0.muse.data.diary.DiaryEntity>,
+        // P0-10: 其余此前缺失的用户数据实体(换机恢复丢数据)
+        val translateHistories: List<TranslateHistoryEntity>,
+        val knowledgeBases: List<KnowledgeBaseEntity>,
+        val knowledgeFolders: List<io.zer0.muse.data.knowledge.KnowledgeFolderEntity>,
+        val subagentThreads: List<SubagentThreadEntity>,
+        val toolRounds: List<ToolRoundEntity>,
+        val sessionBranchHeads: List<SessionBranchHeadEntity>,
+        val groupChatMemories: List<GroupChatMemoryEntity>,
+    )
+
+    /**
+     * v1.104: 流式解析 NDJSON 备份并分批插入 DB。
+     *
+     * 解决大备份(10000+ 消息)导入时全量累积 List 导致 OOM 的问题:
+     *  - 逐行解析,按 type 分发到对应批次 buffer
+     *  - buffer 达 [IMPORT_BATCH] 时用 withTransaction 分批插入并清空
+     *  - 内存峰值 = 一批记录(约几百条),而非全量
+     *  - 容错:跳过无法解析的行(继续后续记录,部分恢复)
+     *
+     * @return 导入的会话数 + 消息数
+     */
+    private suspend fun applyNdJsonStreaming(lines: Sequence<String>, allowEmptyBackup: Boolean = false): Pair<Int, Int> {
+        // v1.0.74 fix: 空备份保护 — 云端路径有"0 会话 0 消息拒绝恢复",本地路径没有,
+        // 误选空/损坏文件会先清空全部表。先读 meta 行校验再决定是否继续。
+        val lineIter = lines.iterator()
+        val firstLine = if (lineIter.hasNext()) lineIter.next() else null
+        val typeToMetaKey = ndjsonTypeToMetaKey
+        val expectedCounts = mutableMapOf<String, Int>()
+        val actualCounts = mutableMapOf<String, Int>()
+        if (!firstLine.isNullOrBlank()) {
+            resultOf {
+                val obj = json.decodeFromString(JsonObject.serializer(), firstLine)
+                val type = obj["type"]?.let { (it as? JsonPrimitive)?.content }
+                require(type == "meta") { "NDJSON 备份缺少 meta 首行,已拒绝导入" }
+                // B-21/B-34: meta 既用于空备份守卫，也用于完整性对账。
+                // 当前生成器声明所有类型计数；旧版本缺失的计数字段保留兼容，
+                // 但只对实际声明的字段做严格校验。
+                typeToMetaKey.values.distinct().forEach { key ->
+                    obj[key]?.let { value ->
+                        val count = (value as? JsonPrimitive)?.contentOrNull?.toIntOrNull()
+                            ?: error("备份 meta 计数非法: $key")
+                        require(count >= 0) { "备份 meta 计数不能为负数: $key" }
+                        expectedCounts[key] = count
+                    }
+                }
+                if (!allowEmptyBackup && (expectedCounts.isEmpty() || expectedCounts.values.sum() == 0)) {
+                    throw IllegalArgumentException("空备份文件(meta 无任何数据),已拒绝导入")
+                }
+            }.onError { msg, t ->
+                // meta 解析失败或空备份:抛给调用方,不清空任何表
+                throw IllegalArgumentException(t?.message ?: msg)
+            }
+        } else {
+            throw IllegalArgumentException("备份文件为空,已拒绝导入")
+        }
+        val remaining = sequenceOf(firstLine).plus(lineIter.asSequence())
+
+        // 审计修复 (0.5): 清空 + 全部 MuseDb 插入包进同一个事务。
+        // 原实现清空是独立事务、插入是分批独立事务,解析中途异常/取消会留下半空库
+        // (对话与记忆全丢)。Room 嵌套 withTransaction 会 join 外层事务,
+        // 任一分批失败 → 整个事务(含清空)回滚,数据保持导入前状态。
+        // C-10: memoryDb / factDb 为独立数据库,无法与 MuseDb 跨库原子,
+        // 故只在 MuseDb 事务成功后再于各自独立事务内统一"清空 + 插入",
+        // 消除在 MuseDb 事务内提前提交 memory/fact 造成的跨库半状态及早前重复 flush。
+        var sessionCount = 0
+        var messageCount = 0
+        // v4: 文件型存储(渠道/连接器/批注/收件箱/插件),声明在 try 外供尾部写入
+        val fileStoreBuf = mutableMapOf<String, String>()
+        try {
+            // buffer 声明在事务外(尾部 memory/fact 事务块也要访问)
+            val sessionBuf = mutableListOf<SessionEntity>()
+            val messageBuf = mutableListOf<MessageEntity>()
+            val summaryBuf = mutableListOf<SessionSummaryEntity>()
+            val contextCheckpointBuf = mutableListOf<ContextCheckpointEntity>()
+            val dailyBuf = mutableListOf<DailyStateEntity>()
+            val compiledBuf = mutableListOf<CompiledSectionEntity>()
+            val scopedCompiledBuf = mutableListOf<ScopedCompiledSectionEntity>()
+            val factBuf = mutableListOf<FactEntity>()
+            // v3: 扩展表 buffer
+            val assistantBuf = mutableListOf<AssistantEntity>()
+            val lorebookBuf = mutableListOf<LorebookEntity>()
+            val skillBuf = mutableListOf<SkillEntity>()
+            val artifactBuf = mutableListOf<ArtifactEntity>()
+            val quickMsgBuf = mutableListOf<QuickMessageEntity>()
+            val promptInjBuf = mutableListOf<PromptInjectionEntity>()
+            val folderBuf = mutableListOf<FolderEntity>()
+            val groupChatBuf = mutableListOf<GroupChatEntity>()
+            val groupChatMsgBuf = mutableListOf<GroupChatMessageEntity>()
+            val schedTaskBuf = mutableListOf<ScheduledTaskEntity>()
+            val schedExecBuf = mutableListOf<ScheduledTaskExecutionEntity>()
+            val knowDocBuf = mutableListOf<KnowledgeDocEntity>()
+            val knowChunkBuf = mutableListOf<KnowledgeChunkEntity>()
+            val experienceBuf = mutableListOf<ExperienceEntity>()
+            val milestoneBuf = mutableListOf<MilestoneEntity>()
+            val agentMsgBuf = mutableListOf<AgentMessageEntity>()
+            // v1.0.74: 朋友圈三表
+            val momentBuf = mutableListOf<MomentEntity>()
+            val momentCommentBuf = mutableListOf<MomentCommentEntity>()
+            val momentLikeBuf = mutableListOf<MomentLikeEntity>()
+            // P0-10: 此前缺失的实体
+            val quickNoteBuf = mutableListOf<io.zer0.muse.data.quicknote.QuickNoteEntity>()
+            val worldBookBuf = mutableListOf<io.zer0.muse.worldbook.WorldBookEntryEntity>()
+            val convEventBuf = mutableListOf<ConversationEventEntity>()
+            val convTurnBuf = mutableListOf<ConversationTurnEntity>()
+            val messagePartBuf = mutableListOf<MessagePartEntity>()
+            val messageOutboxBuf = mutableListOf<MessageOutboxEntity>()
+            val diaryBuf = mutableListOf<io.zer0.muse.data.diary.DiaryEntity>()
+            val translateHistoryBuf = mutableListOf<TranslateHistoryEntity>()
+            val knowledgeBaseBuf = mutableListOf<KnowledgeBaseEntity>()
+            val subagentThreadBuf = mutableListOf<SubagentThreadEntity>()
+            val toolRoundBuf = mutableListOf<ToolRoundEntity>()
+            val sessionBranchHeadBuf = mutableListOf<SessionBranchHeadEntity>()
+            val groupChatMemoryBuf = mutableListOf<GroupChatMemoryEntity>()
+            // P0-10: 子助手分库 — scope → facts(跨库,独立于 MuseDb 事务)
+            val scopedFactBuf = LinkedHashMap<String, MutableList<FactEntity>>()
+            var settingsSnapshot: Map<String, String> = emptyMap()
+
+            db.withTransaction {
+                // 1. 先清空所有表
+                clearConversationStateForRestore(db)
+                db.assistantDao().deleteAll()
+                db.lorebookDao().deleteAll()
+                db.skillDao().deleteAll()
+                db.artifactDao().deleteAll()
+                db.quickMessageDao().deleteAll()
+                db.promptInjectionDao().deleteAll()
+                db.folderDao().deleteAll()
+                db.groupChatMessageDao().deleteAll()
+                db.groupChatDao().deleteAll()
+                db.scheduledTaskExecutionDao().deleteAll()
+                db.scheduledTaskDao().deleteAll()
+                db.knowledgeChunkDao().deleteAll()
+                db.knowledgeDocDao().deleteAll()
+                db.experienceDao().deleteAll()
+                db.milestoneDao().deleteAll()
+                db.agentMessageDao().deleteAll()
+                // v1.0.74: 朋友圈三表
+                db.momentDao().deleteAllMoments()
+                db.momentDao().deleteAllComments()
+                db.momentDao().deleteAllLikes()
+                // P0-10: 此前缺失的实体
+                db.quickNoteDao().deleteAll()
+                db.worldBookDao().deleteAll()
+                db.conversationEventDao().deleteAll()
+                db.conversationTurnDao().deleteAll()
+                db.messagePartDao().deleteAll()
+                db.messageOutboxDao().deleteAll()
+                db.diaryDao().deleteAll()
+                db.translateHistoryDao().deleteAll()
+                db.knowledgeBaseDao().deleteAll()
+                db.knowledgeFolderDao().deleteAll()
+                db.subagentThreadDao().deleteAll()
+                db.toolRoundDao().deleteAll()
+                db.sessionBranchHeadDao().deleteAll()
+                db.groupChatMemoryDao().deleteAll()
+
+                // 2. 逐行解析 + 分批插入(仍在 db.withTransaction 事务内,任一失败整体回滚)
+                remaining.forEachIndexed { idx, line ->
+                    if (line.isBlank()) return@forEachIndexed
+                    // 只把单行格式错误视为可跳过;数据库插入/事务异常必须继续向外抛出,
+                    // 这样外层 MuseDb 事务才能真正回滚,不会出现“导入成功但数据半缺失”。
+                    val obj = resultOf { json.decodeFromString(JsonObject.serializer(), line) }
+                        .onError { msg, t ->
+                            Logger.w("BackupService", "第 ${idx + 1} 行 JSON 解析失败,跳过: ${t?.message ?: msg}", t)
+                        }
+                        .getOrNull()
+                        ?: return@forEachIndexed
+                    val type = obj["type"]?.let { (it as? JsonPrimitive)?.content }
+                        ?: return@forEachIndexed
+                    if (type != "meta" && type in typeToMetaKey) {
+                        // fileStore 使用 name/content 结构，不属于实体型 data 记录。
+                        if (type != "fileStore") {
+                            require(obj["data"] != null) { "备份记录缺少 data: $type" }
+                        }
+                        val key = typeToMetaKey.getValue(type)
+                        actualCounts[key] = (actualCounts[key] ?: 0) + 1
+                    }
+                    when (type) {
+                        "meta" -> { /* version/exportedAt 元信息,流式插入不需要 */ }
+                        "fileStore" -> {
+                            val name = obj["name"]?.let { (it as? JsonPrimitive)?.content }
+                            val content = obj["content"]?.let { (it as? JsonPrimitive)?.content }
+                            if (!name.isNullOrBlank() && content != null) fileStoreBuf[name] = content
+                        }
+                        "session" -> obj["data"]?.let {
+                            // v2.x 导入预热:恢复的会话首轮以全量历史构建上下文一次
+                            sessionBuf.add(
+                                json.decodeFromJsonElement(SessionEntity.serializer(), it)
+                                    .copy(warmupPending = true),
+                            )
+                            if (sessionBuf.size >= IMPORT_BATCH) {
+                                sessionCount += sessionBuf.size
+                                flushBatch(sessionBuf) { batch -> db.withTransaction { batch.forEach { db.sessionDao().insert(it) } } }
+                            }
+                        }
+                        "message" -> obj["data"]?.let {
+                            messageBuf.add(json.decodeFromJsonElement(MessageEntity.serializer(), it))
+                            if (messageBuf.size >= IMPORT_BATCH) {
+                                messageCount += messageBuf.size
+                                flushBatch(messageBuf) { batch -> db.withTransaction { batch.forEach { db.messageDao().upsert(it) } } }
+                            }
+                        }
+                        "summary" -> obj["data"]?.let {
+                            summaryBuf.add(json.decodeFromJsonElement(SessionSummaryEntity.serializer(), it))
+                            // C-10: memory/fact 缓冲只在 MuseDb 事务成功后于各自独立事务内统一提交,
+                            // 不再在 MuseDb 事务内循环中提前 flush(旧实现会在 MuseDb 回滚时留下已提交的 memory 半状态)。
+                        }
+                        "contextCheckpoint" -> obj["data"]?.let {
+                            contextCheckpointBuf.add(
+                                json.decodeFromJsonElement(ContextCheckpointEntity.serializer(), it),
+                            )
+                        }
+                        "dailyState" -> obj["data"]?.let {
+                            dailyBuf.add(json.decodeFromJsonElement(DailyStateEntity.serializer(), it))
+                        }
+                        "compiledSection" -> obj["data"]?.let {
+                            compiledBuf.add(json.decodeFromJsonElement(CompiledSectionEntity.serializer(), it))
+                        }
+                        "scopedCompiledSection" -> obj["data"]?.let {
+                            scopedCompiledBuf.add(json.decodeFromJsonElement(ScopedCompiledSectionEntity.serializer(), it))
+                        }
+                        "fact" -> obj["data"]?.let {
+                            factBuf.add(json.decodeFromJsonElement(FactEntity.serializer(), it))
+                        }
+                        // v3: 扩展表类型
+                        "assistant" -> obj["data"]?.let {
+                            assistantBuf.add(json.decodeFromJsonElement(AssistantEntity.serializer(), it))
+                            if (assistantBuf.size >= IMPORT_BATCH) {
+                                flushBatch(
+                                    assistantBuf,
+                                ) { batch -> db.withTransaction { db.assistantDao().insertAll(batch) } }
+                            }
+                        }
+                        "lorebook" -> obj["data"]?.let {
+                            lorebookBuf.add(json.decodeFromJsonElement(LorebookEntity.serializer(), it))
+                            if (lorebookBuf.size >= IMPORT_BATCH) {
+                                flushBatch(
+                                    lorebookBuf,
+                                ) { batch -> db.withTransaction { db.lorebookDao().insertAll(batch) } }
+                            }
+                        }
+                        "skill" -> obj["data"]?.let {
+                            skillBuf.add(json.decodeFromJsonElement(SkillEntity.serializer(), it))
+                            if (skillBuf.size >= IMPORT_BATCH) {
+                                flushBatch(
+                                    skillBuf,
+                                ) { batch -> db.withTransaction { batch.forEach { db.skillDao().upsert(it) } } }
+                            }
+                        }
+                        "artifact" -> obj["data"]?.let {
+                            artifactBuf.add(json.decodeFromJsonElement(ArtifactEntity.serializer(), it))
+                            if (artifactBuf.size >= IMPORT_BATCH) {
+                                flushBatch(artifactBuf) { batch ->
+                                    db.withTransaction {
+                                        batch.forEach { db.artifactDao().upsert(it) }
+                                    }
+                                }
+                            }
+                        }
+                        "quickMessage" -> obj["data"]?.let {
+                            quickMsgBuf.add(json.decodeFromJsonElement(QuickMessageEntity.serializer(), it))
+                            if (quickMsgBuf.size >= IMPORT_BATCH) {
+                                flushBatch(
+                                    quickMsgBuf,
+                                ) { batch -> db.withTransaction { db.quickMessageDao().insertAll(batch) } }
+                            }
+                        }
+                        "promptInjection" -> obj["data"]?.let {
+                            promptInjBuf.add(json.decodeFromJsonElement(PromptInjectionEntity.serializer(), it))
+                            if (promptInjBuf.size >= IMPORT_BATCH) {
+                                flushBatch(
+                                    promptInjBuf,
+                                ) { batch -> db.withTransaction { db.promptInjectionDao().insertAll(batch) } }
+                            }
+                        }
+                        "folder" -> obj["data"]?.let {
+                            folderBuf.add(json.decodeFromJsonElement(FolderEntity.serializer(), it))
+                            if (folderBuf.size >= IMPORT_BATCH) {
+                                flushBatch(
+                                    folderBuf,
+                                ) { batch -> db.withTransaction { batch.forEach { db.folderDao().insert(it) } } }
+                            }
+                        }
+                        "groupChat" -> obj["data"]?.let {
+                            groupChatBuf.add(json.decodeFromJsonElement(GroupChatEntity.serializer(), it))
+                            if (groupChatBuf.size >= IMPORT_BATCH) {
+                                flushBatch(groupChatBuf) { batch ->
+                                    db.withTransaction {
+                                        batch.forEach { db.groupChatDao().upsert(it) }
+                                    }
+                                }
+                            }
+                        }
+                        "groupChatMessage" -> obj["data"]?.let {
+                            groupChatMsgBuf.add(json.decodeFromJsonElement(GroupChatMessageEntity.serializer(), it))
+                            if (groupChatMsgBuf.size >= IMPORT_BATCH) {
+                                flushBatch(groupChatMsgBuf) { batch ->
+                                    db.withTransaction {
+                                        db.groupChatMessageDao().insertAll(batch)
+                                    }
+                                }
+                            }
+                        }
+                        "scheduledTask" -> obj["data"]?.let {
+                            schedTaskBuf.add(json.decodeFromJsonElement(ScheduledTaskEntity.serializer(), it))
+                            if (schedTaskBuf.size >= IMPORT_BATCH) {
+                                flushBatch(schedTaskBuf) { batch ->
+                                    db.withTransaction {
+                                        batch.forEach { db.scheduledTaskDao().upsert(it) }
+                                    }
+                                }
+                            }
+                        }
+                        "scheduledTaskExecution" -> obj["data"]?.let {
+                            schedExecBuf.add(json.decodeFromJsonElement(ScheduledTaskExecutionEntity.serializer(), it))
+                            if (schedExecBuf.size >= IMPORT_BATCH) {
+                                flushBatch(schedExecBuf) { batch ->
+                                    db.withTransaction {
+                                        batch.forEach { db.scheduledTaskExecutionDao().insert(it) }
+                                    }
+                                }
+                            }
+                        }
+                        "knowledgeDoc" -> obj["data"]?.let {
+                            knowDocBuf.add(json.decodeFromJsonElement(KnowledgeDocEntity.serializer(), it))
+                            if (knowDocBuf.size >= IMPORT_BATCH) {
+                                flushBatch(knowDocBuf) { batch ->
+                                    db.withTransaction {
+                                        batch.forEach { db.knowledgeDocDao().upsert(it) }
+                                    }
+                                }
+                            }
+                        }
+                        "knowledgeChunk" -> obj["data"]?.let {
+                            knowChunkBuf.add(json.decodeFromJsonElement(KnowledgeChunkEntity.serializer(), it))
+                            if (knowChunkBuf.size >= IMPORT_BATCH) {
+                                flushBatch(
+                                    knowChunkBuf,
+                                ) { batch -> db.withTransaction { db.knowledgeChunkDao().insertAll(batch) } }
+                            }
+                        }
+                        "experience" -> obj["data"]?.let {
+                            experienceBuf.add(json.decodeFromJsonElement(ExperienceEntity.serializer(), it))
+                            if (experienceBuf.size >= IMPORT_BATCH) {
+                                flushBatch(experienceBuf) { batch ->
+                                    db.withTransaction {
+                                        batch.forEach { db.experienceDao().upsert(it) }
+                                    }
+                                }
+                            }
+                        }
+                        "milestone" -> obj["data"]?.let {
+                            milestoneBuf.add(json.decodeFromJsonElement(MilestoneEntity.serializer(), it))
+                            if (milestoneBuf.size >= IMPORT_BATCH) {
+                                flushBatch(milestoneBuf) { batch ->
+                                    db.withTransaction {
+                                        batch.forEach { db.milestoneDao().upsert(it) }
+                                    }
+                                }
+                            }
+                        }
+                        "agentMessage" -> obj["data"]?.let {
+                            agentMsgBuf.add(json.decodeFromJsonElement(AgentMessageEntity.serializer(), it))
+                            if (agentMsgBuf.size >= IMPORT_BATCH) {
+                                flushBatch(agentMsgBuf) { batch ->
+                                    db.withTransaction {
+                                        batch.forEach { db.agentMessageDao().upsert(it) }
+                                    }
+                                }
+                            }
+                        }
+                        // v1.0.74: 朋友圈三表
+                        "moment" -> obj["data"]?.let {
+                            momentBuf.add(json.decodeFromJsonElement(MomentEntity.serializer(), it))
+                            if (momentBuf.size >= IMPORT_BATCH) {
+                                flushBatch(momentBuf) { batch ->
+                                    db.withTransaction {
+                                        batch.forEach { db.momentDao().insertMoment(it) }
+                                    }
+                                }
+                            }
+                        }
+                        "momentComment" -> obj["data"]?.let {
+                            momentCommentBuf.add(json.decodeFromJsonElement(MomentCommentEntity.serializer(), it))
+                            if (momentCommentBuf.size >= IMPORT_BATCH) {
+                                flushBatch(momentCommentBuf) { batch ->
+                                    db.withTransaction {
+                                        batch.forEach { db.momentDao().insertComment(it) }
+                                    }
+                                }
+                            }
+                        }
+                        "momentLike" -> obj["data"]?.let {
+                            momentLikeBuf.add(json.decodeFromJsonElement(MomentLikeEntity.serializer(), it))
+                            if (momentLikeBuf.size >= IMPORT_BATCH) {
+                                flushBatch(momentLikeBuf) { batch ->
+                                    db.withTransaction {
+                                        batch.forEach { db.momentDao().addLike(it) }
+                                    }
+                                }
+                            }
+                        }
+                        // P0-10: 此前缺失的实体
+                        "quickNote" -> obj["data"]?.let {
+                            quickNoteBuf.add(json.decodeFromJsonElement(io.zer0.muse.data.quicknote.QuickNoteEntity.serializer(), it))
+                            if (quickNoteBuf.size >= IMPORT_BATCH) {
+                                flushBatch(quickNoteBuf) { batch ->
+                                    db.withTransaction {
+                                        batch.forEach { db.quickNoteDao().upsert(it) }
+                                    }
+                                }
+                            }
+                        }
+                        "worldBookEntry" -> obj["data"]?.let {
+                            worldBookBuf.add(json.decodeFromJsonElement(io.zer0.muse.worldbook.WorldBookEntryEntity.serializer(), it))
+                            if (worldBookBuf.size >= IMPORT_BATCH) {
+                                flushBatch(worldBookBuf) { batch ->
+                                    db.withTransaction {
+                                        batch.forEach { db.worldBookDao().upsert(it) }
+                                    }
+                                }
+                            }
+                        }
+                        "conversationEvent" -> obj["data"]?.let {
+                            convEventBuf.add(json.decodeFromJsonElement(ConversationEventEntity.serializer(), it))
+                            if (convEventBuf.size >= IMPORT_BATCH) {
+                                flushBatch(convEventBuf) { batch ->
+                                    db.withTransaction {
+                                        db.conversationEventDao().insertAll(batch)
+                                    }
+                                }
+                            }
+                        }
+                        "conversationTurn" -> obj["data"]?.let {
+                            convTurnBuf.add(json.decodeFromJsonElement(ConversationTurnEntity.serializer(), it))
+                            if (convTurnBuf.size >= IMPORT_BATCH) {
+                                flushBatch(convTurnBuf) { batch ->
+                                    db.withTransaction {
+                                        batch.forEach { db.conversationTurnDao().upsert(it) }
+                                    }
+                                }
+                            }
+                        }
+                        "messagePart" -> obj["data"]?.let {
+                            messagePartBuf.add(json.decodeFromJsonElement(MessagePartEntity.serializer(), it))
+                            if (messagePartBuf.size >= IMPORT_BATCH) {
+                                flushBatch(
+                                    messagePartBuf,
+                                ) { batch -> db.withTransaction { db.messagePartDao().upsertAll(batch) } }
+                            }
+                        }
+                        "messageOutbox" -> obj["data"]?.let {
+                            messageOutboxBuf.add(json.decodeFromJsonElement(MessageOutboxEntity.serializer(), it))
+                            if (messageOutboxBuf.size >= IMPORT_BATCH) {
+                                flushBatch(messageOutboxBuf) { batch ->
+                                    db.withTransaction {
+                                        batch.forEach { db.messageOutboxDao().upsert(it) }
+                                    }
+                                }
+                            }
+                        }
+                        "diary" -> obj["data"]?.let {
+                            diaryBuf.add(json.decodeFromJsonElement(io.zer0.muse.data.diary.DiaryEntity.serializer(), it))
+                            if (diaryBuf.size >= IMPORT_BATCH) {
+                                flushBatch(
+                                    diaryBuf,
+                                ) { batch -> db.withTransaction { batch.forEach { db.diaryDao().upsert(it) } } }
+                            }
+                        }
+                        "translateHistory" -> obj["data"]?.let {
+                            translateHistoryBuf.add(json.decodeFromJsonElement(TranslateHistoryEntity.serializer(), it))
+                            if (translateHistoryBuf.size >= IMPORT_BATCH) {
+                                flushBatch(translateHistoryBuf) { batch ->
+                                    db.withTransaction {
+                                        batch.forEach { db.translateHistoryDao().insert(it) }
+                                    }
+                                }
+                            }
+                        }
+                        "knowledgeBase" -> obj["data"]?.let {
+                            knowledgeBaseBuf.add(json.decodeFromJsonElement(KnowledgeBaseEntity.serializer(), it))
+                            if (knowledgeBaseBuf.size >= IMPORT_BATCH) {
+                                flushBatch(knowledgeBaseBuf) { batch ->
+                                    db.withTransaction {
+                                        batch.forEach { db.knowledgeBaseDao().upsert(it) }
+                                    }
+                                }
+                            }
+                        }
+                        "subagentThread" -> obj["data"]?.let {
+                            subagentThreadBuf.add(json.decodeFromJsonElement(SubagentThreadEntity.serializer(), it))
+                            if (subagentThreadBuf.size >= IMPORT_BATCH) {
+                                flushBatch(subagentThreadBuf) { batch ->
+                                    db.withTransaction {
+                                        batch.forEach { db.subagentThreadDao().upsert(it) }
+                                    }
+                                }
+                            }
+                        }
+                        "toolRound" -> obj["data"]?.let {
+                            toolRoundBuf.add(json.decodeFromJsonElement(ToolRoundEntity.serializer(), it))
+                            if (toolRoundBuf.size >= IMPORT_BATCH) {
+                                flushBatch(
+                                    toolRoundBuf,
+                                ) { batch -> db.withTransaction { db.toolRoundDao().upsertAll(batch) } }
+                            }
+                        }
+                        "sessionBranchHead" -> obj["data"]?.let {
+                            sessionBranchHeadBuf.add(json.decodeFromJsonElement(SessionBranchHeadEntity.serializer(), it))
+                            if (sessionBranchHeadBuf.size >= IMPORT_BATCH) {
+                                flushBatch(sessionBranchHeadBuf) { batch ->
+                                    db.withTransaction {
+                                        batch.forEach { db.sessionBranchHeadDao().upsert(it) }
+                                    }
+                                }
+                            }
+                        }
+                        "groupChatMemory" -> obj["data"]?.let {
+                            groupChatMemoryBuf.add(json.decodeFromJsonElement(GroupChatMemoryEntity.serializer(), it))
+                            if (groupChatMemoryBuf.size >= IMPORT_BATCH) {
+                                flushBatch(groupChatMemoryBuf) { batch ->
+                                    db.withTransaction {
+                                        batch.forEach { db.groupChatMemoryDao().insert(it) }
+                                    }
+                                }
+                            }
+                        }
+                        "scopedFact" -> {
+                            val scope = (obj["scope"] as? JsonPrimitive)?.contentOrNull ?: return@forEachIndexed
+                            val facts = obj["data"]?.let {
+                                json.decodeFromJsonElement(
+                                    ListSerializer(FactEntity.serializer()),
+                                    it,
+                                )
+                            } ?: return@forEachIndexed
+                            scopedFactBuf.getOrPut(scope) { mutableListOf() }.addAll(facts)
+                        }
+                        "settings" -> obj["data"]?.let {
+                            settingsSnapshot = json.decodeFromJsonElement(
+                                MapSerializer(
+                                    String.serializer(),
+                                    String.serializer(),
+                                ),
+                                it,
+                            )
+                        }
+                    }
+                }
+
+                // B-34: 在 MuseDb 事务提交前核对 meta 声明计数，截断或丢行的备份整体回滚。
+                expectedCounts.forEach { (key, expected) ->
+                    val actual = actualCounts[key] ?: 0
+                    check(actual == expected) {
+                        "备份记录数不一致: $key 声明 $expected, 实际 $actual"
+                    }
+                }
+
+                // 3. flush 剩余 buffer(C-10: memory/fact 缓冲这里不再 flush,
+                // 统一在 MuseDb 事务成功后的独立事务内一次性 deleteAll + 插入)。
+                if (sessionBuf.isNotEmpty()) {
+                    sessionCount += sessionBuf.size
+                    flushBatch(sessionBuf) { batch -> db.withTransaction { batch.forEach { db.sessionDao().insert(it) } } }
+                }
+                if (messageBuf.isNotEmpty()) {
+                    messageCount += messageBuf.size
+                    flushBatch(messageBuf) { batch -> db.withTransaction { batch.forEach { db.messageDao().upsert(it) } } }
+                }
+                // v3: flush 扩展表
+                flushBatch(assistantBuf) { batch -> db.withTransaction { db.assistantDao().insertAll(batch) } }
+                flushBatch(lorebookBuf) { batch -> db.withTransaction { db.lorebookDao().insertAll(batch) } }
+                flushBatch(skillBuf) { batch -> db.withTransaction { batch.forEach { db.skillDao().upsert(it) } } }
+                flushBatch(artifactBuf) { batch -> db.withTransaction { batch.forEach { db.artifactDao().upsert(it) } } }
+                flushBatch(quickMsgBuf) { batch -> db.withTransaction { db.quickMessageDao().insertAll(batch) } }
+                flushBatch(promptInjBuf) { batch -> db.withTransaction { db.promptInjectionDao().insertAll(batch) } }
+                flushBatch(folderBuf) { batch -> db.withTransaction { batch.forEach { db.folderDao().insert(it) } } }
+                flushBatch(groupChatBuf) { batch -> db.withTransaction { batch.forEach { db.groupChatDao().upsert(it) } } }
+                flushBatch(groupChatMsgBuf) { batch -> db.withTransaction { db.groupChatMessageDao().insertAll(batch) } }
+                flushBatch(schedTaskBuf) { batch -> db.withTransaction { batch.forEach { db.scheduledTaskDao().upsert(it) } } }
+                flushBatch(schedExecBuf) { batch -> db.withTransaction { batch.forEach { db.scheduledTaskExecutionDao().insert(it) } } }
+                flushBatch(knowDocBuf) { batch -> db.withTransaction { batch.forEach { db.knowledgeDocDao().upsert(it) } } }
+                flushBatch(knowChunkBuf) { batch -> db.withTransaction { db.knowledgeChunkDao().insertAll(batch) } }
+                flushBatch(experienceBuf) { batch -> db.withTransaction { batch.forEach { db.experienceDao().upsert(it) } } }
+                flushBatch(milestoneBuf) { batch -> db.withTransaction { batch.forEach { db.milestoneDao().upsert(it) } } }
+                flushBatch(agentMsgBuf) { batch -> db.withTransaction { batch.forEach { db.agentMessageDao().upsert(it) } } }
+                // v1.0.74: 朋友圈三表
+                flushBatch(momentBuf) { batch -> db.withTransaction { batch.forEach { db.momentDao().insertMoment(it) } } }
+                flushBatch(momentCommentBuf) { batch -> db.withTransaction { batch.forEach { db.momentDao().insertComment(it) } } }
+                flushBatch(momentLikeBuf) { batch -> db.withTransaction { batch.forEach { db.momentDao().addLike(it) } } }
+                // P0-10: 此前缺失的实体
+                flushBatch(quickNoteBuf) { batch -> db.withTransaction { batch.forEach { db.quickNoteDao().upsert(it) } } }
+                flushBatch(worldBookBuf) { batch -> db.withTransaction { batch.forEach { db.worldBookDao().upsert(it) } } }
+                flushBatch(convEventBuf) { batch -> db.withTransaction { db.conversationEventDao().insertAll(batch) } }
+                flushBatch(convTurnBuf) { batch -> db.withTransaction { batch.forEach { db.conversationTurnDao().upsert(it) } } }
+                flushBatch(messagePartBuf) { batch -> db.withTransaction { db.messagePartDao().upsertAll(batch) } }
+                flushBatch(messageOutboxBuf) { batch -> db.withTransaction { batch.forEach { db.messageOutboxDao().upsert(it) } } }
+                flushBatch(diaryBuf) { batch -> db.withTransaction { batch.forEach { db.diaryDao().upsert(it) } } }
+                flushBatch(translateHistoryBuf) { batch -> db.withTransaction { batch.forEach { db.translateHistoryDao().insert(it) } } }
+                flushBatch(knowledgeBaseBuf) { batch -> db.withTransaction { batch.forEach { db.knowledgeBaseDao().upsert(it) } } }
+                flushBatch(subagentThreadBuf) { batch -> db.withTransaction { batch.forEach { db.subagentThreadDao().upsert(it) } } }
+                flushBatch(toolRoundBuf) { batch -> db.withTransaction { db.toolRoundDao().upsertAll(batch) } }
+                flushBatch(sessionBranchHeadBuf) { batch -> db.withTransaction { batch.forEach { db.sessionBranchHeadDao().upsert(it) } } }
+                flushBatch(groupChatMemoryBuf) { batch -> db.withTransaction { batch.forEach { db.groupChatMemoryDao().insert(it) } } }
+            } // 审计 0.5: MuseDb 大事务闭合(失败整体回滚,含清空)
+
+            // C-10: memory/fact 依赖独立数据库,无法与 MuseDb 跨库原子。
+            // 只在 MuseDb 事务成功(走到这里)后,各自在单一事务内"先清空旧数据再插入新数据",
+            // 避免旧实现"插入→再清空→缓冲已空无法二次插入"导致的 memory/fact 数据丢失,
+            // 也消除了在 MuseDb 事务内提前 flush 造成的提前提交。
+            // 取舍:memory/fact 记录全部暂存内存后一次性落库,可接受——
+            // 其数据量远小于 messages,且换来了正确的先后顺序与一致的提交边界。
+            memoryDb.withTransaction {
+                memoryDb.sessionSummaryDao().deleteAll()
+                memoryDb.contextCheckpointDao().deleteAll()
+                memoryDb.dailyStateDao().deleteAll()
+                memoryDb.compiledSectionDao().deleteAll()
+                memoryDb.scopedCompiledSectionDao().deleteAll()
+                summaryBuf.forEach { memoryDb.sessionSummaryDao().upsert(it) }
+                contextCheckpointBuf.forEach { memoryDb.contextCheckpointDao().upsert(it) }
+                dailyBuf.forEach { memoryDb.dailyStateDao().upsert(it) }
+                compiledBuf.forEach { memoryDb.compiledSectionDao().upsert(it) }
+                scopedCompiledBuf.forEach { memoryDb.scopedCompiledSectionDao().upsert(it) }
+            }
+            factDb.withTransaction {
+                factDb.factDao().deleteAll()
+                if (factBuf.isNotEmpty()) {
+                    factDb.factDao().insertAll(factBuf.map { it.copy(id = 0) })
+                }
+            }
+            // P0-10: 恢复子助手分库(独立库,逐库清空+写入)
+            scopedFactBuf.forEach { (scope, facts) ->
+                writeScopedFacts(scope, facts)
+            }
+            // 恢复设置快照
+            if (settingsSnapshot.isNotEmpty()) {
+                settings.restoreSettingsSnapshot(settingsSnapshot)
+            }
+        } catch (e: kotlin.coroutines.cancellation.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Logger.e("BackupService", "流式导入失败,已回滚: ${e.message}", e)
+            throw e
+        }
+        // v1.0.74 fix: 直插 messages 绕过 FTS 同步,启动时 ensureFtsIndexConsistent 的计数启发式
+        // (消息数恰好相同)会跳过 rebuild,搜索索引停留在导入前。导入完成显式重建。
+        // FTS 是恢复结果的一部分；失败必须向外传播，触发持久化 recovery point 回滚，
+        // 不能像普通派生索引刷新那样只记日志后继续宣称恢复成功。
+        sessionRepository.rebuildFtsIndex()
+        invalidateRagAfterRestore()
+
+        // v4: 恢复文件型存储(白名单内,单个失败不阻塞)
+        if (fileStoreBuf.isNotEmpty()) writeFileStores(fileStoreBuf)
+
+        Logger.i("BackupService", "流式导入完成: $sessionCount 会话, $messageCount 消息")
+        return sessionCount to messageCount
+    }
+
+    private suspend fun applyNdJsonStreamingWithImageCleanup(lines: Sequence<String>): Pair<Int, Int> {
+        return restoreAndPruneMessageImages(
+            imageStore = messageImageStore,
+            restore = { applyNdJsonStreamingWithRecovery(lines) },
+            readReferencedPaths = { readReferencedMessageImagePaths() },
+        )
+    }
+
+    /**
+     * NDJSON 导入的跨库恢复包装。
+     *
+     * NDJSON 正文不能复用单 JSON staging；这里先把当前状态以 NDJSON 流式写入
+     * 持久化 recovery point，再执行目标导入。任一独立数据库或 FTS 步骤失败，
+     * 都从该恢复点流式回滚。
+     */
+    private suspend fun applyNdJsonStreamingWithRecovery(lines: Sequence<String>): Pair<Int, Int> {
+        val journalEntry = restoreJournal.begin(
+            restoreId = "restore-${UUID.randomUUID()}",
+            sourceHash = "ndjson-${UUID.randomUUID()}",
+            backupVersion = 4,
+            recoveryFormat = RestoreJournal.RecoveryFormat.NDJSON,
+        )
+        var currentJournal = journalEntry
+        return try {
+            currentJournal = restoreJournal.advance(currentJournal, RestoreJournal.Phase.STAGING)
+            restoreStagingStore.writeRecoveryNdJson(currentJournal) { writer ->
+                writeNdJson(writer)
+            }
+            currentJournal = restoreJournal.advance(currentJournal, RestoreJournal.Phase.VALIDATING)
+            currentJournal = restoreJournal.advance(currentJournal, RestoreJournal.Phase.COMMITTING)
+            val result = applyNdJsonStreaming(lines)
+            currentJournal = restoreJournal.advance(
+                currentJournal,
+                RestoreJournal.Phase.REBUILDING,
+                completedStores = setOf(
+                    RestoreJournal.Store.MUSE_DB,
+                    RestoreJournal.Store.MEMORY_DB,
+                    RestoreJournal.Store.FACT_DB,
+                    RestoreJournal.Store.SETTINGS,
+                    RestoreJournal.Store.FTS,
+                ),
+            )
+            restoreJournal.complete(currentJournal)
+            restoreStagingStore.cleanup(currentJournal)
+            result
+        } catch (e: kotlin.coroutines.cancellation.CancellationException) {
+            val rolledBack = rollbackNdJsonRestore(currentJournal, e)
+            if (!rolledBack) restoreJournal.fail(currentJournal, e)
+            throw e
+        } catch (e: Exception) {
+            val rolledBack = rollbackNdJsonRestore(currentJournal, e)
+            if (!rolledBack) restoreJournal.fail(currentJournal, e)
+            throw e
+        }
+    }
+
+    private suspend fun rollbackNdJsonRestore(entry: RestoreJournal.Entry, originalError: Throwable): Boolean =
+        withContext(kotlinx.coroutines.NonCancellable) {
+            try {
+                Logger.w("BackupService", "NDJSON 恢复失败,回滚持久化恢复点: ${originalError.message}", originalError)
+                var rollbackJournal = restoreJournal.advance(entry, RestoreJournal.Phase.ROLLING_BACK)
+                restoreStagingStore.readRecoveryNdJson(entry) { recoveryLines ->
+                    applyNdJsonStreaming(recoveryLines, allowEmptyBackup = true)
+                }
+                rollbackJournal = restoreJournal.advance(
+                    rollbackJournal,
+                    RestoreJournal.Phase.REBUILDING,
+                    completedStores = setOf(
+                        RestoreJournal.Store.MUSE_DB,
+                        RestoreJournal.Store.MEMORY_DB,
+                        RestoreJournal.Store.FACT_DB,
+                        RestoreJournal.Store.SETTINGS,
+                        RestoreJournal.Store.FTS,
+                    ),
+                )
+                restoreJournal.complete(rollbackJournal)
+                restoreStagingStore.cleanup(rollbackJournal)
+                true
+            } catch (rollbackError: Exception) {
+                Logger.e("BackupService", "NDJSON 恢复点回滚失败,保留账本和副本: ${rollbackError.message}", rollbackError)
+                false
+            }
+        }
+
+    /**
+     * P0-10: 枚举磁盘上已存在的子助手分库文件 facts_<id>.db,返回 assistantId 列表。
+     * 不含默认库 facts.db(其数据经 [factDb] 单独导出);-wal/-shm 附属文件一并排除。
+     */
+    private fun listScopedFactDbIds(): List<String> {
+        val defaultDb = context.getDatabasePath(FACT_DB_FILE_NAME)
+        val parent = defaultDb.parentFile ?: return emptyList()
+        return parent.listFiles { f ->
+            f.isFile && f.name.startsWith(SCOPED_FACT_DB_PREFIX) && f.name.endsWith(".db")
+        }?.mapNotNull { f ->
+            f.name.removePrefix(SCOPED_FACT_DB_PREFIX).removeSuffix(".db")
+                .takeIf { it.isNotBlank() && it != "db" }
+        }?.distinct() ?: emptyList()
+    }
+
+    /**
+     * P0-10: 读取指定分库的全部事实(供导出)。
+     * 分库独立于默认库,不参与 MuseDb 事务;读取后经 provider.release 释放缓存句柄,
+     * 避免长期备份累积 fd(与删除助手时的释放语义一致)。
+     */
+    private suspend fun readScopedFacts(assistantId: String): List<FactEntity> {
+        val db = factDbProvider.getFactDb(assistantId)
+        return try {
+            db.factDao().getAll()
+        } finally {
+            runCatching { factDbProvider.release(assistantId) }
+        }
+    }
+
+    /**
+     * P0-10: 将分库事实写入指定 assistantId 的 facts_<id>.db(恢复用)。
+     * 先清空再插入(与默认库恢复语义一致),id 自增主键导入时重置为 0 由 DB 重新分配。
+     */
+    private suspend fun writeScopedFacts(assistantId: String, facts: List<FactEntity>) {
+        if (facts.isEmpty()) return
+        val db = factDbProvider.getFactDb(assistantId)
+        try {
+            db.withTransaction {
+                db.factDao().deleteAll()
+                db.factDao().insertAll(facts.map { it.copy(id = 0) })
+            }
+        } finally {
+            runCatching { factDbProvider.release(assistantId) }
+        }
+    }
+
+    /**
+     * 分批插入 helper:非空时执行插入并清空 buffer。
+     */
+    private suspend fun <T> flushBatch(buf: MutableList<T>, insert: suspend (List<T>) -> Unit) {
+        if (buf.isEmpty()) return
+        insert(buf.toList())
+        buf.clear()
+    }
+
+    /** v2.0: 文件级导入后显式预热 Room,避免后续首次写入撞上 closed connection。 */
+    private fun warmUpRoomAfterImport() {
+        runCatching { db.openHelper.writableDatabase }
+            .onFailure { Logger.w("BackupService", "导入后 Room 重开失败", it) }
+    }
+    companion object {
+        /** v4: 纳入备份的文件型存储(相对 filesDir)。 */
+        internal val backupFileStorePaths = listOf(
+            "channel_configs.json",
+            "connector_configs.json",
+            "annotations.json",
+            "channel_inbox.json",
+            "plugin_configs.json",
+            "plugin_registry.json",
+            "pinned_memory/pinned-memory.json",
+            "pinned_memory/pinned.md",
+        )
+
+        /** P0-10: 默认事实库文件名(facts.db)。 */
+        internal const val FACT_DB_FILE_NAME = "facts.db"
+
+        /** P0-10: 子助手分库文件前缀(facts_<id>.db)。 */
+        internal const val SCOPED_FACT_DB_PREFIX = "facts_"
+
+        /** 流式导入每批插入条数(平衡事务开销与内存峰值)。 */
+        private const val IMPORT_BATCH = 500
+
+        /**
+         * B-25: 单 JSON 备份最大体量上限(字节,64MB)。
+         * 超过即视为恶意/损坏备份,导入时拒绝解析以防 OOM。
+         */
+        internal const val MAX_SINGLE_JSON_BACKUP_BYTES: Long = 64L * 1024 * 1024
+
+        /**
+         * B-25: 判断单 JSON 备份累计体量是否仍在上限内。
+         * 逐行读入时以 [cumulativeUtf8Bytes] 累计已消费字节,追加 [additionalUtf8Bytes] 后判断是否超限。
+         * @return true 未超限;false 已超限(调用方应中止并报错)。
+         */
+        internal fun withinSingleJsonLimit(cumulativeUtf8Bytes: Long, additionalUtf8Bytes: Long): Boolean =
+            cumulativeUtf8Bytes <= MAX_SINGLE_JSON_BACKUP_BYTES - additionalUtf8Bytes
+
+        /** B-25: 生成单 JSON 备份超限的明确错误信息(含当前体量字节与默认上限 64MB)。 */
+        internal fun singleJsonTooLargeMessage(cumulativeUtf8Bytes: Long): String =
+            "单 JSON 备份体量 ${(cumulativeUtf8Bytes + 1024 * 1024 - 1) / (1024 * 1024)}MB 超过上限 " +
+                "${MAX_SINGLE_JSON_BACKUP_BYTES / (1024 * 1024)}MB,已拒绝导入"
+
+        /**
+         * P0-1: 备份密码失效判定(导出/上传共用的单一守卫)。
+         * 用户曾设置过密码([CloudBackupConfig.backupPasswordSet])但 Keystore 密钥丢失后
+         * decrypt 读回为空串 → 禁止降级为明文写入,必须拒绝并提示重新设置。
+         * 独立为 internal 判定便于单测(不依赖 Context/ContentResolver)。
+         */
+        @JvmStatic
+        internal fun isBackupPasswordUnavailable(config: CloudBackupConfig): Boolean =
+            config.backupPasswordSet && config.backupPassword.isBlank()
+
+        /**
+         * 问题7.3: 设备相关设置 key 集合,恢复 settingsSnapshot 时跳过这些 key。
+         *
+         * - "theme_mode":主题模式可能跟随系统/设备状态,跨设备恢复无意义
+         * - "bool:dynamic_color":Material You 动态色彩依赖设备壁纸,跨设备不适用
+         * - "display_density"/"window_width_class":预留(当前快照未导出,但作为未来扩展防御)
+         */
+        private val DEVICE_SPECIFIC_KEYS = setOf(
+            "theme_mode",
+            "bool:dynamic_color",
+            "display_density",
+            "window_width_class",
+        )
+    }
+
+    /**
+     * Phase 8.9: 上传当前数据到云端(S3 / WebDAV)。
+     * 同时上传带时间戳的归档版本 + muse-backup-latest.json(用于快速恢复)。
+     * @return true 成功;false 失败或未配置云备份
+     */
+    /**
+     * F-04: 云备份结果分类。区别于布尔值,失败原因决定通知文案与诊断日志:
+     *  - [WRITE_FAILED]: 上传本身失败(网络/远端拒绝/鉴权);
+     *  - [VERIFY_FAILED]: 上传成功但读回校验失败(大小不匹配/读回为空),数据可能不完整;
+     *  - [NOT_CONFIGURED]: 未配置云备份,不打扰用户。
+     */
+    enum class CloudBackupOutcome { SUCCESS, WRITE_FAILED, VERIFY_FAILED, NOT_CONFIGURED, PASSWORD_UNAVAILABLE }
+
+    /**
+     * F-04: 写入备份记录(auto_backup_log 表,诊断页可见)。
+     * @param status success / write_failed / verify_failed
+     */
+    private suspend fun logCloudBackup(status: String, size: Long, messageCount: Long, error: String) {
+        try {
+            autoBackupLogDao.insert(
+                AutoBackupLogEntity(
+                    backupPath = "cloud",
+                    fileSizeBytes = size,
+                    status = status,
+                    errorMessage = error,
+                    messageCount = messageCount,
+                ),
+            )
+        } catch (e: kotlin.coroutines.cancellation.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            // 日志写入失败不阻断备份主流程,仅记录
+            Logger.w("BackupService", "logCloudBackup failed: ${e.message}")
+        }
+    }
+
+    /**
+     * F-04: 云备份三段式收据 — 写入 + 读回校验 + 记录。
+     *
+     * 历史事故: 上传成功即返回 true, 无任何校验; 云端静默丢字节/半写时用户
+     * 无从得知备份已损坏, 恢复后数据缺失。现流程:
+     *  1. 写出 NDJSON(内存字节,与旧实现一致);
+     *  2. 上传至云端;
+     *  3. 上传成功后 [downloadLatestBackup] 读回并比对字节数(写入后读回校验);
+     *  4. 结果(含失败原因)写入 auto_backup_log, 供备份页诊断展示。
+     */
+    suspend fun exportToCloud(): CloudBackupOutcome {
+        val config = settings.cloudBackupConfigFlow.first()
+        // ReturnCount 约束(阈值 2): 全程仅 1 个 return, 结果统一 when 汇总
+        return when {
+            !config.isConfigured -> CloudBackupOutcome.NOT_CONFIGURED
+            // B-9/P0-1: 用户曾设置备份密码但 Keystore 解密失败(password 为空)时,
+            // 拒绝降级为明文上传(与本地导出走同一判定 [isBackupPasswordUnavailable]),
+            // 提示重新设置,避免敏感对话以明文落云端。
+            isBackupPasswordUnavailable(config) -> CloudBackupOutcome.PASSWORD_UNAVAILABLE
+            else -> {
+                val write = writeBackupToCloud(config)
+                when {
+                    write == null -> CloudBackupOutcome.WRITE_FAILED
+                    !verifyCloudBackupWrite(config, write) -> CloudBackupOutcome.VERIFY_FAILED
+                    else -> {
+                        settings.saveCloudBackupConfig(config.copy(lastSyncAt = System.currentTimeMillis()))
+                        CloudBackupOutcome.SUCCESS
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * P0-1: 备份密码失效判定(导出/上传共用的单一守卫)。
+     * 用户曾设置过密码([CloudBackupConfig.backupPasswordSet])但 Keystore 密钥丢失后
+     * decrypt 读回为空串 → 禁止降级为明文写入,必须拒绝并提示重新设置。
+     * 独立为 internal 顶层判定便于单测(不依赖 Context/ContentResolver)。
+     */
+    private suspend fun requireBackupPasswordAvailable(context: Context) {
+        if (isBackupPasswordUnavailable(settings.cloudBackupConfigFlow.first())) {
+            error(context.getString(R.string.settings_backup_password_unavailable))
+        }
+    }
+
+    /** F-04: 一次云备份写入的规模信息(供读回校验与日志)。摘要针对上传密文。 */
+    private data class CloudWrite(val bytes: Long, val messages: Long, val sha256: String)
+
+    /**
+     * F-04: 写出 NDJSON(内存字节)并上传云端;失败记录 write_failed 日志。
+     * @return 上传成功时的规模信息;null 表示写入/上传失败
+     */
+    private suspend fun writeBackupToCloud(config: CloudBackupConfig): CloudWrite? {
+        // B-25: 复用 writeNdJson 流式产物 — 逐条序列化写入字节缓冲,不再 buildBackup + encodeToString
+        // (Backup 全量对象 + 巨串 + 字节数组三份内存驻留)。云端上传 API 需整份字节,
+        // 这里峰值仅一份 NDJSON 字节数组(明文或加密后),大幅降低万级消息的 OOM 风险。
+        val plaintext: ByteArray
+        val writeSummary: NdJsonExportSummary
+        ByteArrayOutputStream().use { baos ->
+            BufferedWriter(OutputStreamWriter(baos, Charsets.UTF_8)).use { writer ->
+                writeSummary = writeNdJson(writer)
+            }
+            plaintext = baos.toByteArray()
+        }
+        // v1.x 诊断: 记录导出规模,便于排查"备份不完整/恢复后数据丢失"类问题
+        Logger.i(
+            "BackupService",
+            "导出云端备份: ${writeSummary.sessions} 会话 / ${writeSummary.messages} 消息" +
+                " / ${writeSummary.facts} 记忆 / ${writeSummary.groupChatMessages} 群聊消息",
+        )
+        val data = if (config.backupPassword.isNotEmpty()) {
+            BackupCrypto.encrypt(plaintext, config.backupPassword)
+        } else {
+            plaintext
+        }
+        val uploaded = cloudBackupService.uploadBackupWithLatest(config, data)
+        if (!uploaded) {
+            Logger.w("BackupService", "云备份上传失败(写入阶段)")
+            logCloudBackup(
+                status = "write_failed",
+                size = data.size.toLong(),
+                messageCount = writeSummary.messages.toLong(),
+                error = "upload failed",
+            )
+            return null
+        }
+        return CloudWrite(
+            bytes = data.size.toLong(),
+            messages = writeSummary.messages.toLong(),
+            sha256 = sha256Hex(data),
+        )
+    }
+
+    /**
+     * F-04: 写入后读回校验 — 下载刚上传的备份并比对字节数 + SHA-256。
+     *
+     * Phase 3 (可靠性 P1): 字节层一致后追加解密后 NDJSON 结构/meta 校验
+     * (见 [validateCloudReadBackNdjson]),避免"字节一致但解密后内容非法"被记为成功。
+     * 校验结果(成功或 verify_failed,含明确失败原因)写入 auto_backup_log。
+     */
+    private suspend fun verifyCloudBackupWrite(config: CloudBackupConfig, write: CloudWrite): Boolean {
+        val readBack = cloudBackupService.downloadLatestBackup(config)
+        val readBackHash = readBack?.let(::sha256Hex)
+        val byteVerified = readBack != null &&
+            readBack.size.toLong() == write.bytes &&
+            readBackHash == write.sha256
+        if (!byteVerified) {
+            Logger.w(
+                "BackupService",
+                "云备份读回校验失败(字节): 上传 ${write.bytes} bytes/hash=${write.sha256}, " +
+                    "读回 ${readBack?.size ?: -1} bytes/hash=${readBackHash ?: "-"}",
+            )
+            logCloudBackup(
+                status = "verify_failed",
+                size = write.bytes,
+                messageCount = write.messages,
+                error = "read-back mismatch: uploaded ${write.bytes}/${write.sha256}, " +
+                    "got ${readBack?.size ?: -1}/${readBackHash ?: "-"}",
+            )
+            return false
+        }
+        // Phase 3 (P1): 字节一致 ≠ 内容可恢复 — 解密后校验 NDJSON 结构/meta/行数
+        val contentError =
+            validateCloudReadBackNdjsonWithPolicy(
+                readBack,
+                config.backupPassword,
+                config.backupPasswordSet,
+            )
+        if (contentError != null) {
+            Logger.w("BackupService", "云备份读回校验失败(内容): $contentError")
+            logCloudBackup(
+                status = "verify_failed",
+                size = write.bytes,
+                messageCount = write.messages,
+                error = "read-back content invalid: $contentError",
+            )
+            return false
+        }
+        logCloudBackup(
+            status = "success",
+            size = write.bytes,
+            messageCount = write.messages,
+            error = "",
+        )
+        return true
+    }
+
+    /**
+     * Phase 8.9: 从云端下载最新备份并导入。
+     * @return 导入的会话数 + 消息数;null 表示无备份或下载失败
+     */
+    suspend fun importFromCloud(): Pair<Int, Int>? {
+        val config = settings.cloudBackupConfigFlow.first()
+        if (!config.isConfigured) return null
+        val data = cloudBackupService.downloadLatestBackup(config) ?: return null
+        return withBackupImportWriteGate { applyCloudBackupData(config, data) }
+    }
+
+    /**
+     * v1.132: 从云端下载指定归档版本并导入(供 CloudBackupPage "按版本恢复"使用)。
+     * @param fileName 归档文件名(如 muse-backup-20250719-153000.json)
+     * @return 导入的会话数 + 消息数;null 表示无备份或下载失败
+     */
+    suspend fun importFromCloudFile(fileName: String): Pair<Int, Int>? {
+        val config = settings.cloudBackupConfigFlow.first()
+        if (!config.isConfigured) return null
+        val data = cloudBackupService.downloadBackup(config, fileName) ?: return null
+        return withBackupImportWriteGate { applyCloudBackupData(config, data) }
+    }
+
+    /**
+     * F-27(功能完善度审查): 从内部自动备份包(muse_backup_*.zip)恢复三个数据库。
+     *
+     * 自动备份包由 [io.zer0.muse.data.stats.AutoBackupHelper] 对 MuseDb/MemoryDb/FactDb
+     * 逐个 VACUUM INTO 后打包生成。恢复采用"文件级替换 + 完整性校验 + 失败回滚":
+     *   1. 关闭三个 Room 单例,避免文件句柄指向将被替换的旧文件;
+     *   2. 先把当前三库复制到回滚目录(替换失败可还原);
+     *   3. 用快照覆盖当前三库,清理残留的 -wal/-shm/-journal;
+     *   4. 对恢复后的 muse.db 执行 PRAGMA integrity_check 校验;
+     *   5. 重建消息与事实 FTS 索引(VACUUM 快照的 FTS 影子表可能不一致);
+     *   6. 返回恢复后的会话数 + 消息数。
+     *
+     * 上述步骤任一失败都会回滚到替换前的状态并抛出异常。
+     *
+     * @param path 备份包完整路径(来自 auto_backup_log.backupPath)
+     * @return 恢复后的会话数 + 消息数
+     */
+    @Suppress("TooGenericExceptionCaught")
+    suspend fun restoreFromAutoBackup(path: String): Pair<Int, Int> = withContext(Dispatchers.IO) {
+        val bundle = File(path)
+        require(bundle.exists() && bundle.isFile) { "自动备份文件不存在: $path" }
+        // B-7: 进入进程级写入门控,暂停记忆 tick/任务轮询/自动备份等后台写入,
+        // 避免 close+swap 窗口期在途写丢失。
+        require(io.zer0.common.ProcessWriteGate.begin()) { "已有备份恢复正在进行,请勿重复操作" }
+        val tmpDir = File(context.cacheDir, "auto_restore_${UUID.randomUUID()}")
+        tmpDir.mkdirs()
+        try {
+            // B-24: 兼容旧版单文件 .db 自动备份(当时仅 muse.db 一个库)。
+            // 该文件本身就是 VACUUM 快照,直接作为 muse.db 源,不走 ZIP 解包。
+            val isLegacySingleDb = path.endsWith(".db", ignoreCase = true)
+            val museSnap: File
+            val memSnap: File?
+            val factSnap: File?
+            if (isLegacySingleDb) {
+                museSnap = bundle
+                memSnap = null
+                factSnap = null
+                Logger.i("BackupService", "restoreFromAutoBackup: 检测到旧版单库备份,仅恢复 muse.db: $path")
+            } else {
+                extractAutoBackupBundle(bundle, tmpDir)
+                museSnap = File(tmpDir, io.zer0.muse.data.stats.AutoBackupHelper.ENTITY_MUSE_DB)
+                memSnap = File(tmpDir, io.zer0.muse.data.stats.AutoBackupHelper.ENTITY_MEMORY_DB)
+                factSnap = File(tmpDir, io.zer0.muse.data.stats.AutoBackupHelper.ENTITY_FACTS_DB)
+                require(museSnap.exists()) { "备份包缺少 muse.db,无法恢复" }
+            }
+
+            // 文件级替换(含失败回滚)在锁内执行,均为非挂起操作,保证原子性;
+            // FTS 重建与结果统计(reopen Room)在锁外执行,避免挂起点进入临界区。
+            synchronized(autoRestoreLock) {
+                val currentDbFile = context.getDatabasePath("muse.db")
+                val currentMemoryFile = context.getDatabasePath("memory.db")
+                val currentFactFile = context.getDatabasePath("facts.db")
+
+                // 1. 关闭 Room 单例
+                db.close()
+                memoryDb.close()
+                factDb.close()
+
+                // 2. 预拷贝当前三库到回滚目录
+                val rollbackDir = File(context.cacheDir, "auto_restore_rollback_${UUID.randomUUID()}")
+                rollbackDir.mkdirs()
+                val rollbackMuse = copyToDir(currentDbFile, rollbackDir, "muse.db")
+                val rollbackMem = copyToDir(currentMemoryFile, rollbackDir, "memory.db")
+                val rollbackFact = copyToDir(currentFactFile, rollbackDir, "facts.db")
+                try {
+                    // 3. 文件级替换(B-24: 旧版单库备份 memSnap/factSnap 为 null,跳过对应替换)
+                    swapDatabase(museSnap, currentDbFile)
+                    memSnap?.takeIf { it.exists() }?.let { swapDatabase(it, currentMemoryFile) }
+                    factSnap?.takeIf { it.exists() }?.let { swapDatabase(it, currentFactFile) }
+
+                    // 4. 完整性校验主库
+                    require(verifyDbIntegrity(currentDbFile)) { "恢复后 muse.db 完整性校验失败" }
+                } catch (e: Exception) {
+                    Logger.e("BackupService", "restoreFromAutoBackup 文件替换失败,回滚当前库: ${e.message}", e)
+                    // 回滚:用预拷贝还原;回滚失败时保留副本并如实报告
+                    val rolledBack = listOf(
+                        rollbackMuse to currentDbFile,
+                        rollbackMem to currentMemoryFile,
+                        rollbackFact to currentFactFile,
+                    ).filter { (src, _) -> src != null && src.exists() }
+                        .map { (src, dst) -> runCatching { swapDatabase(src!!, dst) }.isSuccess }
+                        .all { it }
+                    if (!rolledBack) {
+                        Logger.e("BackupService", "restoreFromAutoBackup 回滚未完全成功,请重启应用检查数据")
+                    }
+                    throw e
+                } finally {
+                    rollbackDir.deleteRecursively()
+                }
+            }
+
+            // 5a. v2.0 修复: 显式触发 Room 重开并校验。close 后依赖"后续访问自动重开"
+            // 在部分环境下失效,失败时会留下 "connection is closed" 坏状态蔓延到用户操作里;
+            // 这里当场重开并校验,失败立即抛出明确错误由上层提示重启。
+            runCatching { db.openHelper.writableDatabase }
+                .onFailure { e ->
+                    Logger.e("BackupService", "恢复后数据库重开失败", e)
+                    error("数据库连接重建失败,请重启应用后重试")
+                }
+            // 5. 锁外:重建 FTS(快照的 FTS 影子表在 VACUUM 后可能不一致)与结果统计。
+            //    这些操作触发 Room 重新打开新文件,失败不阻断恢复(索引可后续重建)。
+            resultOf { sessionRepository.rebuildFtsIndex() }
+                .onError { msg, t -> Logger.w("BackupService", "恢复后消息 FTS 重建失败: $msg", t) }
+            resultOf { factStore.rebuildFtsIndex() }
+                .onError { msg, t -> Logger.w("BackupService", "恢复后事实 FTS 重建失败: $msg", t) }
+            invalidateRagAfterRestore()
+
+            val sessions = db.sessionDao().observeAll().first()
+            val messageCount = sessions.sumOf { session ->
+                db.messageDao().observeBySession(session.id).first().size
+            }
+            Logger.i("BackupService", "restoreFromAutoBackup 完成: ${sessions.size} 会话, $messageCount 消息")
+            sessions.size to messageCount
+        } finally {
+            // B-7: 退出写入门控(无论成功与否都必须复位)
+            io.zer0.common.ProcessWriteGate.end()
+            tmpDir.deleteRecursively()
+        }
+    }
+
+    /**
+     * F-27: 解压自动备份包到临时目录(只认条目文件名,丢弃目录层级)。
+     */
+    @Suppress("NestedBlockDepth") // while+zip 读循环固有嵌套
+    private fun extractAutoBackupBundle(bundle: File, targetDir: File) {
+        ZipInputStream(BufferedInputStream(bundle.inputStream())).use { zis ->
+            var entry = zis.nextEntry
+            while (entry != null) {
+                val name = entry.name.substringAfterLast('/')
+                if (name.isNotBlank()) {
+                    File(targetDir, name).outputStream().use { zis.copyTo(it) }
+                }
+                zis.closeEntry()
+                entry = zis.nextEntry
+            }
+        }
+    }
+
+    /** F-27: 把文件复制到目标目录并返回新文件;源文件不存在时返回 null。 */
+    private fun copyToDir(src: File, dir: File, name: String): File? {
+        if (!src.exists()) return null
+        val dst = File(dir, name)
+        return if (runCatching { src.copyTo(dst, overwrite = true) }.isSuccess) dst else null
+    }
+
+    /**
+     * F-27: 用快照覆盖目标库文件,并清理同文件的 WAL/SHM/journal 附属,
+     * 避免残留帧污染新库。快照不存在时抛异常,交由调用方回滚。
+     */
+    private fun swapDatabase(snapshot: File, target: File) {
+        require(snapshot.exists()) { "快照不存在: ${snapshot.absolutePath}" }
+        snapshot.copyTo(target, overwrite = true)
+        File(target.absolutePath + "-wal").delete()
+        File(target.absolutePath + "-shm").delete()
+        File(target.absolutePath + "-journal").delete()
+    }
+
+    /** F-27: 用 PRAGMA integrity_check 校验 SQLite 文件完整性。 */
+    private fun verifyDbIntegrity(file: File): Boolean {
+        return runCatching {
+            android.database.sqlite.SQLiteDatabase.openDatabase(
+                file.absolutePath,
+                null,
+                android.database.sqlite.SQLiteDatabase.OPEN_READONLY,
+            ).use { conn ->
+                conn.rawQuery("PRAGMA integrity_check", null).use { c ->
+                    if (c.moveToFirst()) c.getString(0) == "ok" else false
+                }
+            }
+        }.getOrDefault(false)
+    }
+
+    /**
+     * v1.132: 把云端下载的(可能加密的)字节流解密、解析并导入到本地 DB。
+     * 抽出公共逻辑供 [importFromCloud] / [importFromCloudFile] 复用。
+     * @return 导入的会话数 + 消息数;null 表示解密/解析失败
+     */
+    private suspend fun applyCloudBackupData(config: CloudBackupConfig, data: ByteArray): Pair<Int, Int>? {
+        if (shouldRejectPlaintextCloudBackup(data, config.backupPasswordSet, config.backupPassword)) {
+            Logger.w("BackupService", "拒绝明文云备份: 当前设备已配置备份加密")
+            return null
+        }
+        val plaintext = if (BackupCrypto.isEncrypted(data)) {
+            if (config.backupPassword.isEmpty()) {
+                Logger.w("BackupService", "云端备份已加密但未设置备份密码,无法解密")
+                return null
+            }
+            resultOf { BackupCrypto.decrypt(data, config.backupPassword) }
+                .onError { msg, t ->
+                    Logger.w("BackupService", "云端备份解密失败(密码错误?)", t)
+                    return null
+                }
+                .getOrNull() ?: return null
+        } else {
+            data
+        }
+
+        // B-23: 不再整份 plaintext.toString + lineSequence(会把解密后明文翻倍驻留内存)。
+        // 改用 BufferedReader 逐行流式读取,仅在真正需要全量解析的单 JSON 分支才整读。
+        val rawReader = plaintext.inputStream().bufferedReader(Charsets.UTF_8)
+        val firstLine = generateSequence { rawReader.readLine() }
+            .firstOrNull { !it.isNullOrBlank() }
+            ?: run {
+                rawReader.close()
+                return null
+            }
+        val isNdJson = resultOf {
+            val obj = json.decodeFromString(JsonObject.serializer(), firstLine)
+            obj["type"]?.let { (it as? JsonPrimitive)?.content } == "meta"
+        }.getOrNull() ?: false
+
+        return if (isNdJson) {
+            // B-23: 首行已消费,继续从 reader 逐行流式导入,避免 NDJSON 整份字符串驻留。
+            rawReader.use { reader ->
+                val rest = sequence {
+                    while (true) {
+                        val line = reader.readLine() ?: break
+                        yield(line)
+                    }
+                }
+                resultOf { applyNdJsonStreamingWithImageCleanup(sequenceOf(firstLine) + rest) }
+                    .onError { _, t -> Logger.w("BackupService", "云端 NDJSON 流式导入失败", t) }
+                    .getOrNull()
+            }
+        } else {
+            rawReader.use { reader ->
+                // B-25: 云端正本已整份驻留内存(下载 + 解密),无法杜绝下载期 OOM;
+                // B-23: 单 JSON 路径必须整份 decode 到内存,因此保留体量上限拦截以防解析 OOM,
+                // 上限可经构造参数 [singleJsonMaxBytes] 调大以兼容更大合法备份(向后兼容默认 64MB)。
+                val backup = resultOf {
+                    json.decodeFromString(Backup.serializer(), readSingleJsonWithLimit(reader, firstLine))
+                }.onError { msg, t ->
+                    Logger.w("BackupService", "云端单 JSON 备份读取/解析失败,拒绝恢复: ${t?.message ?: msg}", t)
+                }.getOrNull() ?: return null
+                // v1.x 数据安全: 云端备份为空(0 会话 0 消息)时拒绝恢复,
+                // 避免"空备份覆盖本地数据"导致对话全部丢失(用户反馈 WebDAV 恢复后对话全没了)。
+                if (!backup.hasAnyData()) {
+                    Logger.w("BackupService", "云端备份为空,拒绝恢复以免覆盖本地数据")
+                    return null
+                }
+                applyBackup(backup)
+            }
+        }
+    }
+
+    /**
+     * Phase 8.9: 检查云端是否存在备份文件。
+     */
+    suspend fun hasCloudBackup(): Boolean {
+        val config = settings.cloudBackupConfigFlow.first()
+        if (!config.isConfigured) return false
+        return cloudBackupService.hasBackup(config)
+    }
+
+    /**
+     * Phase 8.9: 收集全部数据生成 [Backup](供本地导出和云端上传复用)。
+     * v3: 包含所有 MuseDb 用户数据表 + DataStore 设置快照。
+     */
+    /** B-23: MuseDb 全表一致性快照(事务内一次性读取,避免 torn 视图)。 */
+    private data class DbSnapshot(
+        val sessions: List<SessionEntity>,
+        val allMessages: List<MessageEntity>,
+        val assistants: List<AssistantEntity>,
+        val lorebooks: List<LorebookEntity>,
+        val skills: List<SkillEntity>,
+        val artifacts: List<ArtifactEntity>,
+        val quickMessages: List<QuickMessageEntity>,
+        val promptInjections: List<PromptInjectionEntity>,
+        val folders: List<FolderEntity>,
+        val groupChats: List<GroupChatEntity>,
+        val groupChatMessages: List<GroupChatMessageEntity>,
+        val scheduledTasks: List<ScheduledTaskEntity>,
+        val scheduledTaskExecutions: List<ScheduledTaskExecutionEntity>,
+        val knowledgeDocs: List<KnowledgeDocEntity>,
+        val knowledgeChunks: List<KnowledgeChunkEntity>,
+        val experiences: List<ExperienceEntity>,
+        val milestones: List<MilestoneEntity>,
+        val agentMessages: List<AgentMessageEntity>,
+        val moments: List<MomentEntity>,
+        val momentComments: List<MomentCommentEntity>,
+        val momentLikes: List<MomentLikeEntity>,
+        // P0-10: 此前缺失的实体(换机恢复丢数据)
+        val quickNotes: List<io.zer0.muse.data.quicknote.QuickNoteEntity>,
+        val worldBookEntries: List<io.zer0.muse.worldbook.WorldBookEntryEntity>,
+        val conversationEvents: List<ConversationEventEntity>,
+        val conversationTurns: List<ConversationTurnEntity>,
+        val messageParts: List<MessagePartEntity>,
+        val messageOutboxes: List<MessageOutboxEntity>,
+        // P0-10: AI 日记本(此前缺失,换机恢复丢日记)
+        val diaries: List<io.zer0.muse.data.diary.DiaryEntity>,
+        // P0-10: 其余此前缺失的用户数据实体(换机恢复丢数据)
+        val translateHistories: List<TranslateHistoryEntity>,
+        val knowledgeBases: List<KnowledgeBaseEntity>,
+        val knowledgeFolders: List<io.zer0.muse.data.knowledge.KnowledgeFolderEntity>,
+        val subagentThreads: List<SubagentThreadEntity>,
+        val toolRounds: List<ToolRoundEntity>,
+        val sessionBranchHeads: List<SessionBranchHeadEntity>,
+        val groupChatMemories: List<GroupChatMemoryEntity>,
+    )
+
+    /** v4: 读取文件型存储快照(缺失/失败跳过)。 */
+    private suspend fun readFileStores(): Map<String, String> = withContext(Dispatchers.IO) {
+        readBackupFileStores(backupFileStorePaths) { name ->
+            val file = File(context.filesDir, name)
+            file.takeIf { it.isFile }?.readText()
+        }
+    }
+
+    /** v4: 恢复文件型存储(白名单内逐个写回,单个失败不阻塞其余)。 */
+    private suspend fun writeFileStores(stores: Map<String, String>) = withContext(Dispatchers.IO) {
+        restoreBackupFileStores(
+            stores = stores,
+            allowedPaths = backupFileStorePaths.toSet(),
+        ) { name, content ->
+            val target = File(context.filesDir, name)
+            target.parentFile?.mkdirs()
+            io.zer0.muse.data.AtomicFileStore.writeText(target, content)
+        }
+    }
+
+    private suspend fun buildBackup(): Backup {
+        // B-23: MuseDb 读取包事务,避免与并发写交织产生 torn 快照(回滚 recovery point 一致性)。
+        // memory/fact 各库读取量小且为单表,由上层 recoverIncompleteRestore 分层处理跨库一致性。
+        val snap = db.withTransaction {
+            DbSnapshot(
+                sessions = db.sessionDao().observeAll().first(),
+                allMessages = db.sessionDao().observeAll().first().flatMap { session ->
+                    db.messageDao().observeBySession(session.id).first()
+                },
+                assistants = db.assistantDao().getAll(),
+                lorebooks = db.lorebookDao().getAll(),
+                skills = db.skillDao().getAll(),
+                artifacts = db.artifactDao().getAll(),
+                quickMessages = db.quickMessageDao().getAll(),
+                promptInjections = db.promptInjectionDao().getAll(),
+                folders = db.folderDao().getAll(),
+                groupChats = db.groupChatDao().getAll(),
+                groupChatMessages = db.groupChatMessageDao().getAll(),
+                scheduledTasks = db.scheduledTaskDao().getAll(),
+                scheduledTaskExecutions = db.scheduledTaskExecutionDao().getAll(),
+                knowledgeDocs = db.knowledgeDocDao().getAll(),
+                knowledgeChunks = db.knowledgeChunkDao().getAll(),
+                experiences = db.experienceDao().getAll(),
+                milestones = db.milestoneDao().getAll(),
+                agentMessages = db.agentMessageDao().getAll(),
+                moments = db.momentDao().getAll(),
+                momentComments = db.momentDao().getAllComments(),
+                momentLikes = db.momentDao().getAllLikes(),
+                // P0-10: 此前缺失的实体(换机恢复丢数据)
+                quickNotes = db.quickNoteDao().getAll(),
+                worldBookEntries = db.worldBookDao().getAll(),
+                conversationEvents = db.conversationEventDao().getAll(),
+                conversationTurns = db.conversationTurnDao().getAll(),
+                messageParts = db.messagePartDao().getAll(),
+                messageOutboxes = db.messageOutboxDao().getAll(),
+                diaries = db.diaryDao().getAll(),
+                translateHistories = db.translateHistoryDao().getAll(),
+                knowledgeBases = db.knowledgeBaseDao().getAll(),
+                knowledgeFolders = db.knowledgeFolderDao().getAll(),
+                subagentThreads = db.subagentThreadDao().getAll(),
+                toolRounds = db.toolRoundDao().getAll(),
+                sessionBranchHeads = db.sessionBranchHeadDao().getAll(),
+                groupChatMemories = db.groupChatMemoryDao().getAll(),
+            )
+        }
+        val sessions = snap.sessions
+        val allMessages = snap.allMessages
+        // memory 数据(4 张表)
+        val sessionSummaries = memoryDb.sessionSummaryDao().getAll()
+        val contextCheckpoints = memoryDb.contextCheckpointDao().getAll()
+        val compiledSections = memoryDb.compiledSectionDao().getAll()
+        val scopedCompiledSections = memoryDb.scopedCompiledSectionDao().getAll()
+        val dailyState = memoryDb.dailyStateDao().get()?.let { listOf(it) } ?: emptyList()
+        val facts = factDb.factDao().getAll()
+        val assistants = snap.assistants
+        val lorebooks = snap.lorebooks
+        val skills = snap.skills
+        val artifacts = snap.artifacts
+        val quickMessages = snap.quickMessages
+        val promptInjections = snap.promptInjections
+        val folders = snap.folders
+        val groupChats = snap.groupChats
+        val groupChatMessages = snap.groupChatMessages
+        val scheduledTasks = snap.scheduledTasks
+        val scheduledTaskExecutions = snap.scheduledTaskExecutions
+        val knowledgeDocs = snap.knowledgeDocs
+        val knowledgeChunks = snap.knowledgeChunks
+        val experiences = snap.experiences
+        val milestones = snap.milestones
+        val agentMessages = snap.agentMessages
+        val moments = snap.moments
+        val momentComments = snap.momentComments
+        val momentLikes = snap.momentLikes
+        // P0-10: 此前缺失的实体
+        val quickNotes = snap.quickNotes
+        val worldBookEntries = snap.worldBookEntries
+        val conversationEvents = snap.conversationEvents
+        val conversationTurns = snap.conversationTurns
+        val messageParts = snap.messageParts
+        val messageOutboxes = snap.messageOutboxes
+        val diaries = snap.diaries
+        val translateHistories = snap.translateHistories
+        val knowledgeBases = snap.knowledgeBases
+        val subagentThreads = snap.subagentThreads
+        val toolRounds = snap.toolRounds
+        val sessionBranchHeads = snap.sessionBranchHeads
+        val groupChatMemories = snap.groupChatMemories
+        // P0-10: 子助手分库(facts_<id>.db)
+        val scopedFacts = listScopedFactDbIds().associateWith { id ->
+            readScopedFacts(id)
+        }.filterValues { it.isNotEmpty() }
+        // 设置快照
+        val settingsSnapshot = settings.exportSettingsSnapshot()
+        // v4: 文件型存储快照(渠道/连接器/批注/收件箱/插件)
+        val fileStores = readFileStores()
+
+        return Backup(
+            version = 4,
+            exportedAt = System.currentTimeMillis(),
+            sessions = sessions,
+            messages = allMessages,
+            sessionSummaries = sessionSummaries,
+            contextCheckpoints = contextCheckpoints,
+            dailyStates = dailyState,
+            compiledSections = compiledSections,
+            scopedCompiledSections = scopedCompiledSections,
+            facts = facts,
+            assistants = assistants,
+            lorebooks = lorebooks,
+            skills = skills,
+            artifacts = artifacts,
+            quickMessages = quickMessages,
+            promptInjections = promptInjections,
+            folders = folders,
+            groupChats = groupChats,
+            groupChatMessages = groupChatMessages,
+            scheduledTasks = scheduledTasks,
+            scheduledTaskExecutions = scheduledTaskExecutions,
+            knowledgeDocs = knowledgeDocs,
+            knowledgeChunks = knowledgeChunks,
+            experiences = experiences,
+            milestones = milestones,
+            agentMessages = agentMessages,
+            moments = moments,
+            momentComments = momentComments,
+            momentLikes = momentLikes,
+            quickNotes = quickNotes,
+            worldBookEntries = worldBookEntries,
+            conversationEvents = conversationEvents,
+            conversationTurns = conversationTurns,
+            messageParts = messageParts,
+            messageOutboxes = messageOutboxes,
+            diaries = diaries,
+            scopedFacts = scopedFacts,
+            translateHistories = translateHistories,
+            knowledgeBases = knowledgeBases,
+            subagentThreads = subagentThreads,
+            toolRounds = toolRounds,
+            sessionBranchHeads = sessionBranchHeads,
+            groupChatMemories = groupChatMemories,
+            settingsSnapshot = settingsSnapshot,
+            fileStores = fileStores,
+        )
+    }
+
+    /**
+     * 把 [Backup] 应用到所有 DB(供本地导入和云端恢复复用)。
+     * v3: 恢复所有 MuseDb 用户数据表 + DataStore 设置快照。
+     *
+     * 问题7.1: 跨三个独立 DB 的事务中途失败会导致数据全丢。
+     * 改造为"导入前快照 + 失败回滚":先 buildBackup() 拿当前数据快照,
+     * 任一 DB 写入抛异常时用快照重新 apply 一次,尽力恢复导入前状态。
+     * 问题7.2: 入口先调用 [migrateBackup] 做版本迁移(v1/v2 → v3)。
+     * 问题7.3: 恢复 settingsSnapshot 时过滤掉设备相关 key。
+     *
+     * @return 导入的会话数 + 消息数
+     */
+    @Suppress("TooGenericExceptionCaught", "ThrowsCount")
+    private suspend fun applyBackup(backup: Backup): Pair<Int, Int> {
+        require(backup.hasAnyData()) { "空备份文件,已拒绝导入" }
+        // 问题7.2: 版本迁移(v1/v2 → v3),Backup data class 字段都有默认值,补 version 即可
+        val migrated = migrateBackup(backup)
+        val journalEntry = restoreJournal.begin(
+            restoreId = "restore-${UUID.randomUUID()}",
+            sourceHash = backupHash(migrated),
+            backupVersion = migrated.version,
+        )
+        var currentJournal = journalEntry
+        return try {
+            currentJournal = restoreJournal.advance(currentJournal, RestoreJournal.Phase.STAGING)
+            // 先持久化目标与导入前恢复点；这样跨库提交中途进程被杀后仍能回滚。
+            val preImportSnapshot = buildBackup()
+            restoreStagingStore.writeTarget(currentJournal, migrated)
+            restoreStagingStore.writeRecoveryPoint(currentJournal, preImportSnapshot)
+            currentJournal = restoreJournal.advance(currentJournal, RestoreJournal.Phase.VALIDATING)
+            currentJournal = restoreJournal.advance(currentJournal, RestoreJournal.Phase.COMMITTING)
+            val imageFilesBeforeRestore = messageImageStore.snapshotStoredFilePaths()
+            val result = applyBackupInternal(migrated)
+            currentJournal = restoreJournal.advance(
+                currentJournal,
+                RestoreJournal.Phase.REBUILDING,
+                completedStores = setOf(
+                    RestoreJournal.Store.MUSE_DB,
+                    RestoreJournal.Store.MEMORY_DB,
+                    RestoreJournal.Store.FACT_DB,
+                    RestoreJournal.Store.SETTINGS,
+                ),
+            )
+            try {
+                sessionRepository.rebuildFtsIndex()
+            } catch (error: Exception) {
+                Logger.w("BackupService", "恢复后 FTS 重建失败，保留恢复账本: ${error.message}", error)
+                throw error
+            }
+            invalidateRagAfterRestore()
+            currentJournal = restoreJournal.advance(
+                currentJournal,
+                RestoreJournal.Phase.REBUILDING,
+                completedStores = currentJournal.completedStores + RestoreJournal.Store.FTS,
+            )
+            restoreJournal.complete(currentJournal)
+            restoreStagingStore.cleanup(currentJournal)
+            pruneRestoredMessageImages(imageFilesBeforeRestore)
+            result
+        } catch (e: kotlin.coroutines.cancellation.CancellationException) {
+            val rolledBack = rollbackAfterRestoreFailure(currentJournal, e)
+            if (!rolledBack) restoreJournal.fail(currentJournal, e)
+            throw e
+        } catch (e: Exception) {
+            val rolledBack = rollbackAfterRestoreFailure(currentJournal, e)
+            if (!rolledBack) restoreJournal.fail(currentJournal, e)
+            throw e
+        }
+    }
+
+    /**
+     * 对恢复失败统一执行持久化 recovery point 回滚。
+     *
+     * 该路径覆盖目标 DB 写入失败和 FTS 重建失败；回滚本身使用 NonCancellable，
+     * 避免用户停止或进程内取消把恢复点再次留在半提交状态。回滚失败时保留账本
+     * 与副本，供下一次启动继续诊断/处理。
+     */
+    @Suppress("TooGenericExceptionCaught")
+    private suspend fun rollbackAfterRestoreFailure(entry: RestoreJournal.Entry, originalError: Throwable): Boolean =
+        withContext(kotlinx.coroutines.NonCancellable) {
+            val recovery = restoreStagingStore.readRecoveryPoint(entry)
+            if (recovery == null) {
+                Logger.e("BackupService", "恢复失败且找不到持久化 recovery point: ${originalError.message}", originalError)
+                return@withContext false
+            }
+            try {
+                Logger.w("BackupService", "恢复失败,回滚到持久化 recovery point: ${originalError.message}", originalError)
+                val imageFilesBeforeRollback = messageImageStore.snapshotStoredFilePaths()
+                var rollbackJournal = restoreJournal.advance(entry, RestoreJournal.Phase.ROLLING_BACK)
+                applyBackupInternal(recovery)
+                sessionRepository.rebuildFtsIndex()
+                invalidateRagAfterRestore()
+                rollbackJournal = restoreJournal.advance(
+                    rollbackJournal,
+                    RestoreJournal.Phase.ROLLING_BACK,
+                    completedStores = setOf(
+                        RestoreJournal.Store.MUSE_DB,
+                        RestoreJournal.Store.MEMORY_DB,
+                        RestoreJournal.Store.FACT_DB,
+                        RestoreJournal.Store.SETTINGS,
+                        RestoreJournal.Store.FTS,
+                    ),
+                )
+                restoreJournal.complete(rollbackJournal)
+                restoreStagingStore.cleanup(rollbackJournal)
+                pruneRestoredMessageImages(imageFilesBeforeRollback)
+                true
+            } catch (rollbackError: Exception) {
+                Logger.e("BackupService", "恢复点回滚失败,保留账本和副本: ${rollbackError.message}", rollbackError)
+                false
+            }
+        }
+
+    /**
+     * 启动时恢复上次被进程终止的跨存储导入。
+     *
+     * 当前协议选择安全优先：任何未完成恢复都回滚到持久化 recovery point，
+     * 而不是继续提交可能已经部分写入的 target。这样不会把半套数据误当成新状态。
+     * @return 是否发现并处理了一条未完成恢复账本
+     */
+    @Suppress("TooGenericExceptionCaught")
+    suspend fun recoverIncompleteRestore(gateAlreadyHeld: Boolean = false): Boolean = withContext(Dispatchers.IO) {
+        suspend fun restoreBody(): Boolean {
+            val entry = restoreJournal.incompleteEntry() ?: return false
+            var current = entry
+            return try {
+            val imageFilesBeforeRollback = messageImageStore.snapshotStoredFilePaths()
+            current = restoreJournal.advance(current, RestoreJournal.Phase.ROLLING_BACK)
+            if (entry.recoveryFormat == RestoreJournal.RecoveryFormat.NDJSON) {
+                restoreStagingStore.readRecoveryNdJson(entry) { recoveryLines ->
+                    applyNdJsonStreaming(recoveryLines, allowEmptyBackup = true)
+                }
+            } else {
+                val recovery = restoreStagingStore.readRecoveryPoint(entry)
+                    ?: error("恢复账本存在，但找不到持久化 recovery point")
+                applyBackupInternal(recovery)
+                sessionRepository.rebuildFtsIndex()
+                invalidateRagAfterRestore()
+            }
+            current = restoreJournal.advance(
+                current,
+                RestoreJournal.Phase.REBUILDING,
+                completedStores = setOf(
+                    RestoreJournal.Store.MUSE_DB,
+                    RestoreJournal.Store.MEMORY_DB,
+                    RestoreJournal.Store.FACT_DB,
+                    RestoreJournal.Store.SETTINGS,
+                    RestoreJournal.Store.FTS,
+                ),
+            )
+            restoreJournal.complete(current)
+            restoreStagingStore.cleanup(current)
+            pruneRestoredMessageImages(imageFilesBeforeRollback)
+            Logger.w("BackupService", "启动恢复检查已回滚未完成恢复: phase=${entry.phase}")
+            true
+            } catch (error: Exception) {
+                restoreJournal.fail(current, error)
+                Logger.e("BackupService", "启动恢复检查失败，保留恢复副本供诊断: ${error.message}", error)
+                false
+            }
+        }
+        if (gateAlreadyHeld) {
+            require(io.zer0.common.ProcessWriteGate.restoring) { "恢复闸门未持有" }
+            restoreBody()
+        } else {
+            withBackupImportWriteGate { restoreBody() }
+        }
+    }
+
+    /** 计算字节摘要；云端校验针对上传密文，避免泄露或混淆明文内容。 */
+    private fun sha256Hex(bytes: ByteArray): String = MessageDigest.getInstance("SHA-256")
+        .digest(bytes)
+        .joinToString("") { byte -> "%02x".format(byte) }
+
+    /** 仅保存备份内容摘要，避免恢复账本持有用户数据或敏感设置。 */
+    private fun backupHash(backup: Backup): String {
+        val encoded = json.encodeToString(Backup.serializer(), backup)
+        return MessageDigest.getInstance("SHA-256")
+            .digest(encoded.toByteArray(Charsets.UTF_8))
+            .joinToString("") { byte -> "%02x".format(byte) }
+    }
+
+    /**
+     * 问题7.2: 备份版本迁移钩子。
+     *
+     * - v4: 当前版本,无需迁移
+     * - v3: 无文件型存储,fileStores 走默认空值
+     * - v1/v2: 旧版备份仅含 sessions + messages + memory 数据(扩展表为空),
+     *   Backup data class 新增字段都有默认值,补 version=4 即可
+     * - 未知版本: 警告并按 v4 处理
+     */
+    private fun migrateBackup(backup: Backup): Backup = when (backup.version) {
+        4, 3 -> backup
+        1, 2 -> {
+            Logger.i("BackupService", "迁移备份 v${backup.version} → v4:补默认扩展表字段")
+            backup.copy(version = 4)
+        }
+        else -> {
+            Logger.w("BackupService", "未知备份版本 v${backup.version},按当前版本 v4 处理")
+            backup.copy(version = 4)
+        }
+    }
+
+    /**
+     * 实际执行清空 + 插入的逻辑(供 [applyBackup] 与回滚复用,不再带回滚)。
+     *
+     * 注意:此方法跨三个独立 DB 各自开事务,无法做到原子性;调用方([applyBackup])负责回滚。
+     */
+    private suspend fun applyBackupInternal(backup: Backup): Pair<Int, Int> {
+        // 1. 导入 MuseDb 主表(sessions + messages)
+        db.withTransaction {
+            clearConversationStateForRestore(db)
+            // v2.x 导入预热:恢复的会话首轮以全量历史构建上下文一次
+            backup.sessions.forEach { db.sessionDao().insert(it.copy(warmupPending = true)) }
+            backup.messages.forEach { db.messageDao().upsert(it) }
+
+            // v3: 扩展表(在同一事务中清空 + 插入)
+            db.assistantDao().deleteAll()
+            db.lorebookDao().deleteAll()
+            db.skillDao().deleteAll()
+            db.artifactDao().deleteAll()
+            db.quickMessageDao().deleteAll()
+            db.promptInjectionDao().deleteAll()
+            db.folderDao().deleteAll()
+            db.groupChatMessageDao().deleteAll()
+            db.groupChatDao().deleteAll()
+            db.scheduledTaskExecutionDao().deleteAll()
+            db.scheduledTaskDao().deleteAll()
+            db.knowledgeChunkDao().deleteAll()
+            db.knowledgeDocDao().deleteAll()
+            db.experienceDao().deleteAll()
+            db.milestoneDao().deleteAll()
+            db.agentMessageDao().deleteAll()
+            // v1.0.74: 朋友圈三表
+            db.momentDao().deleteAllMoments()
+            db.momentDao().deleteAllComments()
+            db.momentDao().deleteAllLikes()
+            // P0-10: 此前缺失的实体
+            db.quickNoteDao().deleteAll()
+            db.worldBookDao().deleteAll()
+            db.conversationEventDao().deleteAll()
+            db.conversationTurnDao().deleteAll()
+            db.messagePartDao().deleteAll()
+            db.messageOutboxDao().deleteAll()
+            db.diaryDao().deleteAll()
+            db.translateHistoryDao().deleteAll()
+            db.knowledgeBaseDao().deleteAll()
+            db.knowledgeFolderDao().deleteAll()
+            db.subagentThreadDao().deleteAll()
+            db.toolRoundDao().deleteAll()
+            db.sessionBranchHeadDao().deleteAll()
+            db.groupChatMemoryDao().deleteAll()
+
+            backup.assistants.forEach { db.assistantDao().upsert(it) }
+            backup.lorebooks.forEach { db.lorebookDao().upsert(it) }
+            backup.skills.forEach { db.skillDao().upsert(it) }
+            backup.artifacts.forEach { db.artifactDao().upsert(it) }
+            backup.quickMessages.forEach { db.quickMessageDao().upsert(it) }
+            backup.promptInjections.forEach { db.promptInjectionDao().upsert(it) }
+            backup.folders.forEach { db.folderDao().insert(it) }
+            backup.groupChats.forEach { db.groupChatDao().upsert(it) }
+            backup.groupChatMessages.forEach { db.groupChatMessageDao().upsert(it) }
+            backup.scheduledTasks.forEach { db.scheduledTaskDao().upsert(it) }
+            backup.scheduledTaskExecutions.forEach { db.scheduledTaskExecutionDao().insert(it) }
+            backup.knowledgeDocs.forEach { db.knowledgeDocDao().upsert(it) }
+            if (backup.knowledgeChunks.isNotEmpty()) db.knowledgeChunkDao().insertAll(backup.knowledgeChunks)
+            backup.experiences.forEach { db.experienceDao().upsert(it) }
+            backup.milestones.forEach { db.milestoneDao().upsert(it) }
+            backup.agentMessages.forEach { db.agentMessageDao().upsert(it) }
+            // v1.0.74: 朋友圈三表(先删后插,防新旧混合)
+            backup.moments.forEach { db.momentDao().insertMoment(it) }
+            backup.momentComments.forEach { db.momentDao().insertComment(it) }
+            backup.momentLikes.forEach { db.momentDao().addLike(it) }
+            // P0-10: 此前缺失的实体
+            backup.quickNotes.forEach { db.quickNoteDao().upsert(it) }
+            backup.worldBookEntries.forEach { db.worldBookDao().upsert(it) }
+            if (backup.conversationEvents.isNotEmpty()) {
+                val insertedEventIds = db.conversationEventDao().insertAll(backup.conversationEvents)
+                check(insertedEventIds.all { it != -1L }) {
+                    "备份 conversation_events 存在 eventId/主键冲突，拒绝静默丢失事件"
+                }
+            }
+            backup.conversationTurns.forEach { db.conversationTurnDao().upsert(it) }
+            if (backup.messageParts.isNotEmpty()) db.messagePartDao().upsertAll(backup.messageParts)
+            backup.messageOutboxes.forEach { db.messageOutboxDao().upsert(it) }
+            backup.diaries.forEach { db.diaryDao().upsert(it) }
+            backup.translateHistories.forEach { db.translateHistoryDao().insert(it) }
+            backup.knowledgeBases.forEach { db.knowledgeBaseDao().upsert(it) }
+        backup.knowledgeFolders.forEach { db.knowledgeFolderDao().upsert(it) }
+            backup.subagentThreads.forEach { db.subagentThreadDao().upsert(it) }
+            backup.toolRounds.forEach { db.toolRoundDao().upsertAll(listOf(it)) }
+            backup.sessionBranchHeads.forEach { db.sessionBranchHeadDao().upsert(it) }
+            backup.groupChatMemories.forEach { db.groupChatMemoryDao().insert(it) }
+        }
+
+        // 2. 导入 memory 数据(MemoryDb — 5 张表)
+        memoryDb.withTransaction {
+            memoryDb.sessionSummaryDao().deleteAll()
+            memoryDb.contextCheckpointDao().deleteAll()
+            memoryDb.dailyStateDao().deleteAll()
+            memoryDb.compiledSectionDao().deleteAll()
+            memoryDb.scopedCompiledSectionDao().deleteAll()
+            backup.sessionSummaries.forEach { memoryDb.sessionSummaryDao().upsert(it) }
+            backup.contextCheckpoints.forEach { memoryDb.contextCheckpointDao().upsert(it) }
+            backup.dailyStates.forEach { memoryDb.dailyStateDao().upsert(it) }
+            backup.compiledSections.forEach { memoryDb.compiledSectionDao().upsert(it) }
+            backup.scopedCompiledSections.forEach { memoryDb.scopedCompiledSectionDao().upsert(it) }
+        }
+
+        // 3. 导入 facts (FactDb)
+        factDb.withTransaction {
+            factDb.factDao().deleteAll()
+            if (backup.facts.isNotEmpty()) {
+                val reset = backup.facts.map { it.copy(id = 0) }
+                factDb.factDao().insertAll(reset)
+            }
+        }
+
+        // 3.5 P0-10: 恢复子助手分库(facts_<id>.db)— 逐库清空 + 写入
+        backup.scopedFacts.forEach { (scope, facts) ->
+            writeScopedFacts(scope, facts)
+        }
+
+        // 4. 恢复 DataStore 设置快照
+        // 问题7.3: 过滤掉设备相关 key(theme_mode 跟随系统、dynamic_color 依赖设备 Material You 等),
+        // 避免覆盖目标设备的本地偏好。bool:/int:/long: 前缀也匹配,如 "bool:dynamic_color"。
+        if (backup.settingsSnapshot.isNotEmpty()) {
+            val filtered = backup.settingsSnapshot.filterKeys { it !in DEVICE_SPECIFIC_KEYS }
+            if (filtered.isNotEmpty()) {
+                settings.restoreSettingsSnapshot(filtered)
+            }
+        }
+
+        // 5. v4: 恢复文件型存储(渠道/连接器/批注/收件箱/插件)
+        if (backup.fileStores.isNotEmpty()) writeFileStores(backup.fileStores)
+
+        return backup.sessions.size to backup.messages.size
+    }
+
+    private suspend fun pruneRestoredMessageImages(snapshot: Set<String>) {
+        pruneMessageImageSnapshot(messageImageStore, snapshot) { readReferencedMessageImagePaths() }
+    }
+
+    private suspend fun readReferencedMessageImagePaths(): Set<String>? {
+        val referenced = mutableSetOf<String>()
+        val encodedPaths = resultOf { db.messageDao().getMessagesWithPersistedImagePaths() }
+            .onError { message, error -> Logger.w("BackupService", "消息图片路径查询失败，跳过 sidecar 清理: $message", error) }
+            .getOrNull()
+        if (encodedPaths == null) return null
+        var failedToParse = false
+        for (encoded in encodedPaths) {
+            val paths = resultOf {
+                json.decodeFromString(ListSerializer(String.serializer()), encoded)
+            }
+                .onError { message, error -> Logger.w("BackupService", "消息图片路径读取失败，跳过 sidecar 清理: $message", error) }
+                .getOrNull()
+            if (paths == null) {
+                failedToParse = true
+            } else {
+                referenced.addAll(paths)
+            }
+        }
+        return if (failedToParse) null else referenced
+    }
+}
+
+/** NDJSON 导出 type → meta 计数键(导出生成与导入/读回校验共用同一映射)。 */
+private val ndjsonTypeToMetaKey: Map<String, String> = mapOf(
+    "session" to "sessions",
+    "message" to "messages",
+    "summary" to "sessionSummaries",
+    "contextCheckpoint" to "contextCheckpoints",
+    "dailyState" to "dailyStates",
+    "compiledSection" to "compiledSections",
+    "scopedCompiledSection" to "scopedCompiledSections",
+    "fact" to "facts",
+    "fileStore" to "fileStores",
+    "assistant" to "assistants",
+    "lorebook" to "lorebooks",
+    "skill" to "skills",
+    "artifact" to "artifacts",
+    "quickMessage" to "quickMessages",
+    "promptInjection" to "promptInjections",
+    "folder" to "folders",
+    "groupChat" to "groupChats",
+    "groupChatMessage" to "groupChatMessages",
+    "scheduledTask" to "scheduledTasks",
+    "scheduledTaskExecution" to "scheduledTaskExecutions",
+    "knowledgeDoc" to "knowledgeDocs",
+    "knowledgeChunk" to "knowledgeChunks",
+    "experience" to "experiences",
+    "milestone" to "milestones",
+    "agentMessage" to "agentMessages",
+    "moment" to "moments",
+    "momentComment" to "momentComments",
+    "momentLike" to "momentLikes",
+    // P0-10: 此前缺失的实体
+    "quickNote" to "quickNotes",
+    "worldBookEntry" to "worldBookEntries",
+    "conversationEvent" to "conversationEvents",
+    "conversationTurn" to "conversationTurns",
+    "messagePart" to "messageParts",
+    "messageOutbox" to "messageOutboxes",
+    "diary" to "diaries",
+    "scopedFact" to "scopedFacts",
+    "translateHistory" to "translateHistories",
+    "knowledgeBase" to "knowledgeBases",
+    "knowledgeFolder" to "knowledgeFolders",
+    "subagentThread" to "subagentThreads",
+    "toolRound" to "toolRounds",
+    "sessionBranchHead" to "sessionBranchHeads",
+    "groupChatMemory" to "groupChatMemories",
+    "settings" to "settings",
+)
+
+/** Phase 3 (P1): 读回校验用的宽松 JSON 解析器(忽略未知字段,与导出侧一致)。 */
+private val readBackJson = Json { ignoreUnknownKeys = true }
+
+/**
+ * Phase 3 (可靠性 P1): 云备份读回校验 — 解密后的 NDJSON 结构/meta 校验。
+ *
+ * F-04 的读回校验此前只比对上传密文的长度与 SHA-256(字节层)。加密备份在密码轮换/
+ * 封装错误时可能仍字节一致,但解密后内容不可解析。这里追加结构层校验:
+ *  1. 加密负载必须能用当前配置的备份密码解密;
+ *  2. 首个非空行必须是合法 meta 行(type=meta,声明的计数均为非负整数);
+ *  3. meta 声明的数据总条数必须 > 0(空备份拒绝);
+ *  4. meta 之后至少存在一条非空数据行(行数 > 0)。
+ *
+ * 只读校验:不清空/写入任何表(区别于 [BackupService] 内部的导入路径)。
+ *
+ * @return null 表示通过;非 null 为失败原因(写入 auto_backup_log 供诊断展示)
+ */
+internal fun validateCloudReadBackNdjson(payload: ByteArray, password: String): String? {
+    val plaintext = if (BackupCrypto.isEncrypted(payload)) {
+        if (password.isEmpty()) {
+            return "encrypted read-back but backup password is empty"
+        }
+        runCatching { BackupCrypto.decrypt(payload, password) }
+            .getOrElse { return "decrypt failed: ${it.message ?: it.javaClass.simpleName}" }
+    } else {
+        payload
+    }
+    if (plaintext.isEmpty()) return "read-back payload is empty"
+    plaintext.inputStream().bufferedReader(Charsets.UTF_8).use { reader ->
+        val firstLine = generateSequence { reader.readLine() }
+            .firstOrNull { !it.isNullOrBlank() }
+            ?: return "read-back has no non-blank lines"
+        val meta = runCatching {
+            readBackJson.parseToJsonElement(firstLine) as? JsonObject
+        }.getOrNull() ?: return "read-back first line is not a JSON object"
+        val type = (meta["type"] as? JsonPrimitive)?.contentOrNull
+        if (type != "meta") return "read-back first line type is '$type', expected 'meta'"
+
+        var declaredTotal = 0L
+        for (key in ndjsonTypeToMetaKey.values.distinct()) {
+            val value = meta[key] ?: continue
+            val count = (value as? JsonPrimitive)?.contentOrNull?.toIntOrNull()
+                ?: return "read-back meta count '$key' is not an integer"
+            if (count < 0) return "read-back meta count '$key' is negative: $count"
+            declaredTotal += count
+        }
+        if (declaredTotal <= 0) return "read-back meta declares no data (all counts are 0)"
+
+        val hasDataLine = generateSequence { reader.readLine() }.any { it.isNotBlank() }
+        if (!hasDataLine) return "read-back has no record lines after meta"
+        return null
+    }
+}
+
+internal fun validateCloudReadBackNdjsonWithPolicy(payload: ByteArray, password: String, passwordWasSet: Boolean): String? {
+    return if (shouldRejectPlaintextCloudBackup(payload, passwordWasSet, password)) {
+        "plaintext read-back while backup encryption is configured"
+    } else {
+        validateCloudReadBackNdjson(payload, password)
+    }
+}
+
+internal fun shouldRejectPlaintextCloudBackup(payload: ByteArray, passwordWasSet: Boolean, password: String): Boolean {
+    return !BackupCrypto.isEncrypted(payload) && (passwordWasSet || password.isNotBlank())
+}

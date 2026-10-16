@@ -1,0 +1,929 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- ===== Assistant detail pages AssistantDetailPages ===== -->
+    <string name="assistant_detail_title_default">アシスタントの詳細</string>
+    <string name="assistant_detail_unnamed">(名前なし)</string>
+    <string name="assistant_detail_loading">読み込み中...</string>
+    <string name="assistant_detail_basic">基本</string>
+    <string name="assistant_detail_basic_desc">名前 / アバター / モデル / サンプル</string>
+    <string name="assistant_detail_prompt">プロンプト</string>
+    <string name="assistant_detail_prompt_desc">systemPrompt / メッセージテンプレート / プリセットメッセージ</string>
+    <string name="assistant_detail_extensions">拡張機能</string>
+    <string name="assistant_detail_extensions_desc">クイックメッセージ / ロアブック / インジェクション / スキル / MCP</string>
+    <string name="assistant_detail_memory">メモリ</string>
+    <string name="assistant_detail_memory_desc">メモリ切り替え / グローバルメモリ / 最近のチャット参照 / 時間リマインダー</string>
+    <string name="assistant_detail_advanced">高度な</string>
+    <string name="assistant_detail_advanced_desc">背景 / カスタムリクエスト / タグ</string>
+    <string name="assistant_detail_avatar_save_failed">アバターの保存に失敗しました</string>
+    <string name="assistant_detail_no_image_app">画像を開くためのアプリがありません</string>
+    <string name="assistant_detail_pick_image">画像を選択</string>
+    <string name="assistant_detail_clear">クリア</string>
+    <string name="assistant_detail_avatar">アバター</string>
+    <string name="assistant_detail_avatar_image_set">イメージアバターセット</string>
+    <string name="assistant_detail_avatar_emoji">絵文字アバターの使用</string>
+    <string name="assistant_detail_avatar_initial">名前のイニシャルを使用する</string>
+    <string name="assistant_detail_name">名前</string>
+    <string name="assistant_detail_avatar_emoji_label">アバター絵文字 (1 ～ 2 文字、オプション)</string>
+    <string name="assistant_detail_global_default">グローバルデフォルト</string>
+    <string name="assistant_detail_exclusive_model">エクスクルーシブモデル</string>
+    <string name="assistant_detail_temperature">温度: %1$s</string>
+    <string name="assistant_detail_default">デフォルト</string>
+    <string name="assistant_detail_use_default">デフォルトを使用</string>
+    <string name="assistant_detail_top_p_label">トップ P (デフォルトでは空のままにしておきます、0 ～ 1)</string>
+    <string name="assistant_detail_max_tokens_label">最大トークン数 (デフォルトでは空のまま)</string>
+    <string name="assistant_detail_context_message_count">コンテキスト メッセージ数: %1$d</string>
+    <string name="assistant_detail_reasoning_level">推理レベル</string>
+    <string name="assistant_detail_stream_output">ストリーム出力</string>
+    <string name="assistant_detail_stream_output_desc">オフの場合、完全な応答を一度に返します</string>
+    <!-- v1.0.19: Assistant field completion (summary / useAssistantName / allowGroupChat) -->
+    <string name="assistant_detail_summary">一行の要約</string>
+    <string name="assistant_detail_summary_hint">グループ チャットの名簿とアシスタント カードのサブタイトルに使用されます</string>
+    <string name="assistant_detail_use_assistant_name">チャットにアシスタント名を表示する</string>
+    <string name="assistant_detail_use_assistant_name_desc">オンの場合、モデル名をアシスタント名に置き換えます。</string>
+    <string name="assistant_detail_allow_group_chat">グループチャットへの参加を許可する</string>
+    <string name="assistant_detail_allow_group_chat_desc">オフの場合、このアシスタントはグループ チャットのメンバー選択に表示されません</string>
+    <string name="assistant_detail_select_model">専用モデルを選択</string>
+    <string name="assistant_detail_close">近い</string>
+    <string name="assistant_detail_global_default_selected">グローバルデフォルト (選択済み)</string>
+    <string name="assistant_detail_model_selected">%1$s (選択済み)</string>
+    <!-- Phase 6: Model picker UX improvements -->
+    <string name="assistant_detail_use_global_default_card">グローバルデフォルトモデルを使用する</string>
+    <string name="assistant_detail_using_global_model">現在使用しているグローバル デフォルト モデル: %1$s</string>
+    <string name="assistant_detail_model_hint">ヒント: アシスタントの設定で、各アシスタントの専用モデルを選択できます。</string>
+    <string name="assistant_detail_system_prompt_label">システムプロンプト (役割/ルール)</string>
+    <string name="assistant_detail_message_template_label">メッセージ テンプレート ({{date}} {{time}} {{session_id}} などをサポート)</string>
+    <string name="assistant_detail_preset_messages_label">プリセット メッセージ JSON (詳細、例: [{\"role\":\"system\",\"content\":\"...\"}])</string>
+    <string name="assistant_detail_ext_quick_message">クイックメッセージ</string>
+    <string name="assistant_detail_ext_lorebook">ロアブック</string>
+    <string name="assistant_detail_ext_mode_injection">即時注入</string>
+    <string name="assistant_detail_ext_skill">スキル</string>
+    <string name="assistant_detail_ext_mcp_server">MCPサーバー</string>
+    <string name="assistant_detail_ext_tool">ツール</string>
+    <string name="assistant_detail_no_options">利用可能なオプションはありません</string>
+    <string name="assistant_detail_done">終わり</string>
+    <string name="assistant_detail_select_all">すべて選択</string>
+    <string name="assistant_detail_clear_all">すべてクリア</string>
+    <string name="assistant_detail_selected_count">%1$d が選択されました</string>
+    <string name="assistant_detail_enable_memory">メモリを有効にする</string>
+    <string name="assistant_detail_enable_memory_desc">オフの場合、このアシスタントは長期記憶を注入しません</string>
+    <string name="assistant_detail_use_global_memory">グローバルメモリを使用する</string>
+    <string name="assistant_detail_use_global_memory_desc">オンにすると共有プロフィール、固定メモリ、共有経験も参照します。助手自身の事実と最近の会話はどちらの設定でも利用できます。新しい助手ではオフが初期設定です。</string>
+    <string name="assistant_detail_recent_chats_reference">最近のチャットのリファレンス</string>
+    <string name="assistant_detail_recent_chats_reference_desc">最近のチャットの概要をコンテキストとしてプロンプトに挿入します</string>
+    <string name="assistant_detail_time_reminder">タイムリマインダー</string>
+    <string name="assistant_detail_time_reminder_desc">会話に現在時刻を挿入する</string>
+    <string name="assistant_detail_manual_memory">マニュアルメモリー</string>
+    <string name="assistant_detail_add_memory">メモリを追加する</string>
+    <string name="assistant_detail_add_memory_desc">AI 参照用の事実/知識を手動で入力</string>
+    <string name="assistant_detail_saved_memory_count">保存された思い出 (%1$d)</string>
+    <string name="assistant_detail_global_pinned_count">グローバル固定メモリ (%1$d)</string>
+    <string name="assistant_detail_global_pinned_enabled">グローバルメモリが有効なため、この助手にこれらの項目が注入されます。</string>
+    <string name="assistant_detail_global_pinned_disabled">閲覧のみ。グローバルメモリが無効のため、この助手には注入されません。</string>
+    <string name="assistant_detail_saved_memory_interaction_hint">タップで全文を表示 · 長押しで編集</string>
+    <string name="assistant_detail_no_memory">まだ思い出はありません</string>
+    <string name="assistant_detail_delete_cd">消去</string>
+    <string name="assistant_detail_delete_memory">メモリの削除</string>
+    <string name="assistant_detail_add_memory_dialog_title">メモリを追加する</string>
+    <string name="assistant_detail_memory_edit_missing">このメモリは存在しないか、内容が無効です</string>
+    <string name="assistant_detail_edit_memory_dialog_title">メモリを編集</string>
+    <string name="assistant_detail_input_fact">事実/知識を入力してください</string>
+    <string name="assistant_detail_save">保存</string>
+    <string name="assistant_detail_cancel">キャンセル</string>
+    <string name="assistant_detail_background_url_label">背景画像 URL (背景がない場合は空)</string>
+    <string name="assistant_detail_background_opacity">背景の不透明度: %1$d%%</string>
+    <string name="assistant_detail_gradient_background">グラデーションの背景</string>
+    <string name="assistant_detail_gradient_background_desc">背景画像にグラデーション マスクをオーバーレイします (読みやすさが向上します)</string>
+    <string name="assistant_detail_custom_headers_label">カスタム ヘッダー JSON (例: {\"X-Custom\":\"value\"})</string>
+    <string name="assistant_detail_custom_bodies_label">カスタム本文 JSON (例: {\"user\":\"abc\"})</string>
+    <string name="assistant_detail_tags_label">タグ (カンマ区切り、例: 執筆、翻訳、コード)</string>
+
+    <!-- ===== Memory screen MemoryScreen ===== -->
+    <string name="memory_screen_title">メモリ</string>
+    <string name="memory_screen_back_cd">戻る</string>
+    <string name="memory_screen_search_fact_hint">メタファクトを検索…</string>
+    <string name="memory_screen_search_cd">検索</string>
+    <string name="memory_screen_add_fact_cd">メタファクトを追加する</string>
+    <string name="memory_screen_compile_now_cd">今すぐコンパイルする</string>
+    <string name="memory_screen_compile_now">今すぐコンパイル</string>
+    <string name="memory_tab_today">今日</string>
+    <string name="memory_tab_week">短期</string>
+    <string name="memory_tab_longterm">長期</string>
+    <string name="memory_tab_facts">事実</string>
+    <!-- v1.0.51: memory backfill migration progress -->
+    <string name="memory_backfill_in_progress">歴史の思い出を整理する%1$d/%2$d</string>
+    <string name="memory_backfill_done">歴史の記憶が整理され、 %1$d 概要が復元されました</string>
+    <string name="memory_screen_layer_summary">セッションの概要</string>
+    <string name="memory_screen_layer_compile">コンパイルされたアーティファクト</string>
+    <string name="memory_screen_layer_memory">メモリ</string>
+    <string name="memory_screen_delete_layer">%1$s を削除します</string>
+    <string name="memory_screen_confirm_delete_layer">この%1$sを削除してもよろしいですか?</string>
+    <string name="memory_screen_delete">消去</string>
+    <string name="memory_screen_cancel">キャンセル</string>
+    <string name="memory_screen_edit_fact">メタファクトの編集</string>
+    <string name="memory_screen_edit_summary">セッションの概要を編集する</string>
+    <string name="memory_open_conversation">元の会話を開く</string>
+    <string name="memory_conversation_meta">アシスタント %1$s · スペース %2$s</string>
+    <string name="memory_screen_edit_compile">コンパイル済みアーティファクトの編集</string>
+    <string name="memory_screen_edit_memory">メモリの編集</string>
+    <string name="memory_screen_no_match">一致する思い出は見つかりませんでした</string>
+    <string name="memory_screen_search_results">検索結果 (%1$d)</string>
+    <string name="memory_screen_fact_section">①メタファクト（事実）</string>
+    <string name="memory_screen_no_fact">まだメタファクトはありません</string>
+    <string name="memory_screen_fact_limit">%1$d の最初の 50 件を表示しています</string>
+    <string name="memory_screen_summary_section">②セッションサマリー（概要）</string>
+    <string name="memory_screen_no_summary">セッションの概要はまだありません</string>
+    <string name="memory_screen_compile_section">③コンパイル済みアーティファクト（コンパイル）</string>
+    <string name="memory_screen_no_compile">コンパイルされたアーティファクトはまだありません (スケジュールされたコンパイルを待機中)</string>
+    <string name="memory_screen_deep_section">④ディープメモリー（ディープ）</string>
+    <string name="memory_screen_deep_desc">ディープ層は独立したストレージを持たない処理層です</string>
+    <string name="memory_screen_fact_total">• メタファクトの合計: %1$d</string>
+    <string name="memory_screen_summary_total">• 合計セッション概要: %1$d</string>
+    <string name="memory_screen_last_updated">• 最終更新日: %1$s</string>
+    <string name="memory_screen_none">なし</string>
+    <string name="memory_screen_collapse">崩壊</string>
+    <string name="memory_screen_expand">拡大する</string>
+    <string name="memory_screen_edit_cd">編集</string>
+    <string name="memory_pin_cd">ピン留め</string>
+    <string name="memory_unpin_cd">ピン留め解除</string>
+    <string name="memory_screen_delete_cd">消去</string>
+    <string name="memory_screen_load_failed">ロードに失敗しました - エラーの詳細</string>
+    <string name="memory_screen_copied_trace">フルスタックトレースがクリップボードにコピーされました</string>
+    <string name="memory_screen_copy_trace_cd">フルスタックトレースをコピーする</string>
+    <string name="memory_screen_retry">リトライ</string>
+    <string name="memory_screen_input_content">内容を入力してください…</string>
+    <string name="memory_screen_save">保存</string>
+    <string name="memory_screen_not_running">稼働していない</string>
+    <string name="memory_screen_has_error">見つかった問題</string>
+    <string name="memory_screen_normal">普通</string>
+    <string name="memory_screen_overview">メモリの概要</string>
+    <string name="memory_screen_fact_total_label">合計のメタファクト</string>
+    <string name="memory_screen_last_compile">最後のコンピレーション</string>
+    <string name="memory_screen_no_compile_time">まだありません</string>
+    <string name="memory_screen_health">健康状態</string>
+    <string name="memory_screen_collapse_steps">ステップの詳細を折りたたむ</string>
+    <string name="memory_screen_view_steps">ステップの詳細を表示する</string>
+    <string name="memory_screen_failed_times">%1$d 回失敗しました</string>
+    <string name="memory_screen_last_success">最後の成功: %1$s</string>
+    <string name="memory_screen_error">エラー: %1$s</string>
+    <!-- MemorySectionViews.kt 専用文字列 -->
+    <string name="memory_screen_input_hint">内容を入力してください…</string>
+    <string name="memory_screen_empty_content">まだ内容がありません</string>
+    <string name="memory_screen_empty_short_term">短期記憶はまだありません</string>
+    <string name="memory_screen_input_day_hint">その日の内容を入力してください…</string>
+    <string name="memory_screen_system_status">メモリシステムの状態</string>
+    <string name="memory_screen_no_status_data">ステータスデータはまだありません</string>
+    <string name="memory_screen_error_compact">エラー: %1$s</string>
+    <string name="memory_screen_recent_error">最近の失敗: %1$s</string>
+    <string name="memory_screen_recent_success">最近の成功: %1$s</string>
+    <!-- ===== 権限ウィザード (PermissionWizardScreen) ===== -->
+    <string name="permission_sui_detected">Sui バックエンドを検出しました(root ユーザーは Shizuku APK をインストールする必要はありません。Sui が Shizuku 互換インターフェースを提供します)</string>
+    <string name="permission_global_action_title">グローバルアクション (ui_global_action の action_id)</string>
+    <string name="permission_refresh_status">状態を更新</string>
+    <string name="permission_termux_title">Termux 拡張チャンネル</string>
+    <string name="permission_termux_apk_installed">Termux インストール済み</string>
+    <string name="permission_termux_apk_not_installed">Termux 未インストール(任意チャンネル)</string>
+    <string name="permission_termux_permission_ok">実行権限が付与済み</string>
+    <string name="permission_termux_permission_missing">実行権限が未付与</string>
+    <string name="permission_termux_probe_ok">外部呼び出し設定は正常</string>
+    <string name="permission_termux_probe_failed">外部呼び出し設定が未完了</string>
+    <string name="permission_termux_probe_unchecked">設定は未検出</string>
+    <string name="permission_termux_get_btn">Termux を入手</string>
+    <string name="permission_termux_open_btn">Termux を開く</string>
+    <string name="permission_termux_grant_btn">権限を付与</string>
+    <string name="permission_termux_config_hint">Termux で echo \'allow-external-apps = true\' &gt;&gt; ~/.termux/termux.properties を実行し、Termux を再起動</string>
+    <string name="shizuku_apk_installed">Shizuku APK がインストールされています</string>
+    <string name="shizuku_apk_not_installed">Shizuku APK がインストールされていません</string>
+    <string name="shizuku_service_running">Shizuku サービスは実行中です</string>
+    <string name="shizuku_service_not_running">Shizuku サービスは実行されていません(Shizuku アプリで起動してください)</string>
+    <string name="shizuku_status_unauthorized_long">Muse は Shizuku の使用を許可されていません</string>
+    <string name="permission_open_shizuku_service">Shizuku を開いてサービスを起動</string>
+    <string name="permission_action_id_help">1 = 戻る (BACK)\n2 = ホーム (HOME)\n3 = 最近のタスク (RECENTS)\n4 = 通知シェード (NOTIFICATIONS)\n5 = クイック設定 (QUICK_SETTINGS)\n6 = 電源ダイアログ (POWER_DIALOG)\n10 = 通知シェードを閉じる (DISMISS_NOTIFICATION_SHADE)\n\nクイックツール: ui_back (action_id=1), ui_home (action_id=2)</string>
+    <string name="memory_screen_ai_understanding">AI によるあなたへの理解</string>
+    <string name="memory_screen_no_summary_hint">まだ概要はありません。</string>
+    <string name="memory_screen_click_collapse">タップして折りたたむ</string>
+    <string name="memory_screen_click_expand">タップして全メモリの概要を展開します</string>
+    <!-- v1.98: Experience library -->
+    <string name="memory_screen_experience_title">体験ライブラリ</string>
+    <string name="memory_screen_experience_desc">蓄積されたベストプラクティスとノウハウ。</string>
+    <string name="memory_screen_experience_empty">まだエントリーはありません。</string>
+    <string name="memory_screen_experience_add_cd">経験値を追加する</string>
+    <string name="memory_screen_experience_count">%1$d エントリ</string>
+    <string name="memory_screen_experience_add_dialog_title">新しい体験</string>
+    <string name="memory_screen_experience_edit_dialog_title">編集エクスペリエンス</string>
+    <string name="memory_screen_experience_title_label">タイトル</string>
+    <string name="memory_screen_experience_title_hint">短い説明、例:</string>
+    <string name="memory_screen_experience_content_label">詳細</string>
+    <string name="memory_screen_experience_content_hint">手順、注意事項、コードスニペットなど。</string>
+    <string name="memory_screen_experience_category_label">カテゴリ (オプション)</string>
+    <string name="memory_screen_experience_tags_label">タグ (カンマ区切り、オプション)</string>
+    <string name="memory_screen_experience_delete_confirm">このエクスペリエンスを削除しますか?</string>
+
+    <!-- v2.0: overview stat card -->
+    <string name="memory_overview_total">総事実</string>
+    <string name="memory_overview_important">重要/重大</string>
+    <string name="memory_overview_layers">メモリ層</string>
+
+    <!-- ===== Settings screen SettingsScreen ===== -->
+    <string name="settings_screen_title">設定</string>
+    <string name="settings_screen_back_cd">戻る</string>
+    <string name="settings_screen_appearance_group_cd">一般グループ</string>
+    <string name="settings_screen_appearance">外観&amp; パーソナライゼーション</string>
+    <string name="settings_screen_group_assistants">マイアシスタント</string>
+    <string name="settings_screen_group_models">モデルと機能</string>
+    <string name="settings_screen_group_chat_display">チャットと表示</string>
+    <string name="settings_screen_group_memory">記憶と能動的メッセージ</string>
+    <string name="settings_screen_group_data_privacy">データとプライバシー</string>
+    <string name="settings_screen_group_tools">ツールと接続</string>
+    <string name="settings_screen_group_about">詳細とヘルプ</string>
+    <string name="settings_screen_user_profile_cd">プロフィール、名前/ペルソナ、タップして入力します</string>
+    <string name="settings_screen_user_profile">プロフィール</string>
+    <string name="settings_screen_user_profile_desc">名前 / アシスタント名 / ユーザーペルソナ</string>
+    <string name="settings_screen_appearance_cd">外観、テーマ/フォント サイズ、タップして入力します</string>
+    <string name="settings_screen_appearance_label">外観</string>
+    <string name="settings_screen_appearance_desc">テーマ / フォントサイズ</string>
+    <string name="settings_screen_chat_cd">チャット、メッセージ表示/インタラクション/詳細、タップして入力</string>
+    <string name="settings_screen_chat">チャット</string>
+    <string name="settings_screen_chat_desc">メッセージ表示 / インタラクション / 高度な機能</string>
+    <string name="settings_screen_media_cd">メディア、音声/TTS/オーディオ出力、タップして入力します</string>
+    <string name="settings_screen_media">音声読み上げ</string>
+    <string name="settings_screen_media_desc">音声 / TTS / オーディオ出力</string>
+    <string name="settings_screen_memory_data_group_cd">メモリ &amp; ナレッジベース グループ</string>
+    <string name="settings_screen_memory_data">メモリ&amp; データ</string>
+    <string name="settings_screen_memory_notification_cd">メモリセンター、メモリの表示/編集、メモリパラメータ、今すぐコンパイル、タップして入力</string>
+    <string name="settings_screen_memory_notification">記憶センター</string>
+    <string name="settings_screen_memory_notification_desc">今日 / 短期 / 長期 · 事実 · パラメータ</string>
+    <string name="settings_screen_data_backup_cd">データ&amp; バックアップ、クラウド バックアップ/Web サーバー、タップして入力します</string>
+    <string name="settings_screen_data_backup">データとバックアップ</string>
+    <string name="settings_screen_data_backup_desc">クラウドバックアップ / Web サーバー</string>
+    <string name="settings_screen_data_import_cd">データのインポート、他のアプリからのデータの移行、タップして入力します</string>
+    <string name="settings_screen_data_import">データインポート</string>
+    <string name="settings_screen_data_import_desc">RikkaHub / Kelivo からの移行</string>
+    <string name="settings_screen_rag_cd">ナレッジの取得、RAG config/Embedding/chunk params、タップして入力します</string>
+    <string name="settings_screen_rag">知識の検索</string>
+    <string name="settings_screen_rag_desc">RAG 構成 / 埋め込み / チャンクパラメータ</string>
+    <!-- Data &amp; Privacy group (PII Guard) -->
+    <string name="settings_screen_privacy_group_cd">データ &amp; プライバシー グループ</string>
+    <string name="settings_screen_pii_guard_cd">PII プライバシー保護、送信前に機密情報をマスク、切り替え</string>
+    <string name="settings_screen_pii_guard">PII プライバシー保護</string>
+    <string name="settings_screen_pii_guard_desc">電話/メール/IDカードなどを送信前に自動マスクする</string>
+    <string name="settings_screen_model_service">モデルとサービス</string>
+    <string name="settings_screen_model_service_group_cd">モデルとサービス グループ</string>
+    <string name="settings_screen_provider_cd">プロバイダー、AI サービスプロバイダーの管理、タップして入力します</string>
+    <string name="settings_screen_provider">プロバイダー</string>
+    <string name="settings_screen_model_catalog_desc">モデルのコンテキスト、能力、最大出力を確認・修正</string>
+    <string name="settings_screen_task_routing_desc">バックグラウンドタスク用の階層モデル(小/大/視覚)</string>
+    <string name="settings_screen_provider_desc">モデルプロバイダー、API キー、Web 検索を管理する</string>
+    <string name="settings_screen_assistant_cd">アシスタント、アシスタント/ワールドブックの管理、タップして入力します</string>
+    <string name="settings_screen_assistant">アシスタント</string>
+    <string name="settings_screen_assistant_desc">アシスタント、モデル、ペルソナ、ワールドブックを管理する</string>
+    <string name="settings_screen_agent_cd">エージェント、アシスタントの選択/コラボレーション/プロアクティブ メッセージ、タップして入力します</string>
+    <string name="settings_screen_agent_desc">アシスタントの選択 / コラボレーション / 積極的なメッセージ</string>
+    <string name="settings_screen_advanced_group_cd">上級グループ</string>
+    <string name="settings_screen_advanced">高度な</string>
+    <string name="settings_screen_security_desc">共有テンプレート / エクスポート設定</string>
+    <string name="settings_screen_proxy_cd">%1$s、%2$s、タップして入力します</string>
+    <string name="settings_screen_experiments_cd">実験的で不安定な機能の切り替え、タップして入ります</string>
+    <string name="settings_screen_experiments">実験的</string>
+    <string name="settings_screen_experiments_desc">不安定な機能の切り替え</string>
+    <string name="settings_screen_stats_cd">統計、使用状況統計とヒートマップを表示、タップして入力します</string>
+    <string name="settings_screen_stats">統計</string>
+    <string name="settings_screen_stats_desc">使用状況の統計とヒートマップを表示する</string>
+    <string name="quota_title">毎日の割り当て</string>
+    <string name="quota_plan_free">無料</string>
+    <string name="quota_plan_pro">プロ</string>
+    <string name="quota_chats">チャット</string>
+    <string name="quota_images">画像生成</string>
+    <string name="quota_searches">ウェブ検索</string>
+    <!-- v1.0.4: Notification listener -->
+    <string name="settings_screen_notification_listener">通知リスナー</string>
+    <string name="connection_center_title">接続センター</string>
+    <string name="connection_center_desc">チャンネル、MCP、プラグインとツール承認</string>
+    <string name="channel_page_title">メッセージチャネル</string>
+    <string name="message_action_annotate">注釈</string>
+    <string name="message_annotate_title">メッセージ注釈</string>
+    <string name="message_annotate_hint">注釈を書く…</string>
+    <string name="connector_page_title">コネクタ</string>
+    <string name="connector_intro">外部サービス(カレンダー/ノート/コードホスト等)を接続します。プロバイダで登録したエンドポイントと認証情報を入力してください。認証はシステムブラウザ経由で、認証情報は暗号化保存されます。</string>
+    <string name="connector_add">コネクタを追加</string>
+    <string name="connector_connect">接続</string>
+    <string name="connector_connect_success">%1$s に接続しました</string>
+    <string name="connector_connect_failed">接続に失敗: %1$s</string>
+    <string name="connector_empty">コネクタは未追加です。</string>
+    <string name="connector_config_corrupt">設定が破損しています。データは保持されていますので、再インポートしてください</string>
+    <string name="connector_field_authorize">認可エンドポイント</string>
+    <string name="connector_field_token">トークンエンドポイント</string>
+    <string name="connector_field_scope">スコープ</string>
+    <string name="connector_field_client_id">Client ID</string>
+    <string name="connector_field_client_secret">Client Secret</string>
+    <string name="channel_inbox_title">最近の受信</string>
+    <string name="channel_intro_title">メッセージを IM に送信</string>
+    <string name="channel_intro">設定後、アシスタントはツールから飛書/QQ などへメッセージを送信できます。認証情報は端末内で暗号化保存され、送信されません。</string>
+    <string name="channel_add">チャネルを追加</string>
+    <string name="channel_edit_title">チャネルを編集</string>
+    <string name="channel_edit">編集</string>
+    <string name="channel_delete_confirm">このチャネルを削除しますか?</string>
+    <string name="channel_empty">チャネルは未設定です。上のボタンから追加してください。</string>
+    <string name="channel_save">保存</string>
+    <string name="channel_field_platform">プラットフォーム</string>
+    <string name="channel_field_name">名前</string>
+    <string name="channel_field_app_id">App ID</string>
+    <string name="channel_field_app_secret">App Secret</string>
+    <string name="channel_webhook_receive">プラットフォーム Webhook を有効化</string>
+    <string name="channel_webhook_receive_desc">既定では無効です。プラットフォームで外部コールバック URL を設定した場合のみ有効にしてください。</string>
+    <string name="channel_webhook_verification_token">Verification Token</string>
+    <string name="channel_webhook_feishu_hint">手動設定した Feishu イベントコールバック専用です。Feishu と同じ Verification Token を入力してください。暗号化されていないコールバックのみ対応します。Encrypt Key は空欄にしてください。長接続受信には不要です。</string>
+    <string name="channel_webhook_qq_hint">手動設定した QQ コールバック専用です。ここで十分にランダムなトークンを設定し、コールバック URL に ?token=... を追加してください。新しい Ed25519 署名とタイムスタンプも必要で、上記 App Secret で検証します。長接続受信には不要です。</string>
+    <string name="channel_field_target">送信先 ID</string>
+    <string name="channel_field_qq_type">QQ 送信先タイプ</string>
+    <string name="channel_type_group">グループ</string>
+    <string name="channel_type_c2c">個人チャット</string>
+    <string name="channel_auto_reply">自動返信</string>
+    <string name="channel_auto_reply_desc">受信メッセージに対してアシスタントを自動実行し返信します(1 回ごとにモデル枠を消費)</string>
+    <string name="channel_err_ai_timeout">AI 呼び出しがタイムアウトしました</string>
+    <string name="channel_err_no_assistant">利用可能なアシスタントがなく、自動返信を生成できません</string>
+    <string name="channel_weclaw_bind">スキャンして連携</string>
+    <string name="channel_weclaw_bind_title">WeChat ClawBot を連携</string>
+    <string name="channel_weclaw_bind_hint">WeChat で QR コードをスキャンして連携します</string>
+    <string name="channel_weclaw_bind_loading">QR コードを取得中…</string>
+    <string name="channel_weclaw_bind_failed">QR コードの取得に失敗: </string>
+    <string name="channel_weclaw_status_scaned">スキャン済み。スマホで確認してください</string>
+    <string name="channel_weclaw_status_expired">QR コードの有効期限が切れました。再試行してください</string>
+    <string name="channel_weclaw_unbound_hint">未連携(スキャンして認証情報を取得)</string>
+    <string name="channel_telegram_hint">App Secret に @BotFather の Bot Token を入力;送信先は chat_id(空欄可、自動返信は送信元へ戻ります)。</string>
+    <string name="channel_dingtalk_hint">App ID にアプリの ClientID(AppKey)、App Secret に ClientSecret を入力;ボットの受信方式は Stream に設定してください(公開 URL 不要)。</string>
+    <string name="settings_screen_notification_listener_desc">AI に他のアプリの通知を読み取ることを許可する</string>
+    <!-- v1.0.4: AI tools -->
+    <string name="settings_screen_tools">ツール</string>
+    <string name="settings_screen_tools_desc">AI が呼び出せるツールと権限を表示する</string>
+    <string name="settings_screen_about_group_cd">グループについて</string>
+    <string name="settings_screen_about">について</string>
+    <string name="settings_screen_tutorial_cd">チュートリアル、オンボーディング ガイド、タップして入力します</string>
+    <string name="settings_screen_tutorial">チュートリアル</string>
+    <string name="settings_screen_tutorial_desc">オンボーディング / 機能ガイド</string>
+    <string name="settings_screen_about_cd">概要、バージョン/オープンソース ライセンス、タップして入力します</string>
+    <string name="settings_screen_about_desc">バージョン / オープンソースライセンス</string>
+    <string name="settings_screen_debug_log_cd">デバッグ ログ、アプリのログとエラーの表示、タップして入力します</string>
+    <string name="settings_screen_debug_log">デバッグログ</string>
+    <string name="settings_screen_debug_log_desc">アプリのログとエラーを表示する</string>
+
+    <!-- v1.133: Check for updates entry in About group -->
+    <string name="settings_screen_check_update_cd">アップデートを確認し、最新の GitHub リリースを手動で確認し、タップしてトリガーします</string>
+    <string name="settings_screen_check_update">アップデートをチェックする</string>
+    <string name="settings_screen_check_update_desc">新しいリリースについては GitHub を確認してください</string>
+
+    <!-- v1.132: Settings search + group reorg -->
+    <string name="settings_search_cd">検索設定</string>
+    <string name="settings_search_hint">検索設定…</string>
+    <string name="settings_search_prompt">キーワードを入力してすべての設定を検索します</string>
+    <string name="settings_search_no_results">マッチ</string>
+    <string name="settings_screen_cancel">キャンセル</string>
+    <string name="settings_screen_data_backup_group">データとバックアップ</string>
+
+    <!-- v1.97 gap8: Tools group (standalone translate page entry) -->
+    <string name="settings_screen_tools_group_cd">ツールグループ</string>
+    <string name="settings_screen_translate_cd">AI Translate、スタンドアロン翻訳ツール、タップして入力</string>
+    <string name="settings_screen_translate">AI翻訳</string>
+    <string name="settings_screen_translate_desc">ソースの選択/交換/再生による多言語翻訳</string>
+
+    <!-- v1.25: Vision Assist (let text-only models "see" images via vision model) -->
+    <string name="settings_screen_vision">ビジョンアシスト</string>
+    <string name="settings_screen_vision_desc">テキストのみのモデルに視覚モデルを介して画像を分析させる</string>
+    <string name="settings_vision_title">ビジョンアシスト</string>
+    <string name="settings_vision_description">画像入力をサポートしないテキストのみのモデルを使用する場合、自動的にビジョン モデルを呼び出して画像を分析し、会話に説明を挿入します。</string>
+    <string name="settings_vision_enabled">ビジョンアシストを有効にする</string>
+    <string name="settings_vision_enabled_subtitle">分析のために画像をビジョンモデルに自動的に送信します</string>
+    <string name="settings_vision_model_section">ビジョンモデル</string>
+    <string name="settings_vision_no_models">視覚に対応したモデルは見つかりませんでした。</string>
+    <string name="vision_analysis_starting">ビジョンモデルによる画像解析</string>
+    <string name="vision_analysis_done">視覚モデルを使用して分析された%1$d画像</string>
+    <string name="vision_analysis_failed">画像分析に失敗しました: %1$s</string>
+    <string name="vision_assist_label">ビジョンアシスト</string>
+    <string name="vision_assist_analyzing">ビジョンアシスト · 分析%1$d/%2$d</string>
+    <string name="vision_assist_done">ビジョンアシスト · 完了</string>
+    <string name="vision_assist_failed">ビジョンアシスト · 失敗しました</string>
+
+    <!-- ===== Search screen SearchScreen ===== -->
+    <string name="search_back_cd">戻る</string>
+    <string name="search_cancel">キャンセル</string>
+    <string name="search_placeholder">セッション/メッセージ/設定を検索...</string>
+    <string name="search_empty_hint">キーワードを入力してセッション、メッセージ、または設定を検索します</string>
+    <string name="search_tab_sessions">セッション</string>
+    <string name="search_tab_message_content">メッセージの内容</string>
+    <string name="search_section_message_content">メッセージの内容</string>
+    <string name="search_section_translate">翻訳</string>
+    <string name="search_section_quick_notes">簡単なメモ</string>
+    <string name="search_suggestion_backup">バックアップ</string>
+    <string name="search_suggestion_today">今日</string>
+    <string name="search_suggestion_summary">まとめ</string>
+    <string name="search_suggestion_report">報告</string>
+    <string name="search_suggestion_idea">アイデア</string>
+    <string name="search_no_result">一致する結果はありません</string>
+    <string name="search_try_other">他のキーワードを試してください</string>
+    <string name="search_section_sessions">セッション</string>
+    <string name="search_section_messages">メッセージ</string>
+    <string name="search_section_settings">設定</string>
+    <string name="search_new_session">新しいセッション</string>
+    <string name="search_time_today">今日 %1$s</string>
+    <string name="search_time_yesterday">昨日 %1$s</string>
+    <string name="search_index_proactive_message">プロアクティブなメッセージ</string>
+    <string name="search_index_chat_behavior">チャットの動作設定</string>
+    <string name="search_index_deep_thinking">深い思考</string>
+    <string name="search_index_web_server">Web サーバー</string>
+    <string name="search_index_data_backup">データとバックアップ</string>
+    <string name="search_index_cloud_backup">クラウドバックアップ</string>
+    <string name="search_index_theme">テーマ</string>
+    <string name="search_index_appearance">外観設定</string>
+    <string name="search_index_font_size">フォントサイズ</string>
+    <string name="search_index_pin_lock">PIN ロック</string>
+    <string name="search_index_security">セキュリティ&amp; 共有</string>
+    <string name="search_index_assistant_manage">アシスタントマネジメント</string>
+    <string name="search_index_assistants_page">アシスタントページ</string>
+    <string name="search_index_memory">メモリ</string>
+    <string name="search_index_memory_settings">メモリ&amp;通知設定</string>
+    <string name="search_index_skill">スキル</string>
+    <string name="search_index_skill_manage">スキル管理</string>
+    <string name="search_index_knowledge">ナレッジベース</string>
+    <string name="search_index_knowledge_page">ナレッジベースページ</string>
+    <string name="search_index_scheduled_task">スケジュールされたタスク</string>
+    <string name="search_index_scheduled_task_page">スケジュールされたタスクページ</string>
+    <string name="search_index_mcp">MCP</string>
+    <string name="search_index_model_service">モデルとサービス</string>
+    <string name="search_index_provider">プロバイダー</string>
+    <string name="search_index_user_profile">ユーザーペルソナ</string>
+    <string name="search_index_user_profile_edit">ユーザーペルソナの編集</string>
+
+    <!-- ===== Skill screen SkillScreen ===== -->
+    <string name="skill_management">スキル管理</string>
+    <string name="skill_back_cd">戻る</string>
+    <string name="skill_import_cd">.skill.json をインポート</string>
+    <string name="skill_intro">スキルは、LLM が呼び出すことができるツールです。</string>
+    <string name="skill_no_skill_title">スキルがまだありません</string>
+    <string name="skill_no_skill_subtitle">AIに「〇〇スキルを作って」と伝えるか、右下の+からスキルファイルをインポートします</string>
+    <string name="skill_import_result">インポート結果</string>
+    <string name="skill_got_it">わかった</string>
+    <string name="skill_importing">インポート中</string>
+    <string name="skill_importing_detail">ドキュメントを読んで解析しています...</string>
+    <string name="skill_open_picker_failed">ファイルピッカーを開けません: %1$s</string>
+    <string name="skill_imported">インポート済み: %1$s</string>
+    <string name="skill_recipe_export_cd">スキルパックを書き出す</string>
+    <string name="skill_recipe_imported">スキルパックをインポート: %1$d 件</string>
+    <string name="skill_recipe_empty">書き出せる自作スキルがありません</string>
+    <string name="skill_restore_default">既定に戻す</string>
+    <string name="skill_restored">%1$s を既定の設定に戻しました</string>
+    <string name="skill_import_failed">保存に失敗しました: %1$s</string>
+    <string name="skill_import_error">インポートに失敗しました: %1$s</string>
+    <string name="skill_operation_failed">操作が失敗しました: %1$s</string>
+    <string name="skill_unnamed">(名前なし)</string>
+    <string name="skill_enabled">有効</string>
+    <string name="skill_disabled">無効</string>
+    <string name="skill_built_in">内蔵</string>
+    <string name="skill_built_in_seed">内蔵（シード）</string>
+    <string name="skill_custom">カスタム</string>
+    <string name="skill_detail_cd">詳細</string>
+    <string name="skill_parameters_schema">パラメータスキーマ</string>
+    <string name="skill_use_cases">ユースケース</string>
+    <string name="skill_label_category">カテゴリ</string>
+    <string name="skill_label_implementation">実装</string>
+    <string name="skill_label_source">ソース</string>
+    <string name="skill_close">近い</string>
+    <string name="skill_row_cd">%1$s、%2$s、タップして詳細を表示します</string>
+    <string name="skill_use_case_read_file">アプリ内のメモ、構成、またはキャッシュされたファイルを読み取る必要がある場合、LLM はこれを自動的に呼び出します。</string>
+    <string name="skill_use_case_write_file">メモの保存、ドキュメントの生成、またはデータの永続化が必要な場合、LLM はこれを自動的に呼び出します。</string>
+    <string name="skill_use_case_http_get">外部 API (天気、為替レートなど) をリクエストする必要がある場合、LLM はこれを自動的に呼び出します。</string>
+    <string name="skill_use_case_http_post">外部サービスにデータを送信する必要がある場合 (Webhook の送信など)、LLM はこれを自動的に呼び出します。</string>
+    <string name="skill_use_case_web_search">リアルタイムの情報 (ニュース、市場データ、最新の更新) について尋ねると、LLM は自動的に Web を検索します。</string>
+    <string name="skill_use_case_web_fetch">Web リンクを指定すると、LLM がページ本文を取得します。長い結果も完全に保持され、分割して読み取れます。</string>
+    <string name="skill_use_case_knowledge_search">質問にナレッジ ベースのドキュメントが含まれている場合、LLM は推測ではなくナレッジ ベースを検索します。</string>
+    <string name="skill_use_case_arxiv_search">学術論文や研究の方向性について質問すると、LLM は arXiv プレプリント リポジトリを検索します。</string>
+    <string name="skill_use_case_install_skill">新しい機能のニーズを記述すると (例: 「為替レートをチェックするスキルの作成」)、LLM は新しいスキルを自動的に生成してインストールします。</string>
+    <!-- ===== Assistant detail: regex rules ===== -->
+    <string name="assistant_detail_regex_title">正規表現の置換ルール</string>
+    <string name="assistant_detail_regex_desc">ユーザー/アシスタントのメッセージに正規表現置換を適用します (ロール名の置換、機密単語のフィルタリング、形式の正規化など)。</string>
+    <string name="assistant_detail_regex_add">ルールの追加</string>
+    <string name="assistant_detail_regex_empty">まだルールはありません。</string>
+    <string name="assistant_detail_regex_edit_title">ルールの編集</string>
+    <string name="assistant_detail_regex_name_label">ルール名</string>
+    <string name="assistant_detail_regex_name_hint">例えば</string>
+    <string name="assistant_detail_regex_find_label">正規表現の検索</string>
+    <string name="assistant_detail_regex_find_hint">例えば</string>
+    <string name="assistant_detail_regex_replace_label">置換文字列</string>
+    <string name="assistant_detail_regex_replace_hint">例えば</string>
+    <string name="assistant_detail_regex_scope_label">範囲</string>
+    <string name="assistant_detail_regex_scope_user">ユーザーメッセージのみ</string>
+    <string name="assistant_detail_regex_scope_assistant">アシスタントメッセージのみ</string>
+    <string name="assistant_detail_regex_scope_both">両方 (ユーザー + アシスタント)</string>
+    <string name="assistant_detail_regex_visual_only">ディスプレイの交換のみ (LLM 入力には影響しません)</string>
+    <string name="assistant_detail_regex_enabled">有効</string>
+    <string name="assistant_detail_regex_delete_cd">ルールの削除</string>
+    <string name="assistant_detail_regex_invalid">無効な正規表現構文</string>
+
+    <!-- ===== QR code share/scan ===== -->
+    <string name="qr_share_title">プロバイダーの QR コードを共有する</string>
+    <string name="qr_share_cd">プロバイダー構成 QR コード</string>
+    <string name="qr_share_warning">この QR コードには、プレーンテキストの API キーが含まれています。</string>
+    <string name="qr_share_btn">QRコードをシェアする</string>
+    <string name="qr_scan_title">QR コードをスキャン</string>
+    <string name="qr_scan_pick_image">ギャラリーから QR コード画像を選択します</string>
+    <string name="qr_scan_pick_button">画像を選択してください</string>
+    <string name="qr_scan_scanning">認識中…</string>
+    <string name="qr_scan_failed">QRコードを認識できませんでした。</string>
+    <string name="qr_scan_btn">QR コードをスキャンしてインポート</string>
+    <string name="qr_import_success">プロバイダーをインポートしました: %1$s</string>
+    <string name="qr_import_invalid">無効な QR コード形式です。</string>
+
+    <!-- ===== Stats screen ===== -->
+    <string name="stats_unknown_model">不明なモデル</string>
+    <string name="stats_default_assistant">デフォルトアシスタント</string>
+    <string name="stats_deleted_session">削除されたセッション</string>
+
+    <!-- ===== Assistant detail pages AssistantDetailPages ===== -->
+
+    <!-- ===== Memory screen MemoryScreen ===== -->
+    <!-- v1.98: Experience library -->
+
+    <!-- ===== Settings screen SettingsScreen ===== -->
+
+    <!-- v1.97 gap8: Tools group (standalone translate page entry) -->
+
+    <!-- ===== Search screen SearchScreen ===== -->
+
+    <!-- ===== Skill screen SkillScreen ===== -->
+    <!-- ===== Assistant detail: regex rules ===== -->
+
+    <!-- ===== QR code share/scan ===== -->
+
+    <!-- ===== Stats screen ===== -->
+
+    <!-- ===== P1-6: OAuth login (ProviderEditPage) ===== -->
+    <string name="oauth_login">OAuth ログイン</string>
+    <string name="oauth_login_success">OAuth ログインに成功しました</string>
+    <string name="oauth_login_failed">OAuth ログインに失敗しました: %1$s</string>
+    <string name="oauth_device_code_prompt">%1$s にアクセスしてコードを入力してください: %2$s</string>
+    <string name="oauth_polling">承認を待っています...</string>
+    <string name="oauth_open_verification_uri">リンクを開く</string>
+
+    <!-- ===== P2-11: OAuth credential isolation (revoke / auto refresh) ===== -->
+    <string name="oauth_revoke">アクセスの取り消し</string>
+    <string name="oauth_revoke_confirm">このプロバイダーの OAuth アクセスを取り消すことを確認しますか?</string>
+    <string name="oauth_revoke_success">アクセスが取り消されました</string>
+    <string name="oauth_token_expired">認証の有効期限が切れました。もう一度ログインしてください</string>
+    <string name="oauth_token_refreshed">認証が自動更新される</string>
+    <string name="oauth_stored">保存された承認</string>
+
+    <!-- ===== P1-4: Tablet adaptation (responsive layout) ===== -->
+    <string name="settings_adaptive_layout">アダプティブレイアウト</string>
+
+    <!-- ===== P2-2: Upstream model diff sheet (ModelDiffSheet) ===== -->
+    <string name="model_diff_title">上流モデルの差分</string>
+    <string name="model_diff_new">上流の新規 (%1$d)</string>
+    <string name="model_diff_removed">削除されました (%1$d)</string>
+    <string name="model_diff_unchanged">変更なし (%1$d)</string>
+    <string name="model_diff_add_all">すべて新規追加</string>
+    <string name="model_diff_remove_all">削除されたものをすべて削除</string>
+    <string name="model_diff_kept_badge">削除済み (保存済み)</string>
+    <string name="model_diff_apply">選択したものを適用</string>
+    <string name="model_diff_empty_new">新しいモデルはありません</string>
+    <string name="model_diff_empty_removed">削除されたモデルはありません</string>
+
+    <!-- ===== P2-3: Ollama vision/tools capability inference ===== -->
+    <string name="ollama_vision_inferred">ビジョン（推定）</string>
+    <string name="ollama_tools_inferred">ツールの使用 (推定)</string>
+    <!-- ===== P2-1: Provider collision detection (ProviderSection warning card) ===== -->
+    <string name="provider_collision_warning">重複する可能性のある%1$dプロバイダー構成が見つかりました</string>
+
+    <!-- ===== P2-4: Audit log (AuditLogPage) ===== -->
+    <string name="settings_audit_log">監査ログ</string>
+    <string name="audit_log_clear">ログをクリアする</string>
+    <string name="audit_log_empty">ログ記録がありません</string>
+    <string name="audit_log_clear_confirm">すべての監査ログをクリアしますか?</string>
+    <string name="audit_log_category_all">全て</string>
+    <string name="audit_log_category_api">API呼び出し</string>
+    <string name="audit_log_category_user">ユーザーアクション</string>
+    <string name="audit_log_category_auth">認証</string>
+    <string name="audit_log_category_system">システム</string>
+    <string name="audit_log_search_hint">検索アクション/ターゲット/詳細</string>
+    <string name="audit_log_clear_search">検索をクリア</string>
+    <string name="audit_log_no_match">一致するログはありません</string>
+    <string name="audit_log_result_count">%2$d 中の %1$d を表示しています</string>
+    <string name="audit_log_export">JSONのエクスポート</string>
+    <string name="audit_log_export_empty">エクスポートするログがありません</string>
+    <string name="audit_log_export_subject">Muse 監査ログ — %1$d エントリ</string>
+    <string name="audit_log_export_chooser">監査ログを共有する</string>
+    <string name="audit_log_export_failed">エクスポートに失敗しました: ファイル URI を取得できません</string>
+
+    <!-- ===== P2-8: Video Generation (SettingsScreen entry + VideoGenerationPage) ===== -->
+    <!-- Video generation default params entry (provider/model/duration/resolution) -->
+
+    <!-- ===== v1.133: 5 standalone sub-page entries split out from SettingsModelPage ===== -->
+    <string name="settings_screen_web_search">ウェブ検索</string>
+    <string name="settings_screen_web_search_desc">検索エンジン / API キー / エンドポイント</string>
+    <string name="settings_screen_channel_desc">メッセージを飛書 / QQ / WeChat などのプラットフォームに橋渡し</string>
+    <string name="settings_screen_asr">音声認識</string>
+    <string name="settings_screen_asr_desc">音声テキスト変換 (システム / DashScope / ステップ)</string>
+    <string name="settings_screen_mcp">MCPサーバー</string>
+    <string name="settings_screen_mcp_desc">モデル コンテキスト プロトコル ツール サーバー</string>
+    <string name="settings_screen_assistant_resources">アシスタントのリソース</string>
+    <string name="settings_screen_assistant_resources_desc">お気に入り / ロアブック / クイックメッセージ / プロンプトインジェクション / スキル</string>
+    <string name="settings_assistant_resources_title">アシスタントのリソース</string>
+    <string name="video_gen_title">ビデオ生成</string>
+    <string name="video_gen_prompt">生成したいビデオについて説明します</string>
+    <string name="video_gen_model">モデル</string>
+    <string name="video_gen_duration">間隔</string>
+    <string name="video_gen_resolution">解決</string>
+    <string name="video_gen_reference_image">参考画像（オプション）</string>
+    <string name="video_gen_select_image">地元から選ぶ</string>
+    <string name="video_gen_clear_image">明確な参考画像</string>
+    <string name="video_gen_image_compressed">圧縮時: %1$s</string>
+    <string name="video_gen_image_load_failed">画像のロードに失敗しました: %1$s</string>
+    <string name="video_gen_submit">ビデオの生成</string>
+    <string name="video_gen_pending">保留中</string>
+    <string name="video_gen_processing">生成中...</string>
+    <string name="video_gen_success">成功</string>
+    <string name="video_gen_failed">失敗しました: %1$s</string>
+    <string name="video_gen_timeout">タイムアウト</string>
+    <string name="video_gen_open_video">ビデオを開く</string>
+    <string name="video_gen_no_app">ビデオを再生できるアプリがありません</string>
+    <string name="video_gen_apikey_required">APIキーが必要です</string>
+    <string name="video_gen_provider">プロバイダー</string>
+    <string name="video_gen_no_provider">利用可能なプロバイダーが設定されていません。</string>
+
+    <!-- ===== P2-5: SiliconFlow free model fallback (PresetProviders / ProviderEditPage) ===== -->
+    <string name="preset_siliconflow">SiliconFlow</string>
+    <string name="preset_siliconflow_free">SiliconFlow フリーモデル</string>
+    <string name="preset_siliconflow_free_desc">SiliconFlow の無料のオープンソース モデル</string>
+    <string name="siliconflow_fill_free_models">フィルフリーモデル</string>
+    <string name="siliconflow_fill_free_models_confirm">現在のモデルを SiliconFlow 無料モデルに置き換えます。確認しますか?</string>
+    <string name="memory_legacy_reset_hint">古い記憶データは互換性がないためリセットされました。バックアップファイルは保持されています</string>
+    <string name="free_model_service_unavailable">無料枠サービスは利用できません。API Key を追加するか、後でもう一度お試しください。</string>
+
+    <!-- ===== P2-10: Provider plugin management (ProviderPluginPage) ===== -->
+    <string name="provider_plugins_title">プラグインマネージャー</string>
+    <string name="muse_plugins_external">外部プラグイン</string>
+    <string name="muse_plugins_manage">プラグイン管理</string>
+    <string name="muse_plugins_imported">プラグインパッケージをインストールしました</string>
+    <string name="muse_plugins_empty_hint">外部プラグインはありません。+ をタップして .muse-plugin または ZIP パッケージをインポートしてください。</string>
+    <string name="muse_plugins_import_hint">プラグインパッケージをインストールしました。「外部プラグイン」で管理してください。</string>
+    <string name="provider_plugins_empty">プラグインがありません</string>
+    <string name="provider_plugins_import">プラグインをインポート</string>
+    <string name="provider_plugins_delete">プラグインの削除</string>
+    <string name="provider_plugins_convert">プロバイダーに変換</string>
+    <string name="provider_plugins_import_failed">インポートに失敗しました: %1$s</string>
+    <string name="provider_plugins_import_success">インポート成功</string>
+    <string name="provider_plugins_delete_confirm">このプラグインを削除しますか?</string>
+    <string name="provider_plugins_delete_confirm_named">プラグイン「%1$s」を削除しますか？削除後は利用できなくなります。復元するにはプラグインパッケージを再インポートしてください。</string>
+    <string name="muse_plugins_publisher_fingerprint">発行者: %1$s · 鍵フィンガープリント: %2$s</string>
+    <string name="muse_plugins_developer_info">開発者情報</string>
+
+    <!-- ===== P2-7: Workspace (WorkspaceScreen + tool descriptions) ===== -->
+    <string name="workspace_title">ワークスペース</string>
+    <string name="workspace_desc">ローカルファイル管理と一時ストレージ</string>
+    <string name="workspace_empty">ワークスペースが空です</string>
+    <string name="workspace_new_file">新しいファイル</string>
+    <string name="workspace_new_folder">新しいフォルダー</string>
+    <string name="workspace_file_name">ファイル名</string>
+    <string name="workspace_delete_confirm">「%1$s」を削除しますか?</string>
+    <string name="workspace_rename">名前の変更</string>
+    <string name="workspace_read_only_too_large">ファイルが大きすぎてプレビューできません (1MB まで)</string>
+    <string name="workspace_path_copied">パスをコピーしました</string>
+
+    <string name="browser_address_bar">URLを入力するか検索してください</string>
+    <string name="browser_run_js">JavaScriptを実行する</string>
+    <string name="browser_back">戻る</string>
+    <string name="browser_forward">フォワード</string>
+    <string name="browser_refresh">リフレッシュ</string>
+    <string name="browser_close">近い</string>
+
+    <!-- ===== P2-9: Voice Cloning (VoiceCloningPage + MediaSettingsPage entry) ===== -->
+    <string name="voice_cloning_title">ボイスクローン</string>
+    <string name="voice_cloning_provider">プロバイダー</string>
+    <string name="voice_cloning_api_key">APIキー</string>
+    <string name="voice_cloning_new_voice">新しい音声のクローンを作成する</string>
+    <string name="voice_cloning_voice_name">ボイスネーム</string>
+    <string name="voice_cloning_select_audio">サンプルオーディオを選択</string>
+    <string name="voice_cloning_submit">クローン作成の開始</string>
+    <string name="voice_cloning_list_empty">クローン音声はありません</string>
+    <string name="voice_cloning_list_title">クローン音声</string>
+    <string name="voice_cloning_delete_confirm">このクローン音声を削除しますか?</string>
+    <string name="voice_cloning_success">クローン作成の成功</string>
+    <string name="voice_cloning_failed">クローン作成に失敗しました: %1$s</string>
+    <string name="voice_cloning_audio_required">最初にサンプル音声を選択してください</string>
+
+    <!-- ===== P2-13: Desktop adaptation (ChromeOS / Android Desktop) ===== -->
+    <!-- Shortcut descriptions (shown in settings/help pages) -->
+    <string name="desktop_shortcuts_send">入力: 送信</string>
+    <string name="desktop_shortcuts_newline">Shift+Enter: 改行</string>
+    <string name="desktop_shortcuts_search">Ctrl+K: 検索</string>
+    <string name="desktop_shortcuts_new_chat">Ctrl+N: 新しいチャット</string>
+    <string name="desktop_shortcuts_settings">Ctrl+,: 設定</string>
+    <string name="desktop_shortcuts_copy_reply">Ctrl+Shift+C: 返信をコピー</string>
+    <string name="desktop_shortcuts_close">Esc: 閉じる</string>
+    <!-- Right-click context menu items -->
+    <string name="desktop_context_copy">コピー</string>
+    <string name="desktop_context_regenerate">再生する</string>
+    <string name="desktop_context_delete">消去</string>
+    <string name="desktop_context_share">共有</string>
+
+    <!-- P2-12 Rich Text Input -->
+    <string name="settings_rich_input">リッチテキスト入力</string>
+    <string name="settings_rich_input_desc">入力ボックスの上にマークダウン形式ツールバーを表示</string>
+    <string name="rich_input_format">フォーマット</string>
+    <string name="rich_input_bold">大胆な</string>
+    <string name="rich_input_italic">イタリック</string>
+    <string name="rich_input_inline_code">インラインコード</string>
+    <string name="rich_input_code_block">コードブロック</string>
+    <string name="rich_input_quote">引用</string>
+    <string name="rich_input_ulist">順序なしリスト</string>
+    <string name="rich_input_olist">順序付きリスト</string>
+    <string name="rich_input_link">リンク</string>
+    <string name="rich_input_link_text">リンクテキスト</string>
+    <string name="rich_input_link_url">リンク URL</string>
+    <string name="rich_input_link_insert">リンクを挿入</string>
+    <string name="chat_compressing_banner">会話履歴を圧縮中…</string>
+    <string name="chat_updating_memory_banner">記憶を更新中…</string>
+    <string name="chat_draft_restored">下書きが復元されました</string>
+    <string name="chat_loading_more_history">さらに履歴を読み込む…</string>
+    <string name="chat_performance_indicator">%1$d / %2$d 件を表示</string>
+    <string name="chat_video_generating">動画を生成中、数十秒かかる場合があります…</string>
+    <string name="ocr_processing_hint">画像の文字を認識中…</string>
+    <string name="search_searching">検索中…</string>
+    <string name="settings_screen_quick_notes">クイックノート</string>
+    <string name="settings_screen_quick_notes_cd">クイックノート — アイデアをメモ、タップして開く</string>
+    <string name="settings_screen_quick_notes_desc">アイデアをメモ。カテゴリ/リマインダー/暗号化に対応</string>
+    <string name="settings_vision_manual_selected">手動選択</string>
+    <string name="settings_vision_probe_button">選択した視覚モデルをテスト</string>
+    <string name="settings_vision_probe_desc">内部に配置されたテスト画像を選択した視聴モデルに送信し、それが真であるかどうかをテストし、サポート動画を入力して使用できるようにします。</string>
+    <string name="settings_vision_probe_disabled">ビデオアシスタントを使用して、ビデオモデルを選択します。</string>
+    <string name="settings_vision_probe_failed">テスト失敗：%1$s</string>
+    <string name="settings_vision_probe_no_model">ビデオモデルを先に選択します。</string>
+    <string name="settings_vision_probe_running">テスト中…</string>
+    <string name="settings_vision_probe_section">プローブテスト</string>
+    <string name="settings_vision_probe_success">テスト成功: ビデオ モデルは %1$d 文字の説明を返しました。</string>
+    <string name="settings_vision_show_all_models">全モデルを表示</string>
+    <string name="settings_vision_show_all_models_subtitle">リレー上級モード：すべてのモデルを表示し、自動検出されない視覚モデルを手動選択できます</string>
+    <string name="skill_delete">削除</string>
+    <string name="skill_delete_confirm_message">「%1$s」を削除する必要があることを確認しますか?この操作は削除できません。</string>
+    <string name="skill_delete_confirm_title">削除の確認</string>
+    <string name="skill_delete_failed_ui">削除失敗：%1$s</string>
+    <string name="tool_resume_starting">中断されたツール呼び出しを再開中…</string>
+    <string name="tool_resume_step">%1$s を実行中（%2$d/%3$d）…</string>
+    <string name="tts_not_ready">TTS は初期化中です。しばらくしてから再試行してください</string>
+    <string name="chat_jump_to_unread">最初の未読へ · %1$d</string>
+    <string name="chat_list_reorder">ドラッグして並べ替え</string>
+    <!-- 前端修复 (i18n-3.x): 设置页搜索索引 SettingsEntry title i18n(临时复制中文,后续补译) -->
+    <string name="settings_screen_entry_tts_playback">TTS 音声再生</string>
+    <string name="settings_screen_entry_api_key">API Key</string>
+    <string name="settings_screen_entry_ocr">OCR 文字認識</string>
+    <string name="settings_screen_entry_archived">アーカイブ済みチャット</string>
+    <string name="settings_screen_entry_font_size">文字サイズ</string>
+    <string name="settings_screen_entry_theme_mode">テーマモード</string>
+    <string name="settings_screen_entry_scheduled_theme">スケジュールテーマ</string>
+    <string name="settings_screen_entry_enter_send">Enter で送信</string>
+    <string name="settings_screen_entry_auto_scroll">自動スクロール</string>
+    <string name="settings_screen_entry_timestamps">メッセージのタイムスタンプ</string>
+    <string name="settings_screen_entry_tts_speed">TTS 速度</string>
+    <string name="settings_screen_entry_memory_toggle">記憶スイッチ</string>
+    <string name="settings_screen_entry_proxy_switch">プロキシスイッチ</string>
+    <string name="settings_screen_entry_rag_model">検索モデル</string>
+    <string name="settings_screen_entry_chunking">チャンク戦略</string>
+    <string name="settings_screen_entry_tool_approval">ツール承認モード</string>
+    <string name="settings_screen_entry_collab">コラボアシスタント</string>
+    <string name="settings_screen_archived_desc">アーカイブした会話の表示と復元</string>
+    <string name="settings_screen_share">共有</string>
+    <string name="settings_share_page_title">共有</string>
+    <string name="settings_search_result_count">%1$d 件の結果が見つかりました</string>
+    <string name="settings_screen_miniphone_desc">実験機能の初期バージョン</string>
+    <string name="model_diff_clear_add">新規モデルを解除</string>
+    <string name="model_diff_clear_remove">削除モデルを解除</string>
+    <!-- v1.0.85: release localization -->
+    <string name="workspace_import_file">ファイルマネージャーからインポート</string>
+    <string name="workspace_import_success">%1$d 件をインポートしました</string>
+    <string name="workspace_import_failed">ファイルのインポートに失敗しました: %1$s</string>
+    <string name="chat_fork_success">現在の会話から新しい会話を作成しました</string>
+    <string name="chat_list_archived_empty">アーカイブされた会話はありません</string>
+    <string name="chat_list_archived_entry">アーカイブ済み (%1$d)</string>
+    <string name="chat_list_archived_restore">復元</string>
+    <string name="chat_list_archived_toast">アーカイブしました。「アーカイブ」から復元できます</string>
+    <string name="chat_list_edit">編集</string>
+    <string name="chat_list_edit_archive">アーカイブ</string>
+    <string name="chat_list_edit_delete">削除</string>
+    <string name="chat_list_edit_done">%1$d 件を処理しました</string>
+    <string name="chat_list_edit_exit">終了</string>
+    <string name="chat_list_edit_select_all">すべて選択</string>
+    <string name="chat_list_restored_toast">復元しました</string>
+    <string name="greeting_afternoon">こんにちは</string>
+    <string name="greeting_days_birthday">%1$d 日後に誕生日</string>
+    <string name="greeting_days_event">%1$d 日以内に%2$s：%3$s</string>
+    <string name="greeting_evening">こんばんは</string>
+    <string name="greeting_late_night">深夜ですね</string>
+    <string name="greeting_memory_0">%1$s はまだよく知りません</string>
+    <string name="greeting_memory_few">%1$s は少しずつあなたを覚えています</string>
+    <string name="greeting_memory_huge">%1$s は誰よりもあなたを理解し、%2$d 件の記憶を覚えています</string>
+    <string name="greeting_memory_many">%1$s とはもうすっかり打ち解けています</string>
+    <string name="greeting_memory_max">%1$s とは何でも話せる仲です</string>
+    <string name="greeting_memory_mid">%1$s は %2$d 件の記憶を覚え、親しくなってきました</string>
+    <string name="greeting_morning">おはようございます</string>
+    <string name="greeting_noon">こんにちは</string>
+    <string name="greeting_today_birthday">今日は誕生日です</string>
+    <string name="greeting_tomorrow_birthday">明日は誕生日です</string>
+    <string name="greeting_tomorrow_event">明日は%1$s：%2$s</string>
+    <string name="muse_plugins_confirmed">プラグインを確認して有効にしました</string>
+    <string name="muse_plugins_draft">確認待ち（実行されません）</string>
+    <string name="muse_plugins_draft_saved">無効な下書きとして保存しました</string>
+    <string name="muse_plugins_install_confirm_action">インストールして有効化を確認</string>
+    <string name="muse_plugins_install_confirm_capabilities">宣言された機能：%1$s</string>
+    <string name="muse_plugins_install_confirm_code">エントリ %1$d バイト · 追加ファイル %2$d 個 · エントリ SHA-256：%3$s</string>
+    <string name="muse_plugins_install_confirm_summary">バージョン %1$s · 作者 %2$s · 外部コードは制限された JS サンドボックスで実行されます</string>
+    <string name="muse_plugins_install_confirm_title">インストールの確認：%1$s</string>
+    <string name="muse_plugins_install_confirm_tools">提供するツール：%1$s</string>
+    <string name="muse_plugins_install_confirm_warning">未署名の外部コードです。ブラウザやネットワークにはアクセスしません。確認後にのみインストール・有効化されます。</string>
+    <string name="muse_plugins_install_save_draft">無効な下書きとして保存するだけ</string>
+    <string name="muse_plugins_install_trust_publisher_action">発行者を信頼してインストール</string>
+    <string name="muse_plugins_install_trusted_warning">署名は有効で、発行者はこの端末で信頼されています。</string>
+    <string name="muse_plugins_install_unsigned_warning">未署名の外部コードは無効な下書きとしてのみ保存でき、インストールや実行はできません。</string>
+    <string name="muse_plugins_install_untrusted_warning">署名は検証済みですが、発行者が不明です（%1$s）。公開鍵のフィンガープリント %2$s を確認してください。信頼した後にのみインストール・有効化されます。</string>
+    <string name="muse_plugins_market_awaiting_confirm">確認待ち</string>
+    <string name="muse_plugins_market_configure">カタログ設定</string>
+    <string name="muse_plugins_market_downgrade_blocked">より新しいバージョン %1$s がインストール済みです</string>
+    <string name="muse_plugins_market_downloading">ダウンロード中…</string>
+    <string name="muse_plugins_market_empty">カタログにプラグインはまだありません</string>
+    <string name="muse_plugins_market_entry_capabilities">機能：%1$s</string>
+    <string name="muse_plugins_market_entry_meta">バージョン %1$s · 発行者 %2$s</string>
+    <string name="muse_plugins_market_error_hint">カタログの読み込みに失敗しました。再試行するか、カタログ設定を確認してください</string>
+    <string name="muse_plugins_market_install_action">ワンクリックインストール</string>
+    <string name="muse_plugins_market_install_failed">インストールに失敗しました：%1$s</string>
+    <string name="muse_plugins_market_installed">インストール済み</string>
+    <string name="muse_plugins_market_installing">インストール中…</string>
+    <string name="muse_plugins_market_invalid_url">カタログのURLは https:// で始まる必要があります</string>
+    <string name="muse_plugins_market_key_id_label">カスタム信頼ルート keyId</string>
+    <string name="muse_plugins_market_not_configured">カタログ未設定</string>
+    <string name="muse_plugins_market_not_configured_hint">署名カタログの URL と信頼ルートの公開鍵を設定すると、ここでプラグインを閲覧してワンクリックインストールできます。</string>
+    <string name="muse_plugins_market_preparing">検証してインストールの準備中…</string>
+    <string name="muse_plugins_market_public_key_label">カスタム信頼ルート公開鍵（Base64）</string>
+    <string name="muse_plugins_market_refresh">カタログを更新</string>
+    <string name="muse_plugins_market_settings_hint">プラグインマーケットはデフォルトで組み込みの公式カタログを使用します。カスタムカタログと信頼ルートを入力する必要があるのはテストや緊急時のみです。</string>
+    <string name="muse_plugins_market_settings_saved">プラグインカタログ設定を保存しました</string>
+    <string name="muse_plugins_market_settings_title">プラグインカタログ設定</string>
+    <string name="muse_plugins_market_title">プラグインマーケット</string>
+    <string name="muse_plugins_tab_installed">インストール済み</string>
+    <string name="muse_plugins_market_unsigned_package">カタログ内のプラグインパッケージは発行者による署名後でないとインストールできません</string>
+    <string name="muse_plugins_market_update_action">このバージョンに更新</string>
+    <string name="muse_plugins_market_url_label">カスタムカタログ URL（空欄で公式カタログを使用）</string>
+    <string name="muse_plugins_none">なし</string>
+    <string name="muse_plugins_review_failed">セキュリティレビューに合格しませんでした：%1$s</string>
+    <string name="muse_plugins_review_tools">ツール：%1$s</string>
+    <string name="muse_plugins_rollback_action">%1$s にロールバック</string>
+    <string name="muse_plugins_rollback_confirm">%1$s を %2$s にロールバックします。システムがそのバージョンの署名と内容ダイジェストを再検証し、検証に失敗しても現在のバージョンは変わりません。</string>
+    <string name="muse_plugins_rollback_done">過去のバージョンにロールバックしました</string>
+    <string name="muse_plugins_rollback_title">過去のバージョンにロールバック</string>
+    <string name="muse_plugins_security_rejected">プラグインが外部プラグインのセキュリティポリシーに適合していません</string>
+    <string name="muse_plugins_sign_enable_action">署名して有効化</string>
+    <string name="muse_plugins_sign_enable_failed">署名して有効化に失敗しました：%1$s</string>
+    <string name="muse_plugins_sign_enable_success">プラグインを署名して有効化しました</string>
+    <string name="muse_plugins_sign_enable_summary">プラグイン名：%1$s · id：%2$s · バージョン：%3$s</string>
+    <string name="muse_plugins_sign_enable_title">プラグインを署名して有効化</string>
+    <string name="muse_plugins_sign_enable_tools">ツールリスト：%1$s</string>
+    <string name="muse_plugins_sign_enable_warning">これはローカルの作成者鍵で署名されたコードです。署名して有効化すると、アシスタントがこれらのツールを呼び出せるようになります。初回の署名でローカル作成者の公開鍵が端末の信頼ルートに追加され、以降ローカル鍵で署名されたプラグインはすべて信頼されます。上記のツールリストとコードの出所を先に確認してください。</string>
+    <string name="muse_plugins_signature_invalid">無効な署名</string>
+    <string name="muse_plugins_signature_status">署名ステータス：%1$s</string>
+    <string name="muse_plugins_signature_trusted">検証済みでこの端末で信頼されています</string>
+    <string name="muse_plugins_signature_unsigned">未署名</string>
+    <string name="muse_plugins_signature_unsupported">サポートされていない署名形式</string>
+    <string name="muse_plugins_signature_untrusted">署名は有効ですが、発行者は信頼されていません</string>
+    <string name="muse_plugins_trust_catalog_empty">現在、組み込みの公式信頼ルートを使用しています。カスタム信頼ルートはありません。</string>
+    <string name="muse_plugins_trust_catalog_remove_action">削除</string>
+    <string name="muse_plugins_trust_catalog_removed">このカタログの信頼ルートを削除し、マーケットキャッシュをクリアしました</string>
+        <!-- B7-01: Plugin configuration contribution -->
+    <string name="muse_plugins_config">插件配置</string>
+    <string name="muse_plugins_open_panel">パネルを開く</string>
+    <string name="muse_plugins_config_save_success">配置已保存</string>
+    <string name="muse_plugins_config_load_failed">加载配置失败</string>
+    <string name="muse_plugins_trust_catalog_title">カタログの信頼ルート</string>
+    <string name="muse_plugins_trust_publisher_fingerprint">フィンガープリント %1$s</string>
+    <string name="muse_plugins_trust_publishers_empty">まだどの発行者も信頼していません。不明な発行者のプラグインをインストールすると信頼確認に誘導されます。</string>
+    <string name="muse_plugins_trust_publishers_title">信頼する発行者</string>
+    <string name="muse_plugins_trust_revoke_action">信頼を取り消す</string>
+    <string name="muse_plugins_trust_revoke_confirm">取り消すと、発行者 %1$s のインストール済みプラグインは自動的に無効になり、再インストールや更新には再度の明示的な信頼が必要です。</string>
+    <string name="muse_plugins_trust_revoke_done">この発行者の信頼を取り消し、関連プラグインを無効にしました</string>
+    <string name="muse_plugins_trust_revoke_title">発行者の信頼を取り消しますか？</string>
+    <string name="muse_plugins_trust_title">信頼管理</string>
+    <string name="muse_plugins_unknown_author">不明</string>
+    <string name="muse_plugins_unsigned_draft_only">署名なし：無効な下書きとしてのみ保存可能</string>
+    <string name="settings_bubble_skin_plugin_disabled">プラグインが無効のため、このスキンは現在選択できません</string>
+    <string name="settings_bubble_skin_plugin_section">プラグインスキン</string>
+    <string name="settings_bubble_skin_plugin_source">プラグイン %1$s · v%2$s から</string>
+    <string name="settings_bubble_skin_plugin_unavailable_fallback">選択したプラグインスキンは利用できません（プラグインが無効化またはアンインストールされている）。組み込みのデフォルトスキンに戻しました</string>
+    <string name="connector_error_activity_unavailable">Activity を取得できません</string>
+    <string name="channel_conversation_role_assistant">アシスタント</string>
+    <string name="channel_conversation_role_user">相手</string>
+    <string name="channel_conversation_turn_line">%1$s: %2$s</string>
+    <!-- v2.2.1: 独立アクセシビリティプロバイダー(任意の機能強化) -->
+    <string name="permission_a11y_provider_title">独立アクセシビリティプロバイダー</string>
+    <string name="permission_a11y_provider_installed">独立版をインストール済み(アプリ更新でも維持)</string>
+    <string name="permission_a11y_provider_not_installed">未インストール(任意)</string>
+    <string name="permission_a11y_provider_desc">独立版をインストールすると、メインアプリの更新・再インストール後もアクセシビリティ権限が維持されます。インストールは任意です。</string>
+    <string name="permission_a11y_provider_install_btn">独立版をインストール</string>
+    <string name="permission_a11y_provider_install_failed">インストーラーを開けませんでした</string>
+    <!-- v2.2.1: WeChat QR連携 — 通信エラー / 自動更新のヒント -->
+    <string name="channel_weclaw_status_unstable">ネットワークエラー、再試行中…</string>
+    <string name="channel_weclaw_status_refreshed">QRコードが期限切れのため自動更新しました。もう一度スキャンしてください</string>
+</resources>

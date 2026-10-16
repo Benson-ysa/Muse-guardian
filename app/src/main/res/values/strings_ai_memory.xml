@@ -1,0 +1,220 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    ai / memory / transformer 三模块 i18n 审查结论:
+    - ai 模块(独立 Gradle 模块): 用户可见错误消息通过 Result.Error/异常传递到 UI,
+      但无法直接引用 app 的 R.string。已在各源文件标注 // TODO i18n 待提取,
+      待引入错误代码枚举方案后提取。
+    - memory 模块(独立 Gradle 模块): 验证错误(MemoryConfig.validate)与 isZh 时间标签
+      (重要事实/事情经过等)用户可见,但跨模块且部分标签参与 LLM 输出解析契约。
+      已在各源文件标注 // TODO i18n 待提取。
+    - transformer 模块(app 内): 经逐文件审查,所有中文字符串均为 LLM 提示词内容
+      (发给 LLM 的 SYSTEM 消息)、Logger 日志、代码注释或内部异常消息,
+      无直接面向用户的 UI 字符串,按"LLM 提示词不提取"规则保留原文。
+    因此本文件当前无字符串条目,作为后续提取的占位与审查记录。
+-->
+<resources xmlns:tools="http://schemas.android.com/tools" tools:ignore="MissingTranslation">
+    <string name="memory_meta_hit_count">命中 %1$d 次</string>
+    <string name="memory_menu_history">历史版本</string>
+    <string name="memory_revision_title">改动记录</string>
+    <string name="memory_revision_empty">这条记忆还没有被改过</string>
+    <string name="memory_revision_revert">回到此版本</string>
+    <string name="memory_revision_reverted">已回滚到该版本</string>
+    <string name="memory_revision_revert_failed">回滚失败</string>
+    <string name="memory_meta_last_hit">最近命中 %1$d 天前</string>
+    <!-- v4: 记忆重要程度相关 -->
+    <string name="memory_importance_normal">普通</string>
+    <string name="memory_importance_important">重要</string>
+    <string name="memory_importance_critical">关键</string>
+    <string name="memory_importance_set_title">设置重要程度</string>
+    <string name="memory_importance_normal_desc">日常偏好,记错无妨</string>
+    <string name="memory_importance_important_desc">中等风险,记错会误事</string>
+    <string name="memory_importance_critical_desc">高风险,记错会出事(永不遗忘)</string>
+    <string name="memory_source_session">来源: 会话 %1$s</string>
+    <string name="memory_created_today">今天入库</string>
+    <string name="memory_created_yesterday">昨天入库</string>
+    <string name="memory_created_days_ago">%1$d 天前入库</string>
+    <string name="memory_sync_never">尚未编译记忆,对话内容暂未进入长期记忆</string>
+    <string name="memory_sync_recent">最近编译 %1$d 分钟前,记忆已同步</string>
+    <string name="memory_sync_stale">最近记忆已整理于 %1$d 分钟前；继续对话会持续更新</string>
+    <string name="memory_screen_experience_category_general">通用</string>
+    <string name="memory_chart_type_distribution_cd">记忆类型分布环形图</string>
+    <string name="memory_chart_daily_trend_cd">每日记忆趋势图</string>
+    <string name="memory_sync_set_importance_cd">设置重要程度</string>
+
+    <!-- v6: MemoryViewModel CRUD error messages -->
+    <string name="memory_delete_failed">删除失败: %1$s</string>
+    <string name="memory_edit_failed">编辑失败: %1$s</string>
+    <string name="memory_set_failed">设置失败: %1$s</string>
+    <string name="memory_add_failed">添加失败: %1$s</string>
+    <string name="memory_add_experience_failed">添加经验失败: %1$s</string>
+    <string name="memory_edit_experience_failed">编辑经验失败: %1$s</string>
+    <string name="memory_delete_experience_failed">删除经验失败: %1$s</string>
+    <!-- v1.0.72: 群聊记忆(记忆中心"群聊"Tab) -->
+    <string name="memory_tab_group_chat">群聊</string>
+    <string name="memory_tab_graph">记忆树</string>
+    <string name="memory_graph_preview_title">记忆树</string>
+    <string name="memory_graph_preview_hint">轻触一个记忆,看看它和什么相连</string>
+    <string name="memory_graph_preview_selected">已聚焦：%1$s</string>
+    <string name="memory_graph_empty_title">暂无记忆关系数据</string>
+    <string name="memory_graph_empty_subtitle">记忆在对话中积累后,这里会展示记忆之间的关系</string>
+    <string name="memory_graph_node_type_label">类型: %1$s</string>
+    <string name="memory_graph_node_pinned">已置顶</string>
+    <string name="memory_graph_node_expired">已过期</string>
+    <string name="memory_graph_node_related">关联 %1$d 条</string>
+    <string name="memory_graph_load_failed">加载失败</string>
+    <string name="memory_graph_category_preference">偏好</string>
+    <string name="memory_graph_category_identity">身份</string>
+    <string name="memory_graph_category_event">事件</string>
+    <string name="memory_graph_category_relationship">关系</string>
+    <string name="memory_graph_category_goal">目标</string>
+    <string name="memory_graph_category_medical">健康</string>
+    <string name="memory_graph_category_general">事实</string>
+    <string name="memory_graph_relation_related_to">相关</string>
+    <string name="memory_graph_relation_causes">影响</string>
+    <string name="memory_graph_relation_explains">解释</string>
+    <string name="memory_graph_relation_part_of">属于</string>
+    <string name="memory_graph_relation_contradicts">矛盾</string>
+    <string name="memory_graph_relation_supports">支持</string>
+    <string name="memory_graph_edge_weight">强度: %1$d%%</string>
+    <string name="memory_graph_edge_confirm">确认关系</string>
+    <string name="memory_graph_edge_delete">删除关系</string>
+    <string name="memory_graph_preview_node_muse">Muse</string>
+    <string name="memory_graph_preview_node_android">Android 开发</string>
+    <string name="memory_graph_preview_node_local_ai">本地 AI</string>
+    <string name="memory_graph_preview_node_photo">摄影</string>
+    <string name="memory_graph_preview_node_camera">尼康 Z50 II</string>
+    <string name="memory_graph_preview_node_goal">长期目标</string>
+    <string name="memory_graph_preview_node_writing">写作</string>
+    <string name="memory_delete_group_chat_failed">删除群聊记忆失败: %1$s</string>
+    <string name="memory_clear_group_chat_failed">清空群聊记忆失败: %1$s</string>
+
+    <!-- v6: Compile section display titles -->
+    <string name="memory_compile_section_facts">事实摘要</string>
+    <string name="memory_compile_section_today">今日</string>
+    <string name="memory_compile_section_week">本周</string>
+    <string name="memory_compile_section_longterm">长期</string>
+
+    <!-- v6: Summary item title -->
+    <string name="memory_summary_title">会话 %1$s</string>
+
+    <!-- v6: Error trace labels -->
+    <string name="memory_error_trace_header">== Muse Memory Error ==</string>
+    <string name="memory_error_trace_time">时间: </string>
+    <string name="memory_error_trace_exception">异常: </string>
+    <string name="memory_error_trace_message">消息: </string>
+    <string name="memory_error_trace_device">设备: </string>
+    <string name="memory_error_trace_stack_header">== Stack Trace ==</string>
+
+    <!-- v8: 记忆作用域(scope)相关 -->
+    <string name="memory_scope_all">全部</string>
+    <string name="memory_scope_main">主助手</string>
+    <string name="memory_scope_assistant">助手记忆</string>
+    <string name="memory_scope_label">记忆作用域</string>
+
+    <!-- v1.0.52 P2-2: 记忆空间(Space)相关 -->
+    <string name="memory_space_manage_title">记忆空间管理</string>
+    <string name="memory_space_create">创建空间</string>
+    <string name="memory_space_create_title">新建记忆空间</string>
+    <string name="memory_space_rename">重命名</string>
+    <string name="memory_space_rename_title">重命名记忆空间</string>
+    <string name="memory_space_delete">删除</string>
+    <string name="memory_space_name_label">空间名称</string>
+    <string name="memory_space_fact_count">%1$d 条事实</string>
+    <string name="memory_space_entry">记忆空间</string>
+
+    <!-- MemoryScreen.kt: 视图模式切换 / 导出 / 统计卡片 -->
+    <string name="memory_stats_view_list">列表</string>
+    <string name="memory_stats_view_timeline">时间轴</string>
+    <string name="memory_stats_export_title">导出记忆</string>
+    <string name="memory_stats_export_format_hint">选择导出格式:</string>
+    <string name="memory_stats_section_title">记忆统计</string>
+    <string name="memory_stats_total">总计</string>
+    <string name="memory_stats_importance_distribution">重要度分布</string>
+    <string name="memory_stats_top_sessions">最活跃会话</string>
+    <string name="memory_stats_session_count">%1$d 条</string>
+    <string name="memory_stats_session_live">会话 %1$d</string>
+    <string name="memory_stats_trend_30_days">近 30 天趋势</string>
+    <!-- v1.x: 记忆去重 -->
+    <string name="memory_dedup_button">合并重复记忆</string>
+    <string name="memory_dedup_result">已合并 %1$s 条重复记忆</string>
+    <string name="memory_dedup_failed">记忆去重失败</string>
+    <string name="memory_compile_done">记忆编译完成</string>
+    <string name="memory_compile_running">正在整理记忆…</string>
+    <string name="memory_compile_failed">记忆编译失败，请检查模型配置后重试</string>
+    <string name="memory_organize_action">整理记忆</string>
+    <string name="memory_organize_stage_prepare">准备整理</string>
+    <string name="memory_organize_stage_compile">正在编译摘要</string>
+    <string name="memory_organize_stage_dedup">正在合并重复</string>
+    <string name="memory_organize_stage_complete">整理完成，合并 %1$d 条</string>
+    <string name="memory_organize_stage_no_duplicates">整理完成，当前没有发现可合并的重复记忆</string>
+    <string name="memory_center_fact_count">条事实</string>
+    <string name="memory_center_summary_count">%1$d 条摘要</string>
+    <string name="memory_center_updated">最近更新 %1$s</string>
+    <string name="memory_center_empty_title">还没有形成记忆</string>
+    <string name="memory_center_empty_subtitle">继续和 Muse 对话，明确告诉我“记住这件事”，事实会出现在这里。</string>
+    <string name="memory_center_ready_subtitle">这些是 Muse 当前整理出的事实。你可以查看、置顶或整理它们。</string>
+    <string name="memory_center_open_facts">查看事实库</string>
+    <string name="memory_center_tab_stream">记忆流</string>
+    <string name="memory_center_tab_constellation">记忆星座</string>
+    <string name="memory_center_stream_title">最近记住的内容</string>
+    <string name="memory_center_library_title">事实库</string>
+    <string name="memory_center_constellation_hint">重要事实会优先靠近中心。关系还没整理出来时，节点也会单独显示。</string>
+    <string name="memory_center_constellation_empty">目前没有可展示的事实节点。先产生或手动添加一条事实，再回来看看。</string>
+    <string name="memory_center_filter_empty">当前作用域或空间里没有事实节点，试试切换上方筛选条件。</string>
+    <string name="memory_center_scope_all">全部</string>
+    <string name="memory_center_space_default">默认</string>
+    <string name="memory_center_scope_line">%1$s · %2$s</string>
+    <string name="memory_center_filter_title">筛选</string>
+    <string name="memory_center_filter_scope">作用域</string>
+    <string name="memory_center_filter_advanced">高级筛选</string>
+    <string name="memory_center_filter_space">记忆空间</string>
+    <!-- F-7: 功能完善度审查 — 重要程度/时间范围筛选 -->
+    <string name="memory_center_filter_importance">重要程度</string>
+    <string name="memory_center_filter_importance_all">全部</string>
+    <string name="memory_center_filter_time">时间范围</string>
+    <string name="memory_center_filter_time_all">全部时间</string>
+    <string name="memory_center_filter_time_7">近 7 天</string>
+    <string name="memory_center_filter_time_30">近 30 天</string>
+    <string name="memory_center_filter_time_90">近 90 天</string>
+    <string name="memory_fact_source_label">来源会话</string>
+    <string name="memory_organize_stage_failed">整理失败，请重试</string>
+    <!-- v1.x: 记忆卡片 ⋮ 菜单 -->
+    <string name="memory_menu_cd">更多操作</string>
+    <string name="memory_menu_pin">置顶</string>
+    <string name="memory_menu_unpin">取消置顶</string>
+    <string name="memory_pin_failed">置顶操作失败，请重试</string>
+    <string name="memory_unpin_failed">取消置顶失败，请重试</string>
+    <string name="memory_menu_importance">设置重要程度</string>
+    <string name="memory_menu_edit">编辑</string>
+    <string name="memory_menu_delete">删除</string>
+    <string name="memory_delete_confirm_title">删除记忆</string>
+
+    <!-- 前端修复 (i18n-3.x): 群聊记忆 Tab + 时间轴筛选 i18n -->
+    <string name="memory_group_chat_empty">暂无群聊记忆</string>
+    <string name="memory_group_chat_count">共 %1$d 条</string>
+    <string name="memory_group_chat_empty_hint">群聊中助手每次回复后都会在这里生成一条摘要记忆。\n如果群聊助手说话风格变得奇怪,可以在这里删除或清空。</string>
+    <string name="memory_group_chat_clear_title">清空全部群聊记忆</string>
+    <string name="memory_group_chat_clear_content">确定清空全部群聊记忆?助手将不再引用任何群聊过往发言摘要。</string>
+    <string name="memory_group_chat_delete_cd">删除</string>
+    <string name="memory_contradictions_title">待确认的矛盾记忆</string>
+    <string name="memory_contradictions_dismiss_cd">确认并清除</string>
+    <string name="memory_timeline_filter_all">全部</string>
+    <string name="memory_timeline_filter_fact">元事实</string>
+    <string name="memory_timeline_filter_summary">摘要</string>
+    <string name="memory_timeline_filter_milestone">里程碑</string>
+    <string name="memory_center_stream_subtitle">按发生时间聚合：对话中自动沉淀的事实，随时间排列成流</string>
+    <string name="memory_center_facts_subtitle">按条目管理：可搜索、新增、编辑或删除单条记忆</string>
+    <string name="memory_stream_mode_list">列表</string>
+    <string name="memory_stream_mode_timeline">时间轴</string>
+    <string name="memory_graph_reset_view">复位视图</string>
+    <!-- v2.2.1: 记忆库归档/恢复提示 -->
+    <string name="memory_archive_rebuilt_hint">检测到记忆库曾因版本变更被归档重建,历史记忆未完整保留</string>
+    <string name="memory_archive_recovered">已从版本变更归档中恢复 %1$d 条记忆</string>
+    <string name="memory_archive_recovery_title">可恢复的记忆归档</string>
+    <string name="memory_archive_recovery_message">检测到版本变更归档,包含 %1$d 条会话摘要和 %2$d 个编译段。当前记忆库为空,可以安全恢复。</string>
+    <string name="memory_archive_recovery_action">恢复归档</string>
+    <string name="memory_archive_recovery_confirm_title">恢复记忆归档?</string>
+    <string name="memory_archive_recovery_confirm">将归档中的记忆摘要和编译内容恢复到当前空记忆库,不会覆盖现有数据。继续吗?</string>
+    <string name="memory_archive_recovery_done">已恢复 %1$d 条记忆记录</string>
+    <string name="memory_archive_recovery_failed">记忆归档恢复失败:%1$s</string>
+</resources>

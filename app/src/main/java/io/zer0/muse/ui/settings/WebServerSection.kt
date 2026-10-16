@@ -1,0 +1,384 @@
+package io.zer0.muse.ui.settings
+
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.zer0.common.resultOf
+import io.zer0.muse.R
+import io.zer0.muse.data.SettingsRepository
+import io.zer0.muse.data.util.NetworkUtils
+import io.zer0.muse.ui.common.feedback.MuseDialog
+import io.zer0.muse.ui.common.feedback.MuseToast
+import io.zer0.muse.ui.common.form.MuseTactileButton
+import io.zer0.muse.ui.common.form.MuseTextField
+import io.zer0.muse.ui.common.icons.MuseIcons
+import io.zer0.muse.ui.common.settings.SectionLabel
+import io.zer0.muse.ui.common.settings.SettingsGroup
+import io.zer0.muse.ui.common.settings.SettingsGroupDivider
+import io.zer0.muse.ui.common.settings.SettingsItemRow
+import io.zer0.muse.ui.common.settings.SettingsSwitchRow
+import io.zer0.muse.ui.theme.MuseShapes
+import io.zer0.muse.web.WebServer
+import io.zer0.muse.web.WebServerConfig
+import kotlinx.coroutines.launch
+
+/**
+ * P1-2 修复: 嵌入式 Web 服务器配置 section — 分组列表。
+ *
+ * 阶段 C 升级: 动态获取局域网 IP + 一键复制访问地址。
+ *
+ * P2-13:WebServer PIN 安全
+ *  - 显示当前 6 位 PIN(明文),用于 Web 端首次访问验证
+ *  - 提供"重新生成 PIN"按钮,旧 PIN 立即失效
+ *  - 明显提示"同一 Wi-Fi 下他人可通过 IP + PIN 访问"
+ *
+ * 后端 WebServerConfig + WebServer 服务在 MuseApp 启动时自动启动,
+ * 设置页保存后也会立即应用配置并显示真实运行状态。此 section 让用户可控:
+ *  - 启停开关(保存后立即启动或停止 WebServer)
+ *  - 端口配置(默认 8765)
+ *  - 密码(用于 JWT 登录,可重新生成)
+ *  - PIN(用于 Web 端首次访问验证,可重新生成)
+ *  - 访问地址(动态 IP + 复制按钮)
+ *  - v2.x: HTTPS 开关(自签证书,默认关);开启后展示证书 SHA-256 指纹供核对
+ */
+@Suppress("LongMethod", "CyclomaticComplexMethod", "FunctionNaming")
+@Composable
+internal fun WebServerSection(settings: SettingsRepository, webServer: WebServer) {
+    val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    val config by settings.webServerConfigFlow.collectAsStateWithLifecycle(
+        initialValue = WebServerConfig(),
+    )
+    val isRunning by webServer.isRunning.collectAsStateWithLifecycle(initialValue = false)
+    val lastError by webServer.lastError.collectAsStateWithLifecycle(initialValue = null)
+    var showPortDialog by remember { mutableStateOf(false) }
+    var portInput by remember { mutableStateOf(config.port.toString()) }
+    // 动态获取局域网 IP
+    val localIp = remember { NetworkUtils.getLocalIpAddress() }
+    val accessUrl = buildAccessUrl(config.allowLan, localIp, config.port, config.httpsEnabled)
+    val runningAccessUrl = if (isRunning) accessUrl else null
+
+    SectionLabel(stringResource(R.string.settings_web_title))
+    Text(
+        text = stringResource(R.string.settings_web_desc),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.outline,
+        modifier = Modifier.padding(top = 4.dp),
+    )
+    Text(
+        text = when {
+            isRunning -> stringResource(R.string.settings_web_status_running, config.port)
+            lastError != null -> stringResource(R.string.settings_web_status_failed, lastError.orEmpty())
+            else -> stringResource(R.string.settings_web_status_stopped)
+        },
+        style = MaterialTheme.typography.bodySmall,
+        color = if (isRunning) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+        modifier = Modifier.padding(top = 4.dp),
+    )
+
+    // P2-13: 明显提示 — 同一 Wi-Fi 下他人可通过 IP + PIN 访问
+    if (runningAccessUrl != null && config.pin.isNotBlank() && config.allowLan) {
+        Surface(
+            modifier = Modifier
+                .padding(top = 8.dp)
+                .fillMaxWidth(),
+            shape = MuseShapes.medium,
+            color = MaterialTheme.colorScheme.secondaryContainer,
+        ) {
+            Row(
+                modifier = Modifier.padding(12.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Icon(
+                    imageVector = MuseIcons.info,
+                    contentDescription = stringResource(R.string.settings_web_security_hint),
+                    tint = MaterialTheme.colorScheme.onSecondaryContainer,
+                    modifier = Modifier.size(20.dp),
+                )
+                Column {
+                    Text(
+                        text = stringResource(R.string.settings_web_access_warning),
+                        style = MaterialTheme.typography.bodyMedium,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    )
+                    Spacer(modifier = Modifier.height(2.dp))
+                    Text(
+                        text = stringResource(R.string.settings_web_address_pin, runningAccessUrl, config.pin),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                    )
+                    Text(
+                        text = stringResource(R.string.settings_web_pin_hint),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer.copy(alpha = 0.85f),
+                    )
+                }
+            }
+        }
+    }
+
+    SettingsGroup(
+        modifier = Modifier.padding(top = 8.dp),
+    ) {
+        // 启停开关
+        SettingsSwitchRow(
+            icon = MuseIcons.router,
+            title = stringResource(R.string.settings_web_enable),
+            subtitle = stringResource(R.string.settings_web_enable_subtitle),
+            checked = config.enabled,
+            onCheckedChange = { enabled ->
+                scope.launch {
+                    resultOf { webServer.saveAndApplyConfig(config.copy(enabled = enabled)) }
+                        .onError { _, t ->
+                            MuseToast.show(context.getString(R.string.settings_web_failed, t?.message))
+                        }
+                }
+            },
+        )
+        SettingsGroupDivider()
+        lanAccessSwitch(config = config, webServer = webServer)
+        SettingsGroupDivider()
+        // v2.x: HTTPS 开关(自签证书);保存后重启服务即走 TLS
+        httpsSwitch(config = config, webServer = webServer)
+        // 端口
+        SettingsItemRow(
+            icon = MuseIcons.globe,
+            title = stringResource(R.string.settings_web_port),
+            subtitle = stringResource(R.string.settings_web_port_subtitle, config.port),
+            onClick = {
+                portInput = config.port.toString()
+                showPortDialog = true
+            },
+        )
+        SettingsGroupDivider()
+        // 密码(脱敏显示)
+        SettingsItemRow(
+            icon = MuseIcons.lock,
+            title = stringResource(R.string.settings_web_password),
+            subtitle = if (config.password.isBlank()) {
+                stringResource(
+                    R.string.settings_web_password_not_set,
+                )
+            } else {
+                "${config.password.take(2)}****"
+            },
+        )
+        SettingsGroupDivider()
+        // 重新生成密码
+        SettingsItemRow(
+            icon = MuseIcons.lock,
+            title = stringResource(R.string.settings_web_regenerate_password),
+            subtitle = stringResource(R.string.settings_web_regenerate_password_subtitle),
+            onClick = {
+                val newPassword = WebServerConfig.generateRandomPassword()
+                scope.launch {
+                    resultOf { webServer.saveAndApplyConfig(config.copy(password = newPassword)) }
+                        .onSuccess {
+                            MuseToast.show(context.getString(R.string.settings_web_new_password, newPassword), 3500)
+                        }
+                        .onError { _, t ->
+                            MuseToast.show(context.getString(R.string.settings_web_failed, t?.message))
+                        }
+                }
+            },
+        )
+        SettingsGroupDivider()
+        // P2-13: 当前 PIN(明文显示,带复制按钮)
+        SettingsItemRow(
+            icon = MuseIcons.key,
+            title = stringResource(R.string.settings_web_pin),
+            subtitle = if (config.pin.isBlank()) stringResource(R.string.settings_web_pin_not_set) else config.pin,
+        ) {
+            if (config.pin.isNotBlank()) {
+                MuseTactileButton(
+                    icon = MuseIcons.copy,
+                    onClick = {
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        clipboard.setPrimaryClip(ClipData.newPlainText("Muse WebServer PIN", config.pin))
+                        MuseToast.show(context.getString(R.string.settings_web_pin_copied, config.pin))
+                    },
+                    contentDescription = stringResource(R.string.settings_web_copy_pin),
+                    tint = MaterialTheme.colorScheme.onSurface,
+                    iconSize = 20.dp,
+                )
+            }
+        }
+        SettingsGroupDivider()
+        // P2-13: 重新生成 PIN
+        SettingsItemRow(
+            icon = MuseIcons.key,
+            title = stringResource(R.string.settings_web_regenerate_pin),
+            subtitle = stringResource(R.string.settings_web_regenerate_pin_subtitle),
+            onClick = {
+                val newPin = WebServerConfig.generateRandomPin()
+                scope.launch {
+                    resultOf { webServer.saveAndApplyConfig(config.copy(pin = newPin)) }
+                        .onSuccess {
+                            MuseToast.show(context.getString(R.string.settings_web_new_pin, newPin), 3500)
+                        }
+                        .onError { _, t ->
+                            MuseToast.show(context.getString(R.string.settings_web_failed, t?.message))
+                        }
+                }
+            },
+        )
+        SettingsGroupDivider()
+        // 访问地址(动态 IP + 复制按钮)
+        SettingsItemRow(
+            icon = MuseIcons.wifi,
+            title = stringResource(R.string.settings_web_access_address),
+            subtitle = when {
+                runningAccessUrl != null -> runningAccessUrl
+                lastError != null -> stringResource(R.string.settings_web_status_failed, lastError.orEmpty())
+                else -> stringResource(R.string.settings_web_not_running)
+            },
+        ) {
+            if (runningAccessUrl != null) {
+                MuseTactileButton(
+                    icon = MuseIcons.copy,
+                    onClick = {
+                        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+                        clipboard.setPrimaryClip(ClipData.newPlainText("Muse WebServer", runningAccessUrl))
+                        MuseToast.show(context.getString(R.string.settings_web_address_copied, runningAccessUrl))
+                    },
+                    contentDescription = stringResource(R.string.settings_web_copy_address),
+                    tint = MaterialTheme.colorScheme.onSurface,
+                    iconSize = 20.dp,
+                )
+            }
+        }
+        // v2.x: HTTPS 运行时展示证书 SHA-256 指纹,供用户核对/信任
+        if (config.httpsEnabled && isRunning) {
+            val fingerprint = webServer.status().fingerprint
+            if (fingerprint != null) {
+                SettingsGroupDivider()
+                SettingsItemRow(
+                    icon = MuseIcons.lock,
+                    title = stringResource(R.string.settings_web_https_fingerprint),
+                    subtitle = fingerprint,
+                )
+            }
+        }
+    }
+
+    // 端口修改对话框
+    if (showPortDialog) {
+        MuseDialog(
+            onDismissRequest = { showPortDialog = false },
+            title = stringResource(R.string.settings_web_edit_port),
+            content = {
+                Column(modifier = Modifier.fillMaxWidth()) {
+                    MuseTextField(
+                        value = portInput,
+                        onValueChange = { portInput = it.filter(Char::isDigit).take(5) },
+                        label = { Text(stringResource(R.string.settings_web_port_number)) },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Text(
+                        text = stringResource(R.string.settings_web_port_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.outline,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                }
+            },
+            confirmText = stringResource(R.string.settings_common_save),
+            onConfirm = {
+                val port = portInput.toIntOrNull()
+                if (port == null || port < 1024 || port > 65535) {
+                    MuseToast.show(context.getString(R.string.settings_web_port_invalid))
+                    return@MuseDialog
+                }
+                scope.launch {
+                    resultOf { webServer.saveAndApplyConfig(config.copy(port = port)) }
+                        .onSuccess {
+                            showPortDialog = false
+                            MuseToast.show(context.getString(R.string.settings_web_port_updated))
+                        }
+                        .onError { _, t ->
+                            MuseToast.show(context.getString(R.string.settings_web_failed, t?.message))
+                        }
+                }
+            },
+            dismissText = stringResource(R.string.settings_common_cancel),
+            onDismiss = { showPortDialog = false },
+        )
+    }
+}
+
+/** R-SEC-03: 默认仅本机;开启局域网访问后才展示局域网 IP 地址。 */
+private fun buildAccessUrl(allowLan: Boolean, localIp: String?, port: Int, httpsEnabled: Boolean): String? {
+    // v2.x: HTTPS 启用时展示 https:// 访问地址(避免用户点了 http 地址连不上)
+    val scheme = if (httpsEnabled) "https" else "http"
+    return if (allowLan) localIp?.let { "$scheme://$it:$port" } else "$scheme://127.0.0.1:$port"
+}
+
+/** R-SEC-03: 局域网访问开关;默认仅本机,开启后才允许同 Wi-Fi 设备通过 IP 访问。 */
+@Composable
+private fun lanAccessSwitch(config: WebServerConfig, webServer: WebServer) {
+    val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    SettingsSwitchRow(
+        icon = MuseIcons.wifi,
+        title = stringResource(R.string.settings_web_allow_lan),
+        subtitle = stringResource(R.string.settings_web_allow_lan_subtitle),
+        checked = config.allowLan,
+        onCheckedChange = { allowLan ->
+            scope.launch {
+                resultOf { webServer.saveAndApplyConfig(config.copy(allowLan = allowLan)) }
+                    .onError { _, t ->
+                        MuseToast.show(context.getString(R.string.settings_web_failed, t?.message))
+                    }
+            }
+        },
+    )
+}
+
+/** v2.x: HTTPS 开关 — 自签证书;保存后立即重启服务并切换 HTTP/HTTPS。 */
+@Composable
+private fun httpsSwitch(config: WebServerConfig, webServer: WebServer) {
+    val scope = rememberCoroutineScope()
+    val context = LocalContext.current
+    SettingsSwitchRow(
+        icon = MuseIcons.lock,
+        title = stringResource(R.string.settings_web_https),
+        subtitle = stringResource(R.string.settings_web_https_subtitle),
+        checked = config.httpsEnabled,
+        onCheckedChange = { enabled ->
+            scope.launch {
+                resultOf { webServer.saveAndApplyConfig(config.copy(httpsEnabled = enabled)) }
+                    .onError { _, t ->
+                        MuseToast.show(context.getString(R.string.settings_web_failed, t?.message))
+                    }
+            }
+        },
+    )
+}

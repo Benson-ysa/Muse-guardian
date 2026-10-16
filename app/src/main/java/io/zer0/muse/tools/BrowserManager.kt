@@ -1,0 +1,746 @@
+package io.zer0.muse.tools
+
+import android.annotation.SuppressLint
+import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.Canvas
+import android.os.Looper
+import android.util.Base64
+import android.webkit.WebChromeClient
+import android.webkit.WebResourceError
+import android.webkit.WebResourceRequest
+import android.webkit.WebResourceResponse
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import io.zer0.common.AppJson
+import io.zer0.common.Logger
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonPrimitive
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
+import kotlin.coroutines.resume
+
+/**
+ * P2-6 BrowserManager:浏览器自动化管理器。
+ *
+ * 持有一个 headless [WebView] 实例,让 AI Agent 能通过工具调用完成浏览器自动化:
+ *  - [navigate] 加载 URL,完成后更新 [currentUrl] / [currentTitle] / [currentHtml]
+ *  - [evaluateJs] 在当前页执行任意 JS,返回 JSON-encoded 字符串
+ *  - [click] / [type] / [extractText] / [extractAttribute] 基于 CSS 选择器的常用操作
+ *  - [scrollToBottom] 翻页加载更多内容(无限滚动场景)
+ *  - [captureScreenshot] 把当前 WebView 渲染为 Base64 PNG
+ *
+ * 设计要点(按 [JsSandbox] 的 WebView 沙盒模式):
+ *  - WebView 必须在主线程创建和访问,所有 suspend 函数用 [Dispatchers.Main] 切换
+ *  - [evaluateJs] 用 [suspendCancellableCoroutine] + `ValueCallback<String>` 桥接异步回调
+ *  - 所有操作 10 秒超时([DEFAULT_TIMEOUT_MS]),用 [withTimeoutOrNull] 包裹避免无限挂起
+ *  - 安全限制:禁用 file access / content access(防止 file:// 跨域读取),
+ *    但允许网络加载(浏览器需要拉取远程页面)
+ *  - WebView 用 applicationContext 创建,headless 运行(不附加到任何 View 树),
+ *    可被 AI 工具直接调用
+ *
+ * 与浏览器自动化工具的关系:
+ *
+ * @param context 应用 Context(用 applicationContext 创建 WebView,避免 Activity 泄漏)
+ */
+class BrowserManager(private val context: Context) {
+
+    companion object {
+        private const val TAG = "BrowserManager"
+
+        /** 所有 WebView 异步操作的默认超时(毫秒)。 */
+        private const val DEFAULT_TIMEOUT_MS = 10_000L
+
+        /** 提取页面 HTML 的 JS 片段。 */
+        private const val GET_OUTER_HTML_JS =
+            "(function(){ try { return document.documentElement.outerHTML; } catch(e){ return ''; } })();"
+    }
+
+    // ── StateFlows(供 UI / AI 观察当前页状态)─────────────────────────────
+
+    private val _currentUrl = MutableStateFlow("")
+
+    /** 当前页 URL。 */
+    val currentUrl: StateFlow<String> = _currentUrl.asStateFlow()
+
+    private val _currentTitle = MutableStateFlow("")
+
+    /** 当前页 title。 */
+    val currentTitle: StateFlow<String> = _currentTitle.asStateFlow()
+
+    private val _currentHtml = MutableStateFlow("")
+
+    /** 当前页完整 HTML;超长内容由工具回填路径保存并提供分页读取。 */
+    val currentHtml: StateFlow<String> = _currentHtml.asStateFlow()
+
+    private val _currentScreenshot = MutableStateFlow<String?>(null)
+
+    /** 页面截图(Base64 PNG,可选)。 */
+    val currentScreenshot: StateFlow<String?> = _currentScreenshot.asStateFlow()
+
+    private val _isActive = MutableStateFlow(false)
+
+    /** 浏览器是否正在使用中(navigate 后 true,close 后 false)。UI 据此显示状态胶囊。 */
+    val isActive: StateFlow<Boolean> = _isActive.asStateFlow()
+
+    private val _isLoading = MutableStateFlow(false)
+
+    /** 当前页面是否正在加载(供胶囊加载指示动画)。 */
+    val isLoading: StateFlow<Boolean> = _isLoading.asStateFlow()
+
+    private val _canGoBack = MutableStateFlow(false)
+
+    /** 当前页面是否可后退(查看器工具条据此置灰)。 */
+    val canGoBack: StateFlow<Boolean> = _canGoBack.asStateFlow()
+
+    private val _canGoForward = MutableStateFlow(false)
+
+    /** 当前页面是否可前进。 */
+    val canGoForward: StateFlow<Boolean> = _canGoForward.asStateFlow()
+
+    /** WebView 单例引用(必须在主线程访问)。@Volatile 保证可见性。 */
+    @Volatile
+    private var webViewRef: WebView? = null
+
+    /**
+     * P2-33: SSRF 判定闸门 — 主线程回调只消费缓存,解析一律在后台线程执行。
+     * 冷域名首次解析不再阻塞主线程(此前 [navigate] 在主线程同步 `getAllByName` 的 ANR 根因)。
+     */
+    private val ssrfGate = WebViewSsrfGate()
+
+    // ── 公开 API ──────────────────────────────────────────────────────────
+
+    /**
+     * 导航到 [url]。加载完成后更新 [currentUrl] / [currentTitle] / [currentHtml]。
+     *
+     * @param url 目标 URL(可省略 scheme,自动补 https://)
+     * @return Result<Unit> — 成功或失败(超时/异常)
+     */
+    suspend fun navigate(url: String): Result<Unit> {
+        val target = normalizeUrl(url)
+        // C-3: SSRF 防护 — 拒绝内网/回环地址,防止 AI agent 被 prompt injection 诱导访问内网服务
+        // about:blank / file:// 不经过 SSRF 检查(无网络请求)
+        // B-32: WebView 不暴露 DNS 固定(pinning)/连接期 socket 地址,无法像 OkHttp 那样把解析结果
+        // 冻结为连接目标以彻底消除二次解析;此处及下方回调在每个导航/资源事件重新校验,
+        // 已是 WebView 模型下可用的最强逐跳防护(rebinding 换 IP 亦会被后续事件拦下)。
+        // P2-33: 解析移到 Dispatchers.IO 内部(WebViewSsrfGate → SsrfGuard.isBlockedAsync),
+        // 主线程只消费判定结果;首次解析结果写缓存,后续回调(主线程)直接命中。
+        if (!target.startsWith("about:") && !target.startsWith("file:")) {
+            if (ssrfGate.isBlockedAsync(target)) {
+                Logger.w(TAG, "navigate 被 SSRF 守卫拦截: $target")
+                return Result.failure(
+                    java.lang.SecurityException("SSRF blocked: $target"),
+                )
+            }
+        }
+        return withContext(Dispatchers.Main) {
+            try {
+                val webView = ensureWebView()
+                _isActive.value = true
+                _isLoading.value = true
+
+                // B-16b: 超时/异常分支需还原临时 client,故把原 client 提到 withTimeoutOrNull 外层捕获,
+                // 否则超时后 onPageFinished 不触发,临时 client 会残留并持续产生孤儿回调。
+                val previousClient = webView.webViewClient
+                // 临时替换 WebViewClient 拦截 onPageFinished;用 suspendCancellableCoroutine 等待完成
+                val success = withTimeoutOrNull(DEFAULT_TIMEOUT_MS) {
+                    suspendCancellableCoroutine { cont ->
+                        webView.webViewClient = object : WebViewClient() {
+                            override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                                super.onPageStarted(view, url, favicon)
+                                if (isBlockedHttpUrl(url)) {
+                                    Logger.w(TAG, "navigate 重定向被 SSRF 守卫拦截: $url")
+                                    view?.stopLoading()
+                                    view?.webViewClient = previousClient
+                                    if (cont.isActive) {
+                                        cont.resumeWith(
+                                            Result.failure(java.lang.SecurityException("SSRF blocked: $url")),
+                                        )
+                                    }
+                                    return
+                                }
+                                _isLoading.value = true
+                            }
+                            override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                                val requestUrl = request?.url?.toString()
+                                if (isBlockedHttpUrl(requestUrl)) {
+                                    Logger.w(TAG, "navigate URL 重定向被 SSRF 守卫拦截: $requestUrl")
+                                    return true
+                                }
+                                return false
+                            }
+                            override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
+                                val requestUrl = request?.url?.toString()
+                                if (isBlockedHttpUrlOffMainThread(requestUrl)) {
+                                    Logger.w(TAG, "navigate 资源请求被 SSRF 守卫拦截: $requestUrl")
+                                    return blockedResourceResponse()
+                                }
+                                return super.shouldInterceptRequest(view, request)
+                            }
+                            override fun onPageFinished(view: WebView?, url: String?) {
+                                super.onPageFinished(view, url)
+                                _isLoading.value = false
+                                _currentUrl.value = view?.url ?: url ?: target
+                                _currentTitle.value = view?.title ?: ""
+                                // 异步拉取 HTML,即便失败也认为导航完成
+                                view?.evaluateJavascript(GET_OUTER_HTML_JS) { raw ->
+                                    updateCurrentHtmlFromEvaluation(raw)
+                                }
+                                // 恢复原有 client,避免后续 navigate 拦截器累积
+                                view?.webViewClient = previousClient
+                                if (cont.isActive) cont.resume(true)
+                            }
+                            override fun onReceivedError(view: WebView?, request: WebResourceRequest?, error: WebResourceError?) {
+                                super.onReceivedError(view, request, error)
+                                _isLoading.value = false
+                                if (request?.isForMainFrame != false && cont.isActive) {
+                                    val code = error?.errorCode ?: -1
+                                    val desc = error?.description?.toString() ?: "页面加载失败"
+                                    view?.webViewClient = previousClient
+                                    cont.resumeWith(Result.failure(java.io.IOException("页面加载失败($code): $desc")))
+                                }
+                            }
+                            override fun onReceivedHttpError(
+                                view: WebView?,
+                                request: WebResourceRequest?,
+                                errorResponse: WebResourceResponse?,
+                            ) {
+                                super.onReceivedHttpError(view, request, errorResponse)
+                                _isLoading.value = false
+                                if (request?.isForMainFrame == true && cont.isActive) {
+                                    val code = errorResponse?.statusCode ?: -1
+                                    val reason = errorResponse?.reasonPhrase ?: "HTTP 错误"
+                                    view?.webViewClient = previousClient
+                                    cont.resumeWith(Result.failure(java.io.IOException("HTTP $code: $reason")))
+                                }
+                            }
+                        }
+                        webView.loadUrl(target)
+                    }
+                }
+
+                if (success == null) {
+                    _isLoading.value = false
+                    // B-16b: 超时后 onPageFinished 通常不会触发,残留临时 client 会在后台持续回调
+                    // 孤儿状态;显式停止加载 + 还原原 client,终止后台继续加载并清除临时拦截器。
+                    webView.stopLoading()
+                    webView.webViewClient = previousClient
+                    Logger.w(TAG, "navigate 超时: $target")
+                    Result.failure(java.util.concurrent.TimeoutException("navigate 超时(${DEFAULT_TIMEOUT_MS}ms): $target"))
+                } else {
+                    Logger.i(TAG, "navigate 成功: $target → ${_currentUrl.value} | title=${_currentTitle.value.take(60)}")
+                    Result.success(Unit)
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                // B-16b: 协程取消(CancellationException)必须原样重抛,不能当作普通异常吞掉,否则破坏结构化并发。
+                throw e
+            } catch (e: Exception) {
+                _isLoading.value = false
+                Logger.e(TAG, "navigate 异常: ${e.message}", e)
+                Result.failure(e)
+            }
+        }
+    }
+
+    /**
+     * 执行任意 JavaScript。
+     *
+     * @param script JS 代码(表达式或语句块)
+     * @return Result<String> — 成功返回 JSON-encoded 字符串(如 `"hello"` / `42` / `true` / `null`)
+     */
+    suspend fun evaluateJs(script: String): Result<String> = withContext(Dispatchers.Main) {
+        try {
+            val webView = ensureWebView()
+            val raw = withTimeoutOrNull(DEFAULT_TIMEOUT_MS) {
+                suspendCancellableCoroutine<String> { cont ->
+                    webView.evaluateJavascript(script) { value ->
+                        // withTimeoutOrNull 取消后回调仍可能触发,用 isActive 守卫
+                        if (cont.isActive) cont.resume(value ?: "null")
+                    }
+                }
+            } ?: run {
+                Logger.w(TAG, "evaluateJs 超时(${DEFAULT_TIMEOUT_MS}ms): ${script.take(120)}")
+                return@withContext Result.failure(
+                    java.util.concurrent.TimeoutException("evaluateJs 超时(${DEFAULT_TIMEOUT_MS}ms)"),
+                )
+            }
+            Result.success(raw)
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            // B-16b: 协程取消必须原样重抛,不能当作普通异常吞掉,否则破坏结构化并发。
+            throw e
+        } catch (e: Exception) {
+            Logger.e(TAG, "evaluateJs 异常: ${e.message}", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * 点击 CSS 选择器命中的第一个元素。
+     * @return Result<Boolean> — true 表示找到并点击,false 表示未命中
+     */
+    suspend fun click(selector: String): Result<Boolean> {
+        val script = buildString {
+            append("(function(){ try { var el = document.querySelector(")
+            append(jsStringLiteral(selector))
+            append("); if(!el) return false; el.click(); return true; } catch(e){ return false; } })();")
+        }
+        return evaluateJs(script).mapCatching { parseJsValue(it) == "true" }
+    }
+
+    /**
+     * 向 CSS 选择器命中的第一个 input/textarea 输入文本。
+     * 触发 input + change 事件以兼容 React/Vue 等框架。
+     * @return Result<Boolean> — true 表示找到并输入,false 表示未命中
+     */
+    suspend fun type(selector: String, text: String): Result<Boolean> {
+        val script = buildString {
+            append("(function(){ try { var el = document.querySelector(")
+            append(jsStringLiteral(selector))
+            append("); if(!el) return false; el.focus(); el.value = ")
+            append(jsStringLiteral(text))
+            append("; el.dispatchEvent(new Event('input',{bubbles:true}));")
+            append(" el.dispatchEvent(new Event('change',{bubbles:true})); return true; } catch(e){ return false; } })();")
+        }
+        return evaluateJs(script).mapCatching { parseJsValue(it) == "true" }
+    }
+
+    /**
+     * 提取 CSS 选择器命中元素的 textContent。
+     * @return Result<String> — 元素的文本内容;未命中返回空串
+     */
+    suspend fun extractText(selector: String): Result<String> {
+        val script = buildString {
+            append("(function(){ try { var el = document.querySelector(")
+            append(jsStringLiteral(selector))
+            append("); return el ? el.textContent : null; } catch(e){ return null; } })();")
+        }
+        return evaluateJs(script).mapCatching { parseJsValue(it) }
+    }
+
+    /**
+     * 提取 CSS 选择器命中元素的指定属性。
+     * @return Result<String> — 属性值;未命中或属性不存在返回空串
+     */
+    suspend fun extractAttribute(selector: String, attribute: String): Result<String> {
+        val script = buildString {
+            append("(function(){ try { var el = document.querySelector(")
+            append(jsStringLiteral(selector))
+            append("); return el ? el.getAttribute(")
+            append(jsStringLiteral(attribute))
+            append(") : null; } catch(e){ return null; } })();")
+        }
+        return evaluateJs(script).mapCatching { parseJsValue(it) }
+    }
+
+    /**
+     * 滚动到页面底部。常用于无限滚动场景加载更多内容。
+     * @return Result<Unit>
+     */
+    suspend fun scrollToBottom(): Result<Unit> {
+        val result = evaluateJs(
+            "(function(){ window.scrollTo(0, document.body.scrollHeight); return document.body.scrollHeight; })();",
+        )
+        return result.map { Unit }
+    }
+
+    /**
+     * 截图当前 WebView 渲染内容,返回 Base64 编码的 PNG。
+     * 同步更新 [currentScreenshot]。
+     */
+    suspend fun captureScreenshot(): Result<String> = withContext(Dispatchers.Main) {
+        try {
+            val webView = ensureWebView()
+            val width = webView.width.coerceAtLeast(1)
+            val height = webView.height.coerceAtLeast(1)
+            val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(bitmap)
+            webView.draw(canvas)
+            val baos = ByteArrayOutputStream()
+            bitmap.compress(Bitmap.CompressFormat.PNG, 80, baos)
+            bitmap.recycle()
+            val base64 = Base64.encodeToString(baos.toByteArray(), Base64.NO_WRAP)
+            _currentScreenshot.value = base64
+            Result.success(base64)
+        } catch (e: Exception) {
+            Logger.e(TAG, "captureScreenshot 异常: ${e.message}", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * 显式初始化浏览器的 WebView。
+     *
+     * 构造 [BrowserManager] 本身不会创建 WebView,这样会话状态可以在不消耗渲染资源的情况下
+     * 提前注册。UI 打开浏览器查看器时调用本方法,确保查看器总有可挂载的 WebView。
+     * 必须在主线程调用。
+     *
+     * @return 内部 WebView 实例
+     */
+    @SuppressLint("SetJavaScriptEnabled")
+    fun initialize(): WebView = ensureWebView()
+
+    /**
+     * 为用户打开一个可见的初始页面。
+     *
+     * AI 尚未调用 browser_navigate 时,查看器仍应有明确的浏览器画面与状态。只在当前没有页面
+     * 且没有正在进行的导航时加载 [about:blank],不覆盖 AI 已经开始的导航,也沿用 [navigate]
+     * 的 SSRF/超时/加载回调语义。
+     */
+    suspend fun showBlankPageIfNeeded(): Result<Unit> = withContext(Dispatchers.Main) {
+        try {
+            ensureWebView()
+            if (hasPage() || _isLoading.value) {
+                Result.success(Unit)
+            } else {
+                navigate("about:blank")
+            }
+        } catch (e: kotlinx.coroutines.CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Logger.e(TAG, "showBlankPageIfNeeded 异常: ${e.message}", e)
+            Result.failure(e)
+        }
+    }
+
+    /**
+     * 把内部 WebView 附加到指定容器(UI 展示用)。若 WebView 已挂在其他容器,先移除再挂入。
+     * 已在同一容器时直接返回(幂等,避免重绘)。必须在主线程调用。
+     *
+     * @param parent 目标 ViewGroup(如 Compose AndroidView 的容器)
+     * @return 内部 WebView 实例
+     */
+    @SuppressLint("SetJavaScriptEnabled")
+    fun attachToDisplay(parent: android.view.ViewGroup): WebView {
+        val wv = ensureWebView()
+        if (wv.parent === parent) return wv
+        (wv.parent as? android.view.ViewGroup)?.removeView(wv)
+        parent.addView(
+            wv,
+            android.view.ViewGroup.LayoutParams(
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+                android.view.ViewGroup.LayoutParams.MATCH_PARENT,
+            ),
+        )
+        wv.onResume()
+        return wv
+    }
+
+    /** 刷新当前页面(UI 工具条按钮)。 */
+    fun reload() {
+        val wv = webViewRef ?: return
+        _isLoading.value = true
+        wv.reload()
+    }
+
+    /** 后退一步(UI 工具条)。历史里没有可后退项时返回 false。 */
+    fun goBack(): Boolean {
+        val wv = webViewRef ?: return false
+        if (!wv.canGoBack()) return false
+        _isLoading.value = true
+        wv.goBack()
+        return true
+    }
+
+    /** 前进一步(UI 工具条)。历史里没有可前进项时返回 false。 */
+    fun goForward(): Boolean {
+        val wv = webViewRef ?: return false
+        if (!wv.canGoForward()) return false
+        _isLoading.value = true
+        wv.goForward()
+        return true
+    }
+
+    /**
+     * 清除 Cookie + WebStorage + 缓存。
+     *
+     * 用户手动浏览后会带着登录态(和 AI 共用同一个 WebView),需要一个显式出口
+     * 把会话态清干净,让后续抓取回到未登录状态。
+     */
+    fun clearCookies() {
+        runCatching {
+            android.webkit.CookieManager.getInstance().apply {
+                removeAllCookies(null)
+                flush()
+            }
+            webViewRef?.clearCache(true)
+            android.webkit.WebStorage.getInstance().deleteAllData()
+        }.onFailure { e ->
+            Logger.w(TAG, "清除 Cookie 失败: ${e.message}")
+        }
+    }
+
+    /** 同步前进/后退可用性到 UI 状态(WebView 历史变化时调用)。 */
+    private fun syncNavState(view: WebView?) {
+        _canGoBack.value = view?.canGoBack() == true
+        _canGoForward.value = view?.canGoForward() == true
+    }
+
+    /**
+     * 从展示容器移除 WebView(回到 headless 状态,继续供 AI 工具使用)。
+     * 必须在主线程调用。
+     *
+     * 注:不调用 onPause —— headless 状态下 AI 工具仍依赖页面 JS 执行
+     * (evaluateJavascript/click/type 等),onPause 会冻结 JS 导致后续工具调用全部失败。
+     */
+    fun detachFromDisplay() {
+        val wv = webViewRef ?: return
+        (wv.parent as? android.view.ViewGroup)?.removeView(wv)
+    }
+
+    /** 是否有已加载的页面(供 UI 判断是否展示胶囊)。 */
+    fun hasPage(): Boolean = webViewRef != null && _currentUrl.value.isNotBlank()
+
+    /**
+     * 关闭浏览器:停止加载 + 销毁 WebView + 清空 StateFlow。
+     * 必须在主线程操作 WebView;非主线程调用会 post 到主线程。
+     */
+    fun close() {
+        _isActive.value = false
+        _isLoading.value = false
+        val webView = webViewRef ?: return
+        val destroyAction = {
+            try {
+                webView.stopLoading()
+                webView.removeAllViews()
+                (webView.parent as? android.view.ViewGroup)?.removeView(webView)
+                webView.destroy()
+            } catch (e: Exception) {
+                Logger.w(TAG, "close destroy 异常: ${e.message}")
+            }
+            webViewRef = null
+            _currentUrl.value = ""
+            _currentTitle.value = ""
+            _currentHtml.value = ""
+            _currentScreenshot.value = null
+            _canGoBack.value = false
+            _canGoForward.value = false
+            Logger.i(TAG, "BrowserManager 已关闭")
+        }
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            destroyAction()
+        } else {
+            webView.post { destroyAction() }
+        }
+    }
+
+    // ── 内部实现 ──────────────────────────────────────────────────────────
+
+    /**
+     * 创建/获取 WebView 单例。必须在主线程调用。
+     * 第一次调用会创建 WebView + 配置安全限制。
+     */
+    @SuppressLint("SetJavaScriptEnabled")
+    private fun ensureWebView(): WebView {
+        check(Looper.myLooper() == Looper.getMainLooper()) {
+            "BrowserManager WebView 必须在主线程创建和访问"
+        }
+        webViewRef?.let { return it }
+
+        val wv = WebView(context.applicationContext).apply {
+            // ── WebSettings:启用 JS + 浏览器必需功能 + 严格安全限制 ──
+            settings.javaScriptEnabled = true
+            // 严格安全:禁用 file/content access(防止 file:// 跨域读取)
+            settings.allowContentAccess = false
+            settings.allowFileAccess = false
+            settings.allowFileAccessFromFileURLs = false
+            settings.allowUniversalAccessFromFileURLs = false
+            // DOM storage(localStorage / sessionStorage)— 现代网页普遍依赖
+            settings.domStorageEnabled = true
+            // 浏览器需要网络加载(与 JsSandbox 不同,这里允许网络)
+            settings.blockNetworkLoads = false
+            settings.cacheMode = WebSettings.LOAD_DEFAULT
+            settings.loadsImagesAutomatically = true
+            settings.javaScriptCanOpenWindowsAutomatically = false
+            settings.mediaPlaybackRequiresUserGesture = true
+            // 视口与缩放
+            settings.useWideViewPort = true
+            settings.loadWithOverviewMode = true
+            settings.setSupportZoom(true)
+            settings.builtInZoomControls = true
+            settings.displayZoomControls = false
+
+            // ── WebViewClient:监听页面加载完成,更新 StateFlow ──
+            webViewClient = object : WebViewClient() {
+                override fun onPageStarted(view: WebView?, url: String?, favicon: android.graphics.Bitmap?) {
+                    super.onPageStarted(view, url, favicon)
+                    if (isBlockedHttpUrl(url)) {
+                        Logger.w(TAG, "页面导航被 SSRF 守卫拦截: $url")
+                        view?.stopLoading()
+                        return
+                    }
+                    _isLoading.value = true
+                    _currentUrl.value = url ?: ""
+                }
+                override fun shouldOverrideUrlLoading(view: WebView?, request: WebResourceRequest?): Boolean {
+                    val requestUrl = request?.url?.toString()
+                    if (isBlockedHttpUrl(requestUrl)) {
+                        Logger.w(TAG, "URL 重定向被 SSRF 守卫拦截: $requestUrl")
+                        return true
+                    }
+                    return false
+                }
+                override fun shouldInterceptRequest(view: WebView?, request: WebResourceRequest?): WebResourceResponse? {
+                    val requestUrl = request?.url?.toString()
+                    if (isBlockedHttpUrlOffMainThread(requestUrl)) {
+                        Logger.w(TAG, "资源请求被 SSRF 守卫拦截: $requestUrl")
+                        return blockedResourceResponse()
+                    }
+                    return super.shouldInterceptRequest(view, request)
+                }
+                override fun onPageFinished(view: WebView?, url: String?) {
+                    super.onPageFinished(view, url)
+                    _isLoading.value = false
+                    _currentUrl.value = view?.url ?: url ?: ""
+                    _currentTitle.value = view?.title ?: ""
+                    syncNavState(view)
+                    view?.evaluateJavascript(GET_OUTER_HTML_JS) { raw ->
+                        updateCurrentHtmlFromEvaluation(raw)
+                    }
+                }
+
+                /**
+                 * 历史栈变化(含用户手动点链接 / 后退前进)时同步工具条状态。
+                 * 用户手动浏览与 AI 操作共用同一个 WebView,这里同步后两边看到的是同一页面。
+                 */
+                override fun doUpdateVisitedHistory(view: WebView?, url: String?, isReload: Boolean) {
+                    super.doUpdateVisitedHistory(view, url, isReload)
+                    syncNavState(view)
+                }
+
+                /** ROM 兼容:渲染进程崩溃(部分 ROM 的 WebView 不稳定)时销毁重建,下次调用自动恢复。 */
+                override fun onRenderProcessGone(view: WebView?, detail: android.webkit.RenderProcessGoneDetail?): Boolean {
+                    Logger.e(TAG, "WebView 渲染进程崩溃: ${detail?.didCrash()}, 销毁重建")
+                    _isLoading.value = false
+                    view?.let { v ->
+                        (v.parent as? android.view.ViewGroup)?.removeView(v)
+                        runCatching { v.destroy() }
+                    }
+                    webViewRef = null
+                    return true
+                }
+            }
+
+            // ── WebChromeClient:同步 title 进度 ──
+            webChromeClient = object : WebChromeClient() {
+                override fun onReceivedTitle(view: WebView?, title: String?) {
+                    super.onReceivedTitle(view, title)
+                    _currentTitle.value = title ?: ""
+                }
+            }
+        }
+
+        webViewRef = wv
+        Logger.i(TAG, "BrowserManager WebView 已初始化")
+        return wv
+    }
+
+    /**
+     * WebView callbacks also observe redirects and subresources, so every HTTP(S)
+     * URL must pass the same guard as the initial navigation. Non-network URLs
+     * (including about:blank and file://) remain allowed by design.
+     *
+     * P2-33: 主线程回调路径 — 只消费 SSRF 缓存,冷主机 fail-closed 并后台预热,
+     * 解析确认安全后在主线程重试被拦下的那一跳(冷域名不再阻塞主线程,也不会永久卡死重定向)。
+     */
+    private fun isBlockedHttpUrl(url: String?): Boolean {
+        if (url == null || !isHttpUrl(url)) return false
+        return ssrfGate.isBlockedNow(url) { webViewRef?.loadUrl(url) }
+    }
+
+    /**
+     * [WebViewClient.shouldInterceptRequest] 在 WebView 后台线程回调,允许同步解析
+     * (解析结果写入缓存,主线程回调随即命中);仍在主线程回调时退化为只读缓存的 fail-closed 路径。
+     */
+    private fun isBlockedHttpUrlOffMainThread(url: String?): Boolean {
+        if (url == null || !isHttpUrl(url)) return false
+        val onMainThread = Looper.myLooper() != null && Looper.myLooper() == Looper.getMainLooper()
+        return if (onMainThread) ssrfGate.isBlockedNow(url) else ssrfGate.isBlockedBlocking(url)
+    }
+
+    private fun isHttpUrl(url: String): Boolean =
+        url.startsWith("http://", ignoreCase = true) || url.startsWith("https://", ignoreCase = true)
+
+    private fun blockedResourceResponse(): WebResourceResponse = WebResourceResponse(
+        "text/plain",
+        "UTF-8",
+        403,
+        "Blocked by SSRF guard",
+        emptyMap(),
+        ByteArrayInputStream(ByteArray(0)),
+    )
+
+    /** URL 规范化:补全 scheme,空串降级为 about:blank。 */
+    private fun normalizeUrl(url: String): String {
+        val trimmed = url.trim()
+        if (trimmed.isEmpty()) return "about:blank"
+        if (
+            trimmed.startsWith("http://") ||
+            trimmed.startsWith("https://") ||
+            trimmed.startsWith("about:") ||
+            trimmed.startsWith("file:")
+        ) {
+            return trimmed
+        }
+        return "https://$trimmed"
+    }
+
+    /**
+     * 解析 evaluateJavascript 回调返回的 JSON-encoded 字符串。
+     *
+     * 回调返回值规律:
+     *  - null / "null" → 空串
+     *  - "\"hello\"" → hello(JSON 字符串解包)
+     *  - "42" / "true" → 42 / true(原始字面量)
+     *  - "{\"a\":1}" → {"a":1}(原始 JSON 文本)
+     */
+    private fun parseJsValue(raw: String?): String {
+        if (raw.isNullOrBlank() || raw == "null") return ""
+        return try {
+            val element = AppJson.parseToJsonElement(raw)
+            // 字符串/数字/布尔字面量 → 取 content(JsonPrimitive 自动解包引号)
+            // 对象/数组 → toString() 原样返回 JSON 文本
+            element.jsonPrimitive.contentOrNull ?: ""
+        } catch (e: Exception) {
+            // 非 JSON 字面量(理论上不会出现,evaluateJavascript 总返回 JSON-encoded 值)
+            raw
+        }
+    }
+
+    internal fun updateCurrentHtmlFromEvaluation(raw: String?) {
+        _currentHtml.value = parseJsValue(raw)
+    }
+
+    /**
+     * 把 Kotlin 字符串编码为 JS 字符串字面量(双引号包裹 + JSON 风格转义)。
+     * 用 JSON-style 转义避免注入风险(选择器/文本中可能含特殊字符)。
+     */
+    private fun jsStringLiteral(s: String): String {
+        val sb = StringBuilder("\"")
+        for (ch in s) {
+            when (ch) {
+                '\\' -> sb.append("\\\\")
+                '"' -> sb.append("\\\"")
+                '\n' -> sb.append("\\n")
+                '\r' -> sb.append("\\r")
+                '\t' -> sb.append("\\t")
+                else -> {
+                    if (ch.code < 0x20) {
+                        sb.append("\\u").append("%04x".format(ch.code))
+                    } else {
+                        sb.append(ch)
+                    }
+                }
+            }
+        }
+        sb.append("\"")
+        return sb.toString()
+    }
+}

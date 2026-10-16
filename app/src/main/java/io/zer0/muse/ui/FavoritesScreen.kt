@@ -1,0 +1,465 @@
+package io.zer0.muse.ui
+
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.border
+import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import androidx.lifecycle.compose.collectAsStateWithLifecycle
+import io.zer0.ai.core.MessageRole
+import io.zer0.ai.core.UIMessage
+import io.zer0.muse.R
+import io.zer0.muse.ui.common.feedback.MuseDialog
+import io.zer0.muse.ui.common.form.IosCapsuleButtonVariant
+import io.zer0.muse.ui.common.form.MuseCapsuleButton
+import io.zer0.muse.ui.common.form.MuseChip
+import io.zer0.muse.ui.common.form.MuseFormDialog
+import io.zer0.muse.ui.common.form.MuseTactileButton
+import io.zer0.muse.ui.common.form.MuseTextField
+import io.zer0.muse.ui.common.icons.MuseIcons
+import io.zer0.muse.ui.common.museAnimateItem
+import io.zer0.muse.ui.common.navigation.MuseTopBar
+import io.zer0.muse.ui.common.state.MuseEmptyState
+import io.zer0.muse.ui.common.state.MuseErrorStateBox
+import io.zer0.muse.ui.common.state.MuseSpinner
+import io.zer0.muse.ui.common.surface.MuseSurface
+import io.zer0.muse.ui.markdown.MarkdownText
+import io.zer0.muse.ui.theme.MuseDateFormats
+import io.zer0.muse.ui.theme.MuseIconSizes
+import io.zer0.muse.ui.theme.MuseShapes
+import org.koin.androidx.compose.koinViewModel
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+/**
+ * Phase 8.3: 跨会话收藏夹页。
+ *
+ * - 数据源: [ChatViewModel.state.favoriteMessages](observeAllFavorites 聚合的全部收藏消息)
+ * - 列表项: 角色 + 模型 + 时间戳 + 内容预览(前 280 字,超出截断)+ 取消收藏按钮
+ * - 内容渲染: 直接用 [MarkdownText](支持代码块/链接点击/列表等),保证与聊天页一致
+ * - 取消收藏: 调 [ChatViewModel.toggleFavorite],乐观更新 + DB 同步
+ *
+ * 设计: warm-paper 卡片样式(圆角 12dp,surfaceVariant 背景),与 SettingsScreen 卡片一致。
+ *
+ * v1.104 U7: 顶部增加 FilterChip 分组筛选行(全部 / 未分组 / 各 tag),
+ * 长按卡片弹"设置分组"对话框,可自定义分组名(留空 = 移到未分组)。
+ */
+@Composable
+fun FavoritesScreen(onBack: () -> Unit, viewModel: ChatViewModel = koinViewModel()) {
+    val state by viewModel.state.collectAsStateWithLifecycle()
+    val dateFormat = remember { SimpleDateFormat(MuseDateFormats.DATE_TIME_FULL, Locale.getDefault()) }
+
+    // v1.104 U7: 长按卡片时弹"设置分组"对话框的目标消息
+    var tagEditTarget by remember { mutableStateOf<UIMessage?>(null) }
+
+    // v2.0: 收藏时弹出分组选择对话框的目标消息
+    var favoriteGroupTarget by remember { mutableStateOf<UIMessage?>(null) }
+
+    // v2.0: 当前 filter 下显示的收藏列表(本地过滤,不影响 state.favoriteMessages 全量)
+    val visibleFavorites = remember(state.favoriteMessages, state.favoriteTagFilter, state.favoriteGroup) {
+        val groupFiltered = if (state.favoriteGroup != null) {
+            state.favoriteMessages.filter { it.favoriteTag == state.favoriteGroup }
+        } else {
+            state.favoriteMessages
+        }
+        when (state.favoriteTagFilter) {
+            null -> groupFiltered
+            ChatViewModel.FAVORITE_TAG_UNGROUPED -> groupFiltered.filter { it.favoriteTag == null }
+            else -> groupFiltered.filter { it.favoriteTag == state.favoriteTagFilter }
+        }
+    }
+
+    io.zer0.muse.ui.common.surface.MusePageScaffold(
+        topBar = {
+            MuseTopBar(
+                title = stringResource(R.string.favorites_title, state.favoriteMessages.size),
+                onBack = onBack,
+            )
+        },
+        containerColor = MaterialTheme.colorScheme.background,
+    ) { innerPadding ->
+        Column(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
+            // U-20: 移除预置分组 FilterChip 行,与自定义 tag 行重叠;仅保留自定义 tag 行分级筛选。
+            // 取舍:预置分组(灵感/代码/学习/自定义)与自定义 tag 是同一维度的两套 UI,
+            // 保留自定义 tag 行(全部/未分组/各 tag)更能覆盖任意命名;收藏时分组选择对话框仍保留,
+            // 用户可能选预置分类或自定义命名,均落到 favoriteTag,由 tag 行统一展示。
+            if (state.favoriteMessages.isNotEmpty()) {
+                val tagCounts = remember(state.favoriteMessages) {
+                    state.favoriteMessages.groupBy { it.favoriteTag }.mapValues { it.value.size }
+                }
+                FavoriteTagFilterRow(
+                    allCount = state.favoriteMessages.size,
+                    ungroupedCount = tagCounts[null] ?: 0,
+                    tags = state.favoriteTags,
+                    tagCounts = tagCounts,
+                    currentFilter = if (state.favoriteGroup != null) null else state.favoriteTagFilter,
+                    onFilterChange = { viewModel.setFavoriteTagFilter(it) },
+                )
+            }
+            // v1.77: 首次加载时显示 loading,避免闪空状态
+            if (state.isFavoritesLoading) {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    MuseSpinner()
+                }
+            } else if (state.favoritesError != null) {
+                // ST-01: 收藏列表加载失败错误态 + 重试
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    MuseErrorStateBox(
+                        message = state.favoritesError.orEmpty(),
+                        onRetry = { viewModel.retryLoadFavorites() },
+                    )
+                }
+            } else if (state.favoriteMessages.isEmpty()) {
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    MuseEmptyState(
+                        icon = MuseIcons.star,
+                        title = stringResource(R.string.favorites_empty_title),
+                        subtitle = stringResource(R.string.favorites_empty_subtitle),
+                    )
+                }
+            } else if (visibleFavorites.isEmpty()) {
+                // v1.104 U7: 该分组下无收藏(区别于"完全没有收藏")
+                Box(
+                    modifier = Modifier.fillMaxSize(),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    MuseEmptyState(
+                        icon = MuseIcons.star,
+                        title = stringResource(R.string.favorites_empty_in_filter),
+                        subtitle = null,
+                    )
+                }
+            } else {
+                LazyColumn(
+                    modifier = Modifier.fillMaxSize(),
+                    contentPadding = PaddingValues(
+                        horizontal = 16.dp,
+                        vertical = 12.dp,
+                    ),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    items(visibleFavorites, key = { it.id }) { msg ->
+                        Box(modifier = museAnimateItem()) {
+                            FavoriteCard(
+                                message = msg,
+                                dateFormat = dateFormat,
+                                onUnfavorite = { viewModel.toggleFavorite(msg.id) },
+                                onLongClick = { tagEditTarget = msg },
+                                onClick = { favoriteGroupTarget = msg },
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // v2.0: 收藏时分组选择对话框
+    favoriteGroupTarget?.let { msg ->
+        FavoriteGroupSelectDialog(
+            currentTag = msg.favoriteTag,
+            onSelect = { group ->
+                viewModel.setMessageFavoriteTag(msg.id, group)
+                favoriteGroupTarget = null
+            },
+            onDismiss = { favoriteGroupTarget = null },
+        )
+    }
+
+    // v1.104 U7: 设置分组对话框
+    tagEditTarget?.let { msg ->
+        FavoriteTagEditDialog(
+            currentTag = msg.favoriteTag,
+            onConfirm = { newTag ->
+                viewModel.setMessageFavoriteTag(msg.id, newTag)
+                tagEditTarget = null
+            },
+            onDismiss = { tagEditTarget = null },
+        )
+    }
+}
+
+/**
+ * v2.0: 收藏时分组选择对话框 — 显示预设分类供用户选择。
+ */
+@Composable
+private fun FavoriteGroupSelectDialog(currentTag: String?, onSelect: (String?) -> Unit, onDismiss: () -> Unit) {
+    val groups = listOf(
+        null to stringResource(R.string.favorites_group_all),
+        ChatViewModel.FAVORITE_GROUP_INSPIRATION to stringResource(R.string.favorites_group_inspiration),
+        ChatViewModel.FAVORITE_GROUP_CODE to stringResource(R.string.favorites_group_code),
+        ChatViewModel.FAVORITE_GROUP_LEARNING to stringResource(R.string.favorites_group_learning),
+        ChatViewModel.FAVORITE_GROUP_CUSTOM to stringResource(R.string.favorites_group_custom),
+    )
+    MuseDialog(
+        onDismissRequest = onDismiss,
+        title = stringResource(R.string.favorites_group_select_title),
+        content = {
+            Column {
+                groups.forEach { (group, label) ->
+                    MuseCapsuleButton(
+                        text = label,
+                        onClick = { onSelect(group) },
+                        variant = IosCapsuleButtonVariant.Text,
+                        trailingIcon = if (currentTag == group) MuseIcons.check else null,
+                    )
+                }
+                if (currentTag != null && currentTag !in listOf(
+                        ChatViewModel.FAVORITE_GROUP_INSPIRATION,
+                        ChatViewModel.FAVORITE_GROUP_CODE,
+                        ChatViewModel.FAVORITE_GROUP_LEARNING,
+                        ChatViewModel.FAVORITE_GROUP_CUSTOM,
+                    )
+                ) {
+                    HorizontalDivider()
+                    MuseCapsuleButton(
+                        text = currentTag,
+                        onClick = { onSelect(currentTag) },
+                        variant = IosCapsuleButtonVariant.Text,
+                    )
+                }
+            }
+        },
+        onConfirm = null,
+        dismissText = stringResource(R.string.action_cancel),
+        onDismiss = onDismiss,
+    )
+}
+
+/**
+ * v1.104 U7: 顶部 FilterChip 行 — 横向滚动,显示"全部 / 未分组 / 各 tag"。
+ *
+ * - "全部"永远显示,选中时 state.favoriteTagFilter = null
+ * - "未分组"仅当存在 favoriteTag=null 的收藏时显示,选中时 filter = FAVORITE_TAG_UNGROUPED
+ * - 各 tag 由 state.favoriteTags 提供,DAO 已去 NULL / 去重 / 升序
+ */
+@Composable
+private fun FavoriteTagFilterRow(
+    allCount: Int,
+    ungroupedCount: Int,
+    tags: List<String>,
+    tagCounts: Map<String?, Int>,
+    currentFilter: String?,
+    onFilterChange: (String?) -> Unit,
+) {
+    LazyRow(
+        contentPadding = PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        item(key = "all") {
+            MuseChip(
+                selected = currentFilter == null,
+                onClick = { onFilterChange(null) },
+                label = stringResource(R.string.favorites_filter_all, allCount),
+            )
+        }
+        if (ungroupedCount > 0) {
+            item(key = "ungrouped") {
+                MuseChip(
+                    selected = currentFilter == ChatViewModel.FAVORITE_TAG_UNGROUPED,
+                    onClick = { onFilterChange(ChatViewModel.FAVORITE_TAG_UNGROUPED) },
+                    label = stringResource(R.string.favorites_filter_ungrouped, ungroupedCount),
+                )
+            }
+        }
+        items(tags, key = { it }) { tag ->
+            MuseChip(
+                selected = currentFilter == tag,
+                onClick = { onFilterChange(tag) },
+                label = stringResource(R.string.favorites_tag_chip, tag, tagCounts[tag] ?: 0),
+            )
+        }
+    }
+}
+
+/**
+ * v1.104 U7: 设置分组对话框。
+ *
+ * - 输入框初始值 = currentTag(可空)
+ * - 确定按钮:把输入框值传给 onConfirm(trim 后空字符串视为 null = 移到未分组)
+ * - 清除分组按钮(仅当 currentTag 非空时显示):直接传 null 给 onConfirm
+ * - 取消按钮:关闭对话框,不改任何东西
+ */
+@Composable
+private fun FavoriteTagEditDialog(currentTag: String?, onConfirm: (String?) -> Unit, onDismiss: () -> Unit) {
+    var text by remember { mutableStateOf(currentTag ?: "") }
+    MuseFormDialog(
+        onDismissRequest = onDismiss,
+        title = stringResource(R.string.favorites_tag_edit_title),
+        confirmText = stringResource(R.string.favorites_tag_edit_confirm),
+        confirmEnabled = text.isNotBlank(),
+        onConfirm = { onConfirm(text) },
+        dismissText = stringResource(R.string.favorites_tag_edit_cancel),
+        onDismiss = onDismiss,
+        content = {
+            MuseTextField(
+                value = text,
+                onValueChange = { text = it },
+                label = { Text(stringResource(R.string.favorites_tag_edit_hint)) },
+                singleLine = true,
+            )
+            if (!currentTag.isNullOrBlank()) {
+                MuseCapsuleButton(
+                    text = stringResource(R.string.favorites_tag_edit_clear),
+                    onClick = { onConfirm(null) },
+                    variant = IosCapsuleButtonVariant.Text,
+                    fillWidth = false,
+                )
+            }
+        },
+    )
+}
+
+/**
+ * 单条收藏消息卡片。
+ *
+ * v1.104 U7: 加 onLongClick 回调,长按弹"设置分组"对话框;
+ * 若 message.favoriteTag 非空,卡片底部显示分组标签。
+ */
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun FavoriteCard(
+    message: UIMessage,
+    dateFormat: SimpleDateFormat,
+    onUnfavorite: () -> Unit,
+    onLongClick: () -> Unit,
+    onClick: () -> Unit = {},
+) {
+    val roleLabel = when (message.role) {
+        MessageRole.USER -> stringResource(R.string.favorites_role_user)
+        MessageRole.ASSISTANT -> "AI"
+        MessageRole.SYSTEM -> stringResource(R.string.favorites_role_system)
+        MessageRole.TOOL -> stringResource(R.string.favorites_role_tool)
+    }
+    val roleColor = when (message.role) {
+        MessageRole.USER -> MaterialTheme.colorScheme.primary
+        MessageRole.ASSISTANT -> MaterialTheme.colorScheme.secondary
+        else -> MaterialTheme.colorScheme.outline
+    }
+    MuseSurface(
+        modifier = Modifier
+            .fillMaxWidth()
+            .combinedClickable(
+                onClick = onClick,
+                onLongClick = onLongClick,
+            ),
+        shape = MuseShapes.medium,
+        color = MaterialTheme.colorScheme.surfaceVariant,
+    ) {
+        Column(modifier = Modifier.padding(14.dp)) {
+            // 顶部行: 角色标签 + 模型 + 时间 + 取消收藏按钮
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = roleLabel,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = roleColor,
+                        modifier = Modifier
+                            .border(
+                                width = 1.dp,
+                                color = roleColor,
+                                shape = MuseShapes.extraSmall,
+                            )
+                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                    )
+                    message.modelId?.takeIf { it.isNotBlank() }?.let { model ->
+                        Text(
+                            text = model,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.outline,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                }
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    // LAYOUT-01: 尾部元信息槽（时间 + 收藏按钮）按内容宽度排布，只限行不取宽，
+                    // 否则内层 Row 会吃掉外层行宽、把左侧角色/模型标签挤成竖排。
+                    Text(
+                        text = dateFormat.format(Date(message.createdAt)),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.outline,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    MuseTactileButton(
+                        icon = MuseIcons.star,
+                        onClick = onUnfavorite,
+                        contentDescription = stringResource(R.string.favorites_unfavorite_cd),
+                        tint = MaterialTheme.colorScheme.secondary,
+                        size = MuseIconSizes.touchTarget,
+                    )
+                }
+            }
+            Spacer(Modifier.height(8.dp))
+            // 内容预览: 前 280 字用 MarkdownText 渲染(支持代码块/链接),超出截断
+            val preview = if (message.content.length > 280) {
+                message.content.take(280) + "…"
+            } else {
+                message.content
+            }
+            MarkdownText(
+                text = preview,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.fillMaxWidth(),
+                // Phase 8.4: UrlCitation — 收藏夹预览也支持 [N] 引用点击
+                citationUrls = message.citationUrls,
+            )
+            // v1.104 U7: 卡片底部显示分组标签(若有)
+            message.favoriteTag?.takeIf { it.isNotBlank() }?.let { tag ->
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = stringResource(R.string.favorites_tag_label, tag),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.tertiary,
+                )
+            }
+        }
+    }
+}

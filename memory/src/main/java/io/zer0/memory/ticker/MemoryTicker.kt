@@ -1,0 +1,1247 @@
+package io.zer0.memory.ticker
+
+import io.zer0.ai.core.Model
+import io.zer0.ai.core.UIMessage
+import io.zer0.common.Logger
+import io.zer0.common.resultOf
+import io.zer0.memory.budget.LlmBudget
+import io.zer0.memory.compile.MemoryCompileTarget
+import io.zer0.memory.compile.MemoryCompiler
+import io.zer0.memory.deep.DeepMemoryProcessor
+import io.zer0.memory.summary.DailyStateDao
+import io.zer0.memory.summary.DailyStateEntity
+import io.zer0.memory.summary.SessionSummaryManager
+import io.zer0.memory.time.TimeContext
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.builtins.MapSerializer
+import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.json.Json
+import java.time.Instant
+import java.time.LocalDate
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
+
+/**
+ * 本轮是否应更新滚动摘要。
+ *
+ * 抽成纯函数是为了能被单测直接锁定：**摘要间隔必须整除编译间隔**，
+ * 否则"先编译后摘要"会用上一轮的旧摘要去编译今日记忆。
+ */
+internal fun shouldRollSummary(turnCount: Int): Boolean =
+    turnCount > 0 && turnCount % MemoryTicker.TURNS_PER_SUMMARY == 0
+
+/** 本轮是否应编译今日记忆并装配。间隔更宽（写入与大模型调用更重）。 */
+internal fun shouldCompileToday(turnCount: Int): Boolean =
+    turnCount > 0 && turnCount % MemoryTicker.TURNS_PER_COMPILE == 0
+
+/**
+ * 记忆调度器。
+ *
+ * 触发策略:
+ *  - 每 [TURNS_PER_SUMMARY] 轮: rollingSummary
+ *  - 每 [TURNS_PER_COMPILE] 轮: 额外做 compileToday + assemble（写入与大模型调用更重，间隔更宽）
+ *  - session 结束: final rollingSummary + compileToday + assemble
+ *  - 日期切换: compileToday → compileWeek → compileLongterm → compileFacts → assemble → deepMemory
+ *
+ * 设计差异:
+ *  - 无 session 文件路径概念(muse 用 sessionId 直查 Room)
+ *  - 无 cache snapshot reflection(muse 不做 prompt cache 观测)
+ *  - 无 editable facts 模式(muse 永远走 legacy)
+ *  - 无 agent-id / agent-dir 可观测产物
+ *  - 用 Kotlin 协程替代 setInterval,Job 跟踪替代 _activeJobs Set
+ *
+ * 线程安全:
+ *  - [_summaryInProgress] / [_activeJobs] 用 [Mutex] 保护
+ *  - [_health] 用 synchronized 保护(纯内存读写,极短临界区)
+ *  - daily pipeline 用 [_dailyRunning] (AtomicBoolean.compareAndSet) 防重入
+ */
+class MemoryTicker(
+    private val summaryManager: SessionSummaryManager,
+    private val compiler: MemoryCompiler,
+    private val deepProcessor: DeepMemoryProcessor,
+    private val dailyStateDao: DailyStateDao,
+    /** 记忆重置水印(ISO),null 表示未重置。 */
+    private val getResetAt: () -> String?,
+    /** 记忆总开关。返回 false 时整个流水线跳过。 */
+    private val isMemoryEnabled: () -> Boolean = { true },
+    /** 调度器自身协程 scope。一般由 DI 注入 application scope。 */
+    private val scope: CoroutineScope,
+    /** v1.x: 每日去重用(合并近似重复事实);null 时跳过去重步骤(测试/兼容)。 */
+    private val factStore: io.zer0.memory.fact.FactStore? = null,
+    /**
+     * v12 (T3-1): 记忆反思任务 — 每日整理(回填实体键/合并重复/矛盾检测/晋升)。
+     * null 时跳过反思步骤(测试/兼容);失败不阻塞主流程。
+     */
+    private val reflectionRunner: io.zer0.memory.reflection.MemoryReflectionRunner? = null,
+    /**
+     * v1.0.92: LLM 记忆整合器 — 每日规则去重后,把语义重复的相似簇交给大模型
+     * 合并("定期模型整合")。null 时跳过(测试/兼容);失败不阻塞主流程。
+     */
+    private val factConsolidator: io.zer0.memory.fact.LlmFactConsolidator? = null,
+    /**
+     * v0.32: 记忆系统高级配置(memory.* 配置)。
+     *
+     * 用 `() -> MemoryConfig` 闭包而非直接 [MemoryConfig] 值,因为该配置由用户在设置页
+     * 实时调整(写入 DataStore),调度器每次读取都应拿到最新值,而不是构造时缓存一份。
+     * 默认值 `{ MemoryConfig() }` 保证旧调用方不破坏(向后兼容)。
+     *
+     * 通过公开属性 [config] 暴露给外部读取;同时透传给真正使用它的下游方法:
+     *  - [tokenBudget] → [LlmBudget.truncateToTokenBudget],在 [readCompiledMemoryMarkdown] 内裁剪
+     *  - [compileThreshold] / [baseImportance] / [decayPerDay] / [forgetSpeed] →
+     *    [MemoryCompiler.compileFacts] 与 [DeepMemoryProcessor.processDirtySessions]
+     *    内的 fact 分数计算 / 衰减
+     */
+    private val runtimeContext: MemoryRuntimeContext = MemoryRuntimeContext(),
+    /**
+     * D3-P1: 管线运行日志(观测层)。null 时只做健康上报(测试/无 filesDir 环境不传)。
+     * 由 app 侧装配注入,落盘位置 `filesDir/memory/pipeline_log.jsonl`。
+     */
+    private val pipelineLog: io.zer0.memory.observe.PipelineLog? = null,
+    /** 所有 Assistant 的 FactStore,供每日跨分库去重/语义整合。 */
+    private val getFactStoresForMaintenance: suspend () -> List<io.zer0.memory.fact.FactStore> = { emptyList() },
+) {
+
+    /** 当前生效的 [MemoryConfig](每次访问都重新读取闭包,保证拿到用户最新设置)。 */
+    val config: MemoryConfig get() = runtimeContext.getConfig()
+
+    companion object {
+        const val TURNS_PER_SUMMARY = 5
+
+        /**
+         * 编译今日记忆 + 装配的频率（轮数）。
+         *
+         * 与 [TURNS_PER_SUMMARY] 分开：滚动摘要每 5 轮更新一次（用户反馈 10 轮太迟，摘要容易错过
+         * 刚发生的事），而"编译今日 + 装配"涉及的写入与大模型调用明显更重，保持 10 轮一次。
+         * 两者必须满足 [TURNS_PER_SUMMARY] 整除 [TURNS_PER_COMPILE]，否则编译会跑在摘要之前，
+         * 用到尚未更新的摘要。
+         */
+        const val TURNS_PER_COMPILE = 10
+        const val DAILY_CHECK_INTERVAL_MS = 60L * 60 * 1000 // 1 小时
+        private const val TAG = "MemoryTicker"
+
+        /**
+         * A-19: 主助手 id — 编译管道(today/facts)只纳入主助手摘要。
+         * 与 AssistantRepository.ensureDefaultExists 的固定 id 一致;
+         * 空/旧数据行(assistant_id='')在 DAO 层同样保留,兼容历史数据。
+         */
+        const val MAIN_ASSISTANT_ID = "default"
+
+        /** 每日流水线 schema version。步骤结构变化时提升,使旧断点失效并一次性重算。 */
+        const val DAILY_STATE_SCHEMA_VERSION = 3
+
+        /** 每日 5 步(顺序依赖: compileDaily 必须先于 compileToday,rollDailyWindow 依赖 daily 已落盘)。 */
+        val DAILY_STEP_KEYS = listOf(
+            "compileDaily",
+            "compileToday",
+            "rollDailyWindow",
+            "compileFacts",
+            "deepMemory",
+        )
+
+        /** 含 rollingSummary 在内的全部 6 步(health 报告用)。 */
+        val STEP_KEYS = listOf("rollingSummary") + DAILY_STEP_KEYS
+    }
+
+    private val json = Json {
+        ignoreUnknownKeys = true
+        encodeDefaults = true
+    }
+    private val stepsSerializer = MapSerializer(String.serializer(), String.serializer())
+
+    // ──────────────────────────────────────────────
+    //  状态
+    // ──────────────────────────────────────────────
+
+    /** session → 累计轮数(自上次 rollingSummary 后)。v1.78: 改 ConcurrentHashMap 防并发修改异常。 */
+    private val _turnCounts = ConcurrentHashMap<String, Int>()
+
+    /**
+     * 每个 session 最近一次对话通知对应的助手/空间快照。
+     *
+     * 会话切换时 [notifySessionEnd] 可能在运行时上下文已经切到新空间后才真正执行；
+     * 这里保存发送完成时的目标，避免旧 session 的滚动摘要串入新空间。
+     */
+    private val _sessionNotificationTargets = ConcurrentHashMap<String, MemoryCompileTarget>()
+
+    /** 正在跑 rollingSummary 的 session id(防止重入)。 */
+    private val _summaryInProgress = mutableSetOf<String>()
+    private val _summaryInProgressLock = Mutex()
+
+    /**
+     * v1.0.51: compileToday 互斥锁 — serialize 对 TODAY section 的写入。
+     *
+     * notifyTurn 和 notifySessionEnd 可能并发触发 doCompileTodayAndAssemble,
+     * 两者都调用 compiler.compileToday 写同一行 Room 记录(TODAY section),
+     * 不加锁会导致 fingerprint 竞态写覆盖 + LLM 双调用浪费。
+     */
+    private val _compileTodayLock = Mutex()
+
+    /**
+     * 审查修复 (B-6): FACTS 段编译互斥锁 — 序列化对 FACTS section 的写入。
+     *
+     * daily pipeline 的 step4 与 forceCompileNow 两条链都会调用 compiler.compileFacts
+     * 直写 FACTS(读 prevFacts + LLM 合并 + 写),无互斥时为 last-writer-wins,并发时
+     * 后写者覆盖前者产物。这里用独立 lock 隔离,与 TODAY 的 [_compileTodayLock] 正交。
+     *
+     * 锁顺序约束(防死锁): TODAY 锁内不拿本锁,本锁内不拿 TODAY 锁 —
+     * doDaily 的 step0/1(TODAY) 与 step4(FACTS) 是顺序执行的两段临界区,
+     * forceCompileNow 亦先 FACTS 后 TODAY,二者从不同时嵌套,无死锁风险。
+     */
+    private val _compileFactsLock = Mutex()
+
+    /**
+     * v1.0.50: 全局并发上限 — 限制同时进行的 rollingSummary 数量。
+     *
+     * 并发上限 3，与 DeepMemoryProcessor 对齐（内部对齐保留）。原实现仅按 sessionId 去重,快速切 N 个会话
+     * 会触发 N 个 rollingSummary 并行跑,叠加 daily pipeline 的 deepMemory(已有 Semaphore(3)),
+     * 13 秒内可能累积十几个 completeText 请求轰炸 API,触发限流甚至 ban。
+     *
+     * 上限 3:与 DeepMemoryProcessor.MAX_CONCURRENT 对齐,避免记忆后台任务挤占用户对话的 API 配额。
+     */
+    private val _rollingSummaryConcurrency = Semaphore(3)
+
+    /** 后台 Job 集合(stop 时统一 await)。 */
+    private val _activeJobs = mutableSetOf<Job>()
+    private val _activeJobsLock = Any()
+
+    // v1.78 (H7): 改 AtomicBoolean,用 compareAndSet 消除 check-then-act 竞态
+    private val _dailyRunning = AtomicBoolean(false)
+
+    @Volatile private var _lastDailyJobDate: String? = null
+
+    @Volatile private var _stopped = false
+    private var _timerJob: Job? = null
+
+    // ──────────────────────────────────────────────
+    //  健康状态
+    // ──────────────────────────────────────────────
+
+    // v1.78 (M3): 字段改 val,通过 copy() 创建新实例再赋值,保证可见性与不可变语义
+    data class StepHealth(
+        val lastSuccessAt: String? = null,
+        val lastErrorAt: String? = null,
+        val lastErrorMsg: String? = null,
+        val failCount: Int = 0,
+    )
+
+    private val _health = STEP_KEYS.associateWith { StepHealth() }.toMutableMap()
+    private val _healthLock = Any()
+
+    // v1.0.51: healthFlow 初始化为当前 _health 快照,而非空 map,
+    // 订阅方首次读取即可看到全部步骤的初始健康状态(而非等首次 publishHealth)
+    private val _healthFlow = MutableStateFlow<Map<String, StepHealth>>(_health.toMap())
+    val healthFlow: StateFlow<Map<String, StepHealth>> = _healthFlow.asStateFlow()
+
+    /**
+     * v1.0.51: 存量记忆迁移进度 — 升级后首次启动补跑历史 session 摘要时实时报告。
+     *
+     * null 表示未在迁移中(空闲);非 null 表示正在跑或刚完成(UI 据此显示/隐藏进度条)。
+     * [done]=true 后 UI 自动隐藏进度条,下次启动不再进入迁移流程(标志位已持久化)。
+     */
+    data class BackfillProgress(
+        val total: Int,
+        val processed: Int,
+        val succeeded: Int,
+        val failed: Int,
+        val currentSessionId: String?,
+        val done: Boolean,
+    )
+
+    private val _backfillProgressFlow = MutableStateFlow<BackfillProgress?>(null)
+    val backfillProgressFlow: StateFlow<BackfillProgress?> = _backfillProgressFlow.asStateFlow()
+
+    /**
+     * v1.0.51: per-step 错误去重签名 — 替代原全局单一 _lastErrorSig。
+     *
+     * 原实现用单一全局 sig,step A 失败后 step B 成功会错误地清除 step A 的 sig,
+     * 导致 step A 下次失败不被去重(刷屏),且 step B 的恢复日志归属错误。
+     * 改为 per-step map 后,各步骤的恢复/去重互不干扰。
+     */
+    private val _errorSigs = ConcurrentHashMap<String, String>()
+
+    // ── D3-P1: 管线观测(每步耗时/触发/失败分类 → pipeline_log) ──────────────
+    /** 单步运行起点(stepKey → 起点时间/触发来源)。 */
+    private val _stepRunMeta = ConcurrentHashMap<String, StepRunMeta>()
+
+    /** 步骤运行元数据(D3-P1)。 */
+    private data class StepRunMeta(val startMs: Long, val trigger: String, val scope: String?)
+
+    /** D3-P1: 统一步骤运行器(累计计数 + 管线日志);健康上报仍走既有 markSuccess/markFailure。 */
+    private val stepRunner = io.zer0.memory.observe.MemoryStepRunner(
+        onStepSuccess = null,
+        onStepFailure = null,
+        pipelineLog = pipelineLog,
+    )
+
+    /** D3-P3: 步骤级失败退避(daily 兜底 tick 的无限重试收敛)。 */
+    private val stepBackoff = io.zer0.memory.observe.MemoryStepBackoff()
+
+    /**
+     * D3-P1: 标记步骤开始(供 markSuccess/markFailure 计算耗时与触发来源)。
+     * 未标记的步骤在记录时会得 0 耗时 + "unknown" 来源,不影响正确性。
+     */
+    private fun markStepStart(stepKey: String, trigger: String, scope: String? = null) {
+        _stepRunMeta[stepKey] = StepRunMeta(System.currentTimeMillis(), trigger, scope)
+    }
+
+    /** D3-P1: 步骤结果上报观测层(计数 + pipeline_log);无论成败都消费本次 start 元数据。 */
+    private fun recordStepOutcome(stepKey: String, error: Throwable?) {
+        val meta = _stepRunMeta.remove(stepKey)
+        val duration = meta?.let { System.currentTimeMillis() - it.startMs } ?: 0L
+        val trigger = meta?.trigger ?: "unknown"
+        val scope = meta?.scope
+        if (error == null) {
+            stepBackoff.recordSuccess(stepKey)
+            stepRunner.recordSuccess(stepKey, duration, trigger, scope = scope)
+        } else {
+            stepBackoff.recordFailure(stepKey)
+            stepRunner.recordFailure(stepKey, error, duration, trigger, scope = scope)
+        }
+    }
+
+    /** D3-P3: 步骤是否可运行(checkpoint 未完成且不在失败退避窗口)。 */
+    private fun canRunStep(stepKey: String, completed: Map<String, String>): Boolean {
+        if (stepKey in completed) return false
+        if (!stepBackoff.shouldRun(stepKey)) {
+            Logger.d(TAG, "步骤 $stepKey 处于失败退避窗口,跳过本轮(连续失败 ${stepBackoff.failureCount(stepKey)} 次)")
+            return false
+        }
+        return true
+    }
+
+    private fun markSuccess(stepKey: String) {
+        recordStepOutcome(stepKey, null)
+        synchronized(_healthLock) {
+            val h = _health[stepKey] ?: return
+            _health[stepKey] = h.copy(
+                lastSuccessAt = Instant.now().toString(),
+                lastErrorAt = null,
+                lastErrorMsg = null,
+                failCount = 0,
+            )
+            publishHealth()
+        }
+    }
+
+    private fun markFailure(stepKey: String, err: Throwable) {
+        recordStepOutcome(stepKey, err)
+        synchronized(_healthLock) {
+            val h = _health[stepKey] ?: return
+            _health[stepKey] = h.copy(
+                lastErrorAt = Instant.now().toString(),
+                lastErrorMsg = err.message ?: err.toString(),
+                failCount = h.failCount + 1,
+            )
+            publishHealth()
+        }
+    }
+
+    private fun publishHealth() {
+        _healthFlow.value = _health.toMap()
+    }
+
+    private fun logStepError(label: String, err: Throwable) {
+        val msg = err.message ?: err.toString()
+        val sig = "$label|$msg"
+        // v1.0.51: per-step 去重 — 同一 step 的相同根因只打一次 warn
+        if (_errorSigs[label] == sig) {
+            Logger.d(TAG, "$label (dup suppressed): $msg")
+            return
+        }
+        _errorSigs[label] = sig
+        Logger.w(TAG, "$label 失败: $msg", err)
+    }
+
+    private fun markStepRecovered(label: String) {
+        val prev = _errorSigs.remove(label) ?: return
+        Logger.i(TAG, "$label 恢复正常(之前: $prev)")
+    }
+
+    /** 返回每个步骤的健康快照(深拷贝,调用方安全持有)。 */
+    fun getHealthStatus(): Map<String, StepHealth> = synchronized(_healthLock) {
+        _health.mapValues { it.value.copy() }
+    }
+
+    // ──────────────────────────────────────────────
+    //  Job 跟踪
+    // ──────────────────────────────────────────────
+
+    private fun trackJob(job: Job) {
+        synchronized(_activeJobsLock) { _activeJobs.add(job) }
+        job.invokeOnCompletion { synchronized(_activeJobsLock) { _activeJobs.remove(job) } }
+    }
+
+    /** 在 [scope] 里 launch 一个被跟踪的 fire-and-forget 任务。 */
+    private fun launchTracked(block: suspend CoroutineScope.() -> Unit): Job {
+        val job = scope.launch(context = Dispatchers.IO, block = block)
+        trackJob(job)
+        return job
+    }
+
+    // ──────────────────────────────────────────────
+    //  Daily state 持久化
+    // ──────────────────────────────────────────────
+
+    private data class DailyContext(
+        val logicalDate: String,
+        val resetAt: String?,
+        val factsMode: String = "legacy",
+    )
+
+    private suspend fun currentContext(): DailyContext {
+        val zone = TimeContext.resolveTimeZone(TimeContext.DEFAULT_TIMEZONE)
+        val logicalDate = TimeContext.logicalDayFor(Instant.now(), zone).logicalDate.toString()
+        val target = currentCompileTarget()
+        return DailyContext(
+            logicalDate = logicalDate,
+            resetAt = getResetAt(),
+            factsMode = "legacy|${target.normalizedScope}|${target.normalizedSpaceId}",
+        )
+    }
+
+    private fun normalizeResetAt(value: String?): String? {
+        if (value.isNullOrBlank()) return null
+        return runCatching { Instant.parse(value).toString() }.getOrNull()
+    }
+
+    // v1.78 (H5): 包装 suspend DAO 调用必须用 resultOf,避免吞 CancellationException
+    private suspend fun readDailyState(): DailyStateEntity? = resultOf {
+        dailyStateDao.get()
+    }.getOrNull()
+
+    private suspend fun writeDailyState(context: DailyContext, completedSteps: Map<String, String>, dailyCompletedAt: String?) {
+        if (io.zer0.common.ProcessWriteGate.restoring) {
+            Logger.d(TAG, "daily state: 备份恢复进行中，跳过 checkpoint 写入")
+            return
+        }
+        val entity = DailyStateEntity(
+            schemaVersion = DAILY_STATE_SCHEMA_VERSION,
+            logicalDate = context.logicalDate,
+            resetAt = context.resetAt,
+            factsMode = context.factsMode,
+            completedSteps = json.encodeToString(stepsSerializer, completedSteps),
+            dailyCompletedAt = dailyCompletedAt,
+            updatedAt = Instant.now().toString(),
+        )
+        // v1.78 (H5): 包装 suspend DAO 调用必须用 resultOf,避免吞 CancellationException
+        resultOf { dailyStateDao.upsert(entity) }.onError { msg, t ->
+            Logger.w(TAG, "daily state write failed: $msg", t)
+        }
+    }
+
+    /**
+     * 从 Room 读出当天已完成步骤。
+     * context 不匹配时返回空 map(等价于"重置进度")。
+     */
+    private suspend fun restoreDailyProgress(context: DailyContext): Map<String, String> {
+        val state = readDailyState() ?: return emptyMap()
+        if (state.schemaVersion != DAILY_STATE_SCHEMA_VERSION) {
+            Logger.i(TAG, "daily state schema 不匹配(${state.schemaVersion} != $DAILY_STATE_SCHEMA_VERSION),重置进度")
+            return emptyMap()
+        }
+        if (state.logicalDate != context.logicalDate) return emptyMap()
+        if (normalizeResetAt(state.resetAt) != context.resetAt) return emptyMap()
+        if (state.factsMode != context.factsMode) return emptyMap()
+        return runCatching {
+            json.decodeFromString(stepsSerializer, state.completedSteps)
+        }.getOrElse {
+            Logger.w(TAG, "restoreDailyProgress: completedSteps JSON 解析失败,重置进度: ${it.message}")
+            emptyMap()
+        }
+    }
+
+    // ──────────────────────────────────────────────
+    //  内部: rollingSummary
+    // ──────────────────────────────────────────────
+
+    /**
+     * @return true 表示 rollingSummary 成功且有变化(session 摘要已更新,适合立即跑事实提取)
+     */
+    private suspend fun doRollingSummary(
+        sessionId: String,
+        messages: List<UIMessage>,
+        model: Model?,
+        locale: String,
+        timeZone: String,
+        trigger: String,
+        assistantId: String = "",
+        spaceId: String? = null,
+    ): Boolean {
+        // 重入保护: 同一 session 不并发跑两次 rolling
+        _summaryInProgressLock.withLock {
+            if (sessionId in _summaryInProgress) return false
+            _summaryInProgress.add(sessionId)
+        }
+        try {
+            markStepStart("rollingSummary", trigger)
+            // v1.0.50: 全局并发限制 — 即使快速切多个会话,同时只有 3 个 rollingSummary 在跑
+            val result = _rollingSummaryConcurrency.withPermit {
+                summaryManager.rollingSummary(
+                    sessionId,
+                    messages,
+                    model,
+                    locale,
+                    timeZone,
+                    SessionSummaryManager.SummaryOwnership(
+                        assistantId = assistantId,
+                        spaceId = spaceId?.ifBlank { null }
+                            ?: runtimeContext.getCurrentSpaceId().ifBlank { "default" },
+                    ),
+                )
+            }
+            // v1.0.50: 根据 changed 区分日志,避免"LLM 返回空 → changed=false → 误打 updated"掩盖故障
+            if (result.changed) {
+                Logger.d(TAG, "rolling summary updated: ${sessionId.take(8)}… (trigger=$trigger, ${result.summary.length} chars)")
+                markSuccess("rollingSummary")
+                markStepRecovered("滚动摘要")
+                return true
+            } else {
+                // changed=false 可能是: 空对话 / LLM 返回空 / 增量无新内容
+                Logger.d(TAG, "rolling summary unchanged: ${sessionId.take(8)}… (trigger=$trigger, summary=${result.summary.length} chars)")
+                // 不标记失败 — 空对话/无增量是正常情况;真正的 LLM 失败会走 catch 分支
+                return false
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            markFailure("rollingSummary", e)
+            logStepError("滚动摘要 ($sessionId)", e)
+            return false
+        } finally {
+            _summaryInProgressLock.withLock { _summaryInProgress.remove(sessionId) }
+        }
+    }
+
+    // ──────────────────────────────────────────────
+    //  内部: compileToday + assemble
+    // ──────────────────────────────────────────────
+
+    private suspend fun currentCompileTarget(): MemoryCompileTarget = MemoryCompileTarget(
+        assistantId = runtimeContext.getCurrentAssistantId(),
+        scope = runtimeContext.getCurrentAssistantId(),
+        spaceId = runtimeContext.getCurrentSpaceId(),
+    )
+
+    private fun captureNotificationTarget(sessionId: String, assistantId: String, spaceId: String?) {
+        if (assistantId.isBlank() && spaceId.isNullOrBlank()) return
+        _sessionNotificationTargets[sessionId] =
+            notificationCompileTarget(
+                current = MemoryCompileTarget(),
+                assistantId = assistantId,
+                spaceId = spaceId,
+            )
+    }
+
+    private suspend fun resolveSessionNotificationTarget(
+        captured: MemoryCompileTarget?,
+        assistantId: String,
+        spaceId: String?,
+    ): MemoryCompileTarget {
+        val current = captured ?: currentCompileTarget()
+        return notificationCompileTarget(
+            current = current,
+            assistantId = assistantId.ifBlank { captured?.assistantId.orEmpty() },
+            spaceId = spaceId ?: captured?.normalizedSpaceId,
+        )
+    }
+
+    private suspend fun doCompileTodayAndAssemble(
+        model: Model?,
+        locale: String,
+        timeZone: String,
+        targetOverride: MemoryCompileTarget? = null,
+    ) {
+        if (!stepBackoff.shouldRun("compileToday")) return
+        try {
+            markStepStart("compileToday", "turn")
+            val target = targetOverride ?: currentCompileTarget()
+            // v1.0.51: serialize compileToday 调用,避免 notifyTurn/notifySessionEnd 并发写 TODAY section 竞态
+            _compileTodayLock.withLock {
+                // A-19: 只编译主助手摘要,子助手会话摘要不得串台进入"今天"段
+                compiler.compileToday(summaryManager, model, locale, timeZone, target = target)
+            }
+            // assemble 在 muse 是 lazy 的:readCompiledMemoryMarkdown 由 ChatService 实时调用
+            // 这里不显式触发文件写,只通知 health
+            markSuccess("compileToday")
+            markStepRecovered("compileToday")
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Throwable) {
+            markFailure("compileToday", e)
+            logStepError("compileToday", e)
+        }
+    }
+
+    // ──────────────────────────────────────────────
+    //  内部: daily pipeline(按天滚动传送带,5 步带 checkpoint)
+    // ──────────────────────────────────────────────
+
+    private suspend fun doDaily(model: Model?, locale: String, timeZone: String) {
+        if (io.zer0.common.ProcessWriteGate.restoring) {
+            Logger.d(TAG, "daily: 备份恢复进行中，跳过本次记忆流水线")
+            return
+        }
+        // v1.78 (H7): 用 compareAndSet 原子化 check-then-act,消除竞态
+        if (!_dailyRunning.compareAndSet(false, true)) return
+        try {
+            val context = currentContext()
+            val target = currentCompileTarget()
+            var completed = restoreDailyProgress(context)
+            // v1.0.53: 进度失效校验 — daily_state 记录完成但 compiled_sections 为空
+            // (旧版 updateContent UPDATE 语义在空表上静默丢写),重置进度让编译重跑。
+            if (completed.isNotEmpty() && !compiler.hasAnyCompiledSection()) {
+                Logger.w(TAG, "每日任务: checkpoint 存在但 compiled_sections 为空(旧版写入 bug),重置进度重跑")
+                completed = emptyMap()
+            }
+            Logger.i(TAG, "每日任务开始 (${context.logicalDate})")
+            var hasFailed = false
+
+            // 审查修复 (B-5): Step 0 + Step 1 整段纳入 _compileTodayLock。
+            // doCompileTodayAndAssemble(由 notifyTurn 并发触发)与本节都会写 TODAY section。
+            // 若不在同一把锁内,跨日首 turn 时 doCompileTodayAndAssemble 可能在 Step 0 读取
+            // 昨日草稿后被并发覆盖为新一天内容,导致 yesterdayDraft 读到被改写的草稿、昨日
+            // daily 丢失。整段持锁(读草稿 + compileDaily + compileToday 刷新)保证读而再进行
+            // 写 TODAY 原子。
+            _compileTodayLock.withLock {
+                // Step 0: compileDaily——把已经翻篇的昨天蒸馏成 memory/daily/{date}.md。
+                // 必须先于 compileToday 执行:compileDaily 读取的"昨天最终版今日草稿"是这一刻仍
+                // 躺在 TODAY section 里的内容;compileToday 一旦先跑,日期切换会把 today 重置为
+                // 新一天的空白草稿,昨天的草稿就再也读不到了。
+                if (canRunStep("compileDaily", completed)) {
+                    try {
+                        markStepStart("compileDaily", "daily")
+                        val yesterday = runCatching {
+                            LocalDate.parse(context.logicalDate).minusDays(1).toString()
+                        }.getOrNull()
+                        if (yesterday != null) {
+                            val yesterdayDraft = compiler.readSection(MemoryCompiler.Section.TODAY, target)
+                            // B-09: 兜底路径同样限定主助手,子助手摘要不得进 daily → week → longterm 链
+                            compiler.compileDaily(
+                                summaryManager,
+                                yesterday,
+                                yesterdayDraft,
+                                model,
+                                locale,
+                                timeZone,
+                                target = target,
+                            )
+                            completed = completed + ("compileDaily" to Instant.now().toString())
+                            writeDailyState(context, completed, null)
+                            markSuccess("compileDaily")
+                            markStepRecovered("compileDaily")
+                        } else {
+                            hasFailed = true
+                            val err = IllegalArgumentException("无法计算昨天日期")
+                            markFailure("compileDaily", err)
+                            logStepError("compileDaily", err)
+                        }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Throwable) {
+                        hasFailed = true
+                        markFailure("compileDaily", e)
+                        logStepError("compileDaily", e)
+                    }
+                }
+
+                // Step 1: compileToday(日期切换后刷新 today.md)
+                if (canRunStep("compileToday", completed)) {
+                    try {
+                        markStepStart("compileToday", "daily")
+                        // A-19: 只编译主助手摘要
+                        compiler.compileToday(summaryManager, model, locale, timeZone, target = target)
+                        completed = completed + ("compileToday" to Instant.now().toString())
+                        writeDailyState(context, completed, null)
+                        markSuccess("compileToday")
+                        markStepRecovered("compileToday(daily)")
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Throwable) {
+                        hasFailed = true
+                        markFailure("compileToday", e)
+                        logStepError("compileToday(daily)", e)
+                    }
+                }
+            }
+
+            // Step 2: 从 daily/ 目录零 LLM 装配 week.md(无 checkpoint,纯文件操作)
+            if (io.zer0.common.ProcessWriteGate.restoring) return
+            try {
+                compiler.assembleWeekFromDaily(target = target)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                hasFailed = true
+                Logger.w(TAG, "assembleWeekFromDaily 失败: ${e.message}", e)
+            }
+
+            // Step 3: rollDailyWindow——把滚出 N 日窗口的 daily 条目 fold 进 longterm 并删除源文件。
+            // 依赖 compileDaily 已经把昨天落盘,否则窗口判断会漏看最新一天。
+            if (io.zer0.common.ProcessWriteGate.restoring) return
+            if (canRunStep("rollDailyWindow", completed) && "compileDaily" in completed) {
+                try {
+                    markStepStart("rollDailyWindow", "daily")
+                    compiler.rollDailyWindow(model, locale, context.logicalDate, target)
+                    completed = completed + ("rollDailyWindow" to Instant.now().toString())
+                    writeDailyState(context, completed, null)
+                    markSuccess("rollDailyWindow")
+                    markStepRecovered("rollDailyWindow")
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    hasFailed = true
+                    markFailure("rollDailyWindow", e)
+                    logStepError("rollDailyWindow", e)
+                }
+            }
+
+            // Step 4: compileFacts(独立于 step 0-3)
+            // 审查修复 (B-6): FACTS 段编译纳入 _compileFactsLock,与 forceCompileNow 里的
+            // compileFacts 互斥 — 两条链都直写 FACTS(读 prevFacts + LLM 合并 + 写),不加锁
+            // 会 last-writer-wins 覆盖彼此产物。对账亦写 FACTS 段,故随同一临界区持锁。
+            if (io.zer0.common.ProcessWriteGate.restoring) return
+            if (canRunStep("compileFacts", completed)) {
+                _compileFactsLock.withLock {
+                    try {
+                        markStepStart("compileFacts", "daily")
+                        // A-19: 只编译主助手摘要
+                        compiler.compileFacts(summaryManager, model, locale, runtimeContext.getConfig(), target = target)
+                        // v12 (T2-1): 编译产物与 facts 表对账 — 用户在记忆页编辑/合并事实后,
+                        // 产物同步为 facts 表现值,下次注入不再携带旧表述。失败不影响主流程。
+                        factStore?.let { fs ->
+                            resultOf { fs.getByScopeAndSpace(target.scope, target.spaceId) }
+                                .onSuccess { facts ->
+                                    if (facts.isNotEmpty()) {
+                                        resultOf { compiler.reconcileFactsSectionWithStore(facts) }
+                                            .onError { msg, t -> Logger.w(TAG, "facts 产物对账失败: ${t?.message ?: msg}") }
+                                    }
+                                }
+                                .onError { msg, t -> Logger.w(TAG, "facts 表读取失败(对账跳过): ${t?.message ?: msg}") }
+                        }
+                        completed = completed + ("compileFacts" to Instant.now().toString())
+                        writeDailyState(context, completed, null)
+                        markSuccess("compileFacts")
+                        markStepRecovered("compileFacts")
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: Throwable) {
+                        hasFailed = true
+                        markFailure("compileFacts", e)
+                        logStepError("compileFacts", e)
+                    }
+                }
+            }
+
+            // Step 5: deepMemory(独立,更新 FactStore)
+            if (io.zer0.common.ProcessWriteGate.restoring) return
+            if (canRunStep("deepMemory", completed)) {
+                try {
+                    markStepStart("deepMemory", "daily")
+                    val result = deepProcessor.processDirtySessions(summaryManager, model, locale, runtimeContext.getConfig())
+                    completed = completed + ("deepMemory" to Instant.now().toString())
+                    if (result.processed > 0) {
+                        Logger.i(TAG, "deep-memory: ${result.processed} session, ${result.factsAdded} 条新事实")
+                    }
+                    writeDailyState(context, completed, null)
+                    markSuccess("deepMemory")
+                    markStepRecovered("deepMemory")
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    hasFailed = true
+                    markFailure("deepMemory", e)
+                    logStepError("deepMemory", e)
+                }
+            }
+
+            // 每日规则去重与 LLM 语义整合覆盖全部助手分库,不只默认 FactStore。
+            val additionalStores = resultOf { getFactStoresForMaintenance() }
+                .onError { msg, t -> Logger.w(TAG, "读取助手记忆分库失败: ${t?.message ?: msg}") }
+                .getOrNull()
+                .orEmpty()
+            val maintenanceStores = (listOfNotNull(factStore) + additionalStores)
+                .distinctBy { it.assistantId.ifBlank { "default" } }
+            for (store in maintenanceStores) {
+                resultOf { store.dedupPassAllSpaces() }
+                    .onError { msg, t ->
+                        Logger.w(TAG, "每日记忆去重失败(${store.assistantId}): ${t?.message ?: msg}")
+                    }
+                    .onSuccess { count ->
+                        if (count > 0) Logger.i(TAG, "每日记忆去重(${store.assistantId}): 合并 $count 条")
+                    }
+                factConsolidator?.let { consolidator ->
+                    resultOf { consolidator.consolidateAll(store) }
+                        .onError { msg, t ->
+                            Logger.w(TAG, "每日 LLM 记忆整合失败(${store.assistantId}): ${t?.message ?: msg}")
+                        }
+                        .onSuccess { count ->
+                            if (count > 0) {
+                                Logger.i(TAG, "每日 LLM 记忆整合(${store.assistantId}): 合并 $count 组")
+                            }
+                        }
+                }
+            }
+
+            // v12 (T3-1): 记忆反思 — 每日整理(回填实体键/合并同实体重复/矛盾检测/晋升)。
+            // 与写入时查重(快路径)互补,清理历史沉淀的重复;失败不影响主流程。
+            reflectionRunner?.let { runner ->
+                resultOf { runner.runReflection(scope = target.scope, spaceId = target.spaceId) }
+                    .onError { msg, t -> Logger.w(TAG, "每日记忆反思失败: ${t?.message ?: msg}") }
+            }
+
+            if (hasFailed) {
+                val done = completed.keys.joinToString(", ")
+                Logger.w(TAG, "每日任务部分失败,已完成: [$done],下次 tick 重试未完成步骤")
+            } else {
+                _lastDailyJobDate = context.logicalDate
+                writeDailyState(context, completed, Instant.now().toString())
+                Logger.i(TAG, "每日任务完成")
+            }
+        } finally {
+            // v1.78 (H7): AtomicBoolean 用 set(false) 释放
+            _dailyRunning.set(false)
+        }
+    }
+
+    private fun checkDailyJob(model: Model?, locale: String, timeZone: String) {
+        if (_stopped) return
+        if (!isMemoryEnabled()) return
+        launchTracked {
+            val context = currentContext()
+            if (_lastDailyJobDate != context.logicalDate) doDaily(model, locale, timeZone)
+        }
+    }
+
+    // ──────────────────────────────────────────────
+    //  公开 API
+    // ──────────────────────────────────────────────
+
+    /**
+     * 每轮对话结束后调用(ChatViewModel 在收到 assistant 完整回复后调)。
+     *
+     * fire-and-forget: 立即返回,rollingSummary + compileToday 在后台跑。
+     *
+     * @param sessionId 当前会话 id
+     * @param messages 完整对话历史(含本轮 user + assistant)
+     * @param model 摘要用的模型(为 null 时由 LLM 客户端选默认)
+     * @param locale 语言(zh-CN / en-US)
+     * @param timeZone 时区
+     */
+    fun notifyTurn(
+        sessionId: String,
+        messages: List<UIMessage>,
+        model: Model?,
+        locale: String = "zh-CN",
+        timeZone: String = TimeContext.DEFAULT_TIMEZONE,
+        assistantId: String = "",
+        spaceId: String? = null,
+    ) {
+        if (_stopped) return
+        if (!isMemoryEnabled()) return
+        captureNotificationTarget(sessionId, assistantId, spaceId)
+        // v1.78: 原子 read-modify-write,防止并发切会话时丢计数
+        // L1: ConcurrentHashMap.merge 对 absent key 会写入 defaultValue(1),且累加永不返回 null,
+        // 故运行期永不返回 null;?: 1 为死代码,已移除。merge 签名返回 V?,用 !! 断言非空以匹配实际语义。
+        // 注意:用 lambda 替代 Int::plus,避免 Kotlin 严格可空检查下 Int::plus 被解析为 Int? 接收者
+        val count = _turnCounts.merge(sessionId, 1) { a, b -> a + b }!!
+
+        if (shouldRollSummary(count)) {
+            launchTracked {
+                val target = resolveSessionNotificationTarget(
+                    captured = _sessionNotificationTargets[sessionId],
+                    assistantId = assistantId,
+                    spaceId = spaceId,
+                )
+                doRollingSummary(
+                    sessionId,
+                    messages,
+                    model,
+                    locale,
+                    timeZone,
+                    "threshold",
+                    assistantId = target.assistantId.orEmpty(),
+                    spaceId = target.normalizedSpaceId,
+                )
+                // 编译/装配比摘要更重，按自己的间隔走：只有同时命中时才跑，
+                // 保证用到的摘要一定是本轮刚更新过的。
+                if (shouldCompileToday(count)) {
+                    doCompileTodayAndAssemble(model, locale, timeZone, target)
+                }
+            }
+        }
+        checkDailyJob(model, locale, timeZone)
+    }
+
+    /**
+     * Session 切换或 dispose 前调用(final pass)。
+     *
+     * fire-and-forget: 立即返回,后台跑 rollingSummary + compileToday。
+     *
+     * @return 后台 Job,dispose 场景可 await;switch/close 场景忽略即可
+     */
+    fun notifySessionEnd(
+        sessionId: String,
+        messages: List<UIMessage>,
+        model: Model?,
+        locale: String = "zh-CN",
+        timeZone: String = TimeContext.DEFAULT_TIMEZONE,
+        assistantId: String = "",
+        spaceId: String? = null,
+    ): Job {
+        if (_stopped) return scope.launch { /* no-op */ }
+        val capturedTarget = _sessionNotificationTargets.remove(sessionId)
+        val count = _turnCounts.remove(sessionId) ?: 0
+        if (count == 0) return scope.launch { /* no-op */ }
+        if (!isMemoryEnabled()) return scope.launch { /* no-op */ }
+        return launchTracked {
+            runSessionEndPipeline(
+                sessionId = sessionId,
+                messages = messages,
+                model = model,
+                locale = locale,
+                timeZone = timeZone,
+                capturedTarget = capturedTarget,
+                assistantId = assistantId,
+                spaceId = spaceId,
+            )
+        }
+    }
+
+    /**
+     * Session 结束时从持久层读取完整历史后再跑最终摘要。
+     *
+     * 聊天 UI 采用分页窗口,不能把当前内存列表当作完整会话;调用方提供的
+     * provider 在 ticker 自己的 application scope 中执行,不会被 ViewModel 销毁取消。
+     */
+    fun notifySessionEndFromProvider(
+        sessionId: String,
+        messagesProvider: suspend () -> List<UIMessage>,
+        model: Model?,
+        locale: String = "zh-CN",
+        timeZone: String = TimeContext.DEFAULT_TIMEZONE,
+        assistantId: String = "",
+        spaceId: String? = null,
+    ): Job {
+        if (_stopped) return scope.launch { /* no-op */ }
+        val capturedTarget = _sessionNotificationTargets.remove(sessionId)
+        val count = _turnCounts.remove(sessionId) ?: 0
+        if (count == 0) return scope.launch { /* no-op */ }
+        if (!isMemoryEnabled()) return scope.launch { /* no-op */ }
+        return launchTracked {
+            val messages = messagesProvider()
+            if (messages.size < 2) return@launchTracked
+            runSessionEndPipeline(
+                sessionId = sessionId,
+                messages = messages,
+                model = model,
+                locale = locale,
+                timeZone = timeZone,
+                capturedTarget = capturedTarget,
+                assistantId = assistantId,
+                spaceId = spaceId,
+            )
+        }
+    }
+
+    private suspend fun runSessionEndPipeline(
+        sessionId: String,
+        messages: List<UIMessage>,
+        model: Model?,
+        locale: String,
+        timeZone: String,
+        capturedTarget: MemoryCompileTarget?,
+        assistantId: String,
+        spaceId: String?,
+    ) {
+        try {
+            // v1.0.51: rollingSummary 成功且有变化后,立即跑事实提取(不等 daily pipeline)
+            // 用户退出对话后,刚说的事实(如"下周三有考试")能立刻进 FactStore,下次对话即可用
+            val target = resolveSessionNotificationTarget(capturedTarget, assistantId, spaceId)
+            val changed = doRollingSummary(
+                sessionId,
+                messages,
+                model,
+                locale,
+                timeZone,
+                "session_end",
+                assistantId = target.assistantId.orEmpty(),
+                spaceId = target.normalizedSpaceId,
+            )
+            doCompileTodayAndAssemble(model, locale, timeZone, target)
+            if (changed) {
+                // rollingSummary 有变化 → session 变成 dirty → 立即提取事实
+                // processSession 内部会检查 dirty 状态,复用 Semaphore(3) 排队
+                resultOf {
+                    deepProcessor.processSession(
+                        sessionId,
+                        summaryManager,
+                        model,
+                        locale,
+                        runtimeContext.getConfig(),
+                    )
+                }.onError { msg, t ->
+                    Logger.w(TAG, "notifySessionEnd: processSession 失败: $msg", t)
+                }
+            }
+        } catch (e: CancellationException) {
+            // v1.78 (H3): 必须重抛协程取消信号,否则会破坏协程取消语义
+            throw e
+        } catch (e: Throwable) {
+            Logger.w(TAG, "notifySessionEnd 后台失败: ${e.message}")
+        }
+    }
+
+    /**
+     * 强制刷新指定 session 的摘要(日记等功能调用前确保摘要最新)。
+     */
+    fun flushSession(
+        sessionId: String,
+        messages: List<UIMessage>,
+        model: Model?,
+        locale: String = "zh-CN",
+        timeZone: String = TimeContext.DEFAULT_TIMEZONE,
+        assistantId: String = "",
+    ): Job {
+        if (_stopped) return scope.launch { /* no-op */ }
+        if (!isMemoryEnabled()) return scope.launch { /* no-op */ }
+        return launchTracked {
+            doRollingSummary(sessionId, messages, model, locale, timeZone, "manual", assistantId)
+        }
+    }
+
+    /**
+     * 启动每小时的 daily check timer(备用触发,不依赖用户对话)。
+     * 主触发是 [notifyTurn] 末尾的 [checkDailyJob]。
+     *
+     * v1.78: 修复 stop() 后不可重启的 bug — start() 时重置 _stopped=false。
+     * 用户在设置页关闭再打开记忆功能后,Ticker 现在可以正常重启。
+     */
+    fun start() {
+        // v1.78: 允许重启 — 重置 stopped 标志
+        _stopped = false
+        if (_timerJob != null) return
+        _timerJob = scope.launch(Dispatchers.IO) {
+            while (!_stopped) {
+                delay(DAILY_CHECK_INTERVAL_MS)
+                if (_stopped) break
+                checkDailyJob(model = null, locale = "zh-CN", timeZone = TimeContext.DEFAULT_TIMEZONE)
+            }
+        }
+        Logger.i(TAG, "v3 已启动(turn-based,daily check timer ${DAILY_CHECK_INTERVAL_MS / 60000}min)")
+    }
+
+    /**
+     * 停止调度器,等待所有后台任务完成。
+     *
+     * v1.78: 加 30s 超时,防止卡住的 LLM 调用导致 stop() 永久阻塞。
+     * 超时后强制取消所有未完成 Job。
+     */
+    suspend fun stop() {
+        _stopped = true
+        // v1.0.27 修复: 用 cancelAndJoin 等待 timer job 真正退出,
+        // 原 cancel() 不等待导致测试 advanceUntilIdle 后 job 仍在 children 中。
+        _timerJob?.let { job ->
+            job.cancel()
+            try {
+                job.join()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                // timer job join 失败不阻塞后续清理
+            }
+        }
+        _timerJob = null
+        // v1.78: 超时等待,避免永久阻塞
+        val jobs: List<Job> = synchronized(_activeJobsLock) { _activeJobs.toList() }
+        if (jobs.isNotEmpty()) {
+            // v1.0.51: 先 cancel 全部 job 让它们开始退出,再用 joinAll 并行等待,
+            // 替代原 forEach 顺序 join(5 个 job 各 5s → 25s 串行 vs 5s 并行)
+            synchronized(_activeJobsLock) {
+                _activeJobs.forEach { it.cancel() }
+            }
+            // v1.78 (H8): join 不用 runCatching(会吞 CancellationException);
+            // cancel 块用 try/finally 必达,即使 withTimeoutOrNull 超时也要执行
+            try {
+                withTimeoutOrNull(30_000L) {
+                    jobs.joinAll()
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Throwable) {
+                // joinAll 中单个 Job 异常不阻塞整体退出
+            }
+        }
+    }
+
+    /**
+     * 手动触发一次完整编译(调试 / 启动时用)。
+     * 先跑 daily job(确保 week/longterm/facts 存在),再 compileToday。
+     */
+    suspend fun tick(model: Model? = null, locale: String = "zh-CN", timeZone: String = TimeContext.DEFAULT_TIMEZONE) {
+        if (_stopped) return
+        // B-7: 备份恢复(文件级替换 DB)窗口内跳过写入型编译,避免写丢失。
+        if (io.zer0.common.ProcessWriteGate.restoring) {
+            Logger.d(TAG, "tick: 备份恢复进行中,跳过本次记忆编译")
+            return
+        }
+        if (!isMemoryEnabled()) return
+        val context = currentContext()
+        if (_lastDailyJobDate != context.logicalDate) {
+            doDaily(model, locale, timeZone)
+        }
+        doCompileTodayAndAssemble(model, locale, timeZone)
+    }
+
+    // ──────────────────────────────────────────────
+    //  v1.0.51: 存量记忆迁移(backfill)
+    // ──────────────────────────────────────────────
+
+    /**
+     * 获取所有已有摘要的 session id 集合(summary 非空)。
+     * 用于 backfill 时计算差集:allSessions - summarizedSessions = 需补跑的 session。
+     */
+    suspend fun getAllSummarizedSessionIds(): Set<String> = summaryManager.getAllSummaries().map { it.sessionId }.toSet()
+
+    /**
+     * v1.0.51: 为单个 session 补跑 rollingSummary(用于存量迁移)。
+     *
+     * 复用 [doRollingSummary] 内部逻辑(含 _summaryInProgress 重入保护 + Semaphore(3) 全局并发限流),
+     * trigger="backfill" 便于日志区分。失败不抛异常,返回 false,由调用方统计 failed 计数。
+     *
+     * @return true 表示摘要有变化(成功);false 表示空对话/LLM 返回空/失败
+     */
+    suspend fun backfillSession(
+        sessionId: String,
+        messages: List<UIMessage>,
+        model: Model?,
+        locale: String = "zh-CN",
+        timeZone: String = TimeContext.DEFAULT_TIMEZONE,
+        assistantId: String = "",
+    ): Boolean {
+        if (_stopped) return false
+        if (!isMemoryEnabled()) return false
+        return doRollingSummary(sessionId, messages, model, locale, timeZone, "backfill", assistantId)
+    }
+
+    /** v1.0.51: 报告 backfill 进度(供 UI 实时展示)。 */
+    fun reportBackfillProgress(progress: BackfillProgress) {
+        _backfillProgressFlow.value = progress
+    }
+
+    /** v1.0.51: 清除 backfill 进度(迁移完成后调用,UI 进度条自动隐藏)。 */
+    fun clearBackfillProgress() {
+        _backfillProgressFlow.value = null
+    }
+
+    /**
+     * v0.45: 强制立即编译记忆(忽略 daily checkpoint,手动压缩前调用)。
+     *
+     * 与 [tick] 的差异:
+     *  - [tick] 受 daily checkpoint 保护,当天已完成的步骤会跳过
+     *  - [forceCompileNow] 直接重跑 compileFacts + deepMemory + compileToday,
+     *    用于"更新记忆并压缩"场景,确保最新对话提炼成 fact 后再压缩历史
+     *
+     * 失败步骤记录到 health,不中断整体流程。
+     */
+    suspend fun forceCompileNow(model: Model? = null, locale: String = "zh-CN", timeZone: String = TimeContext.DEFAULT_TIMEZONE) {
+        if (_stopped) return
+        if (!isMemoryEnabled()) return
+        if (io.zer0.common.ProcessWriteGate.restoring) {
+            Logger.d(TAG, "forceCompileNow: 备份恢复进行中，跳过本次记忆编译")
+            return
+        }
+        // 1. 强制重跑 compileFacts(从 30 天摘要提取 fact,忽略指纹缓存外的 checkpoint)
+        // 审查修复 (B-6): 纳入 _compileFactsLock,与 doDaily step4 的 compileFacts 互斥,
+        // 避免两链并发写 FACTS 段 last-writer-wins 丢产物。
+        // v1.78 (H2): 包装 suspend 调用必须用 resultOf,避免吞 CancellationException
+        val target = currentCompileTarget()
+        _compileFactsLock.withLock {
+            markStepStart("compileFacts", "force")
+            resultOf {
+                compiler.compileFacts(summaryManager, model, locale, runtimeContext.getConfig(), target = target)
+            }.onSuccess {
+                markSuccess("compileFacts")
+                markStepRecovered("compileFacts(force)")
+            }.onError { msg, t ->
+                if (t != null) {
+                    markFailure("compileFacts", t)
+                    logStepError("compileFacts(force)", t)
+                } else {
+                    Logger.w(TAG, "compileFacts(force) 失败: $msg")
+                }
+            }
+        }
+        // 2. 强制重跑 deepMemory(处理 dirty sessions,提取深层事实)
+        if (io.zer0.common.ProcessWriteGate.restoring) return
+        markStepStart("deepMemory", "force")
+        resultOf {
+            val result = deepProcessor.processDirtySessions(summaryManager, model, locale, runtimeContext.getConfig())
+            if (result.processed > 0) {
+                Logger.i(TAG, "forceCompileNow: deep-memory ${result.processed} session, ${result.factsAdded} 新事实")
+            }
+            markSuccess("deepMemory")
+            markStepRecovered("deepMemory(force)")
+        }.onError { msg, t ->
+            if (t != null) {
+                markFailure("deepMemory", t)
+                logStepError("deepMemory(force)", t)
+            } else {
+                Logger.w(TAG, "deepMemory(force) 失败: $msg")
+            }
+        }
+        // 3. 刷新 today 编译记忆(让 system prompt 下次注入用最新内容)
+        if (io.zer0.common.ProcessWriteGate.restoring) return
+        doCompileTodayAndAssemble(model, locale, timeZone)
+    }
+
+    /**
+     * 读取编译后的 memory.md(注入 system prompt 用)。
+     * 由 [io.zer0.ai.ChatService] 在发送前调用,把长期记忆拼到 system 段。
+     *
+     * v0.32: 接入 [MemoryConfig.tokenBudget] —— 用 [LlmBudget.truncateToTokenBudget]
+     * 软裁剪到目标 token 数,避免记忆过长挤占对话预算(按 memory.token_budget 配置)。
+     * 默认值 2500 token 约等于 10KB 文本,日常记忆量足够;用户调小可压缩 prompt。
+     */
+    suspend fun readCompiledMemoryMarkdown(
+        locale: String = "zh-CN",
+        scope: String? = null,
+        spaceId: String? = null,
+        assistantId: String? = null,
+    ): String {
+        val currentTarget = currentCompileTarget()
+        // In Muse every non-main memory scope belongs to the assistant with that id.
+        // Prefer that scope over the background runtime's current assistant (usually `default`);
+        // callers with a custom owner can still supply assistantId explicitly.
+        val resolvedAssistantId =
+            assistantId?.takeIf { it.isNotBlank() }
+                ?: scope?.takeIf { it.isNotBlank() && it != "main" }
+                ?: currentTarget.assistantId
+        val target = currentTarget.copy(
+            assistantId = resolvedAssistantId,
+            scope = scope?.takeIf { it.isNotBlank() } ?: currentTarget.scope,
+            spaceId = spaceId?.takeIf { it.isNotBlank() } ?: currentTarget.spaceId,
+        )
+        val md = compiler.readCompiledMemoryMarkdown(
+            locale = locale,
+            scope = target.normalizedScope,
+            spaceId = target.normalizedSpaceId,
+            target = target,
+        )
+        val cfg = runtimeContext.getConfig()
+        return LlmBudget.truncateToTokenBudget(md, cfg.tokenBudget)
+    }
+}

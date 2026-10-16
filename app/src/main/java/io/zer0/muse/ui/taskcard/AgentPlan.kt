@@ -1,0 +1,104 @@
+package io.zer0.muse.ui.taskcard
+
+import io.zer0.muse.R
+import kotlinx.serialization.Serializable
+
+/**
+ * v1.55: Agent 工作流结构化计划。
+ *
+ * 当 LLM 面对复杂任务时,可先调用 task_plan 工具创建一个分步计划,
+ * 再逐步执行。计划在 UI 中以检查清单形式展示,用户可实时看到进度。
+ */
+@Serializable
+data class AgentPlan(
+    val id: String,
+    val title: String,
+    val steps: List<AgentPlanStep>,
+    /** 所属会话；旧历史没有该字段时使用 default，恢复时由调用方补齐。 */
+    val sessionId: String = "default",
+    val createdAt: Long = System.currentTimeMillis(),
+    /**
+     * v1.137: 关联创建此计划的助手消息 ID。
+     *
+     * 用于将计划卡固定到创建它的消息上,随该消息一起滚动,
+     * 而不是始终"跳"到最后一条助手消息(用户反馈"列表固定在底部不跟随滚动")。
+     * null 表示未关联(向后兼容),UI 回退到旧逻辑(显示在最后一条助手消息上)。
+     */
+    val messageId: String? = null,
+) {
+    val totalSteps: Int get() = steps.size
+    val completedSteps: Int get() = steps.count { it.status == AgentPlanStepStatus.DONE }
+
+    /** 失败步骤数(含执行超时;超时同为失败终态,计入摘要)。 */
+    val failedSteps: Int get() = steps.count {
+        it.status == AgentPlanStepStatus.FAILED || it.status == AgentPlanStepStatus.TIMED_OUT
+    }
+    val inProgressSteps: Int get() = steps.count { it.status == AgentPlanStepStatus.IN_PROGRESS }
+    // L-TC1 修复: 拆分 isAllSettled(全部结束,含 FAILED/SKIPPED)与 isAllSucceeded(全部成功)。
+    // 原先 isAllDone 把 FAILED/SKIPPED 也算"完成",语义不清,标题栏的完成图标会误导用户。
+    // Phase 3: CANCELLED/TIMED_OUT 也是终态,必须计入 isAllSettled,否则计划卡会永远转圈。
+    /** 全部步骤已结束(不再有 PENDING / IN_PROGRESS),含成功/失败/跳过/取消/超时。 */
+    val isAllSettled: Boolean get() = steps.isNotEmpty() && steps.all {
+        it.status == AgentPlanStepStatus.DONE ||
+            it.status == AgentPlanStepStatus.FAILED ||
+            it.status == AgentPlanStepStatus.SKIPPED ||
+            it.status == AgentPlanStepStatus.CANCELLED ||
+            it.status == AgentPlanStepStatus.TIMED_OUT
+    }
+
+    /** 全部步骤成功完成(无 FAILED / SKIPPED)。 */
+    val isAllSucceeded: Boolean get() = steps.isNotEmpty() && steps.all {
+        it.status == AgentPlanStepStatus.DONE
+    }
+
+    // 保留 isAllDone 作为 isAllSettled 的别名,向后兼容现有调用方(标题栏判断"是否还在跑")
+    val isAllDone: Boolean get() = isAllSettled
+    val progress: Float get() = if (steps.isEmpty()) 0f else completedSteps.toFloat() / steps.size
+
+    /**
+     * v2.6.4: 收尾未结束的步骤 —— 把 PENDING / IN_PROGRESS 落成 CANCELLED。
+     *
+     * 用于两个终态落账路径:工具循环退出（轮次耗尽/失败/错误）与用户停止。
+     * 已到终态的步骤（DONE/FAILED/SKIPPED/CANCELLED/TIMED_OUT）不变。
+     */
+    fun settleAsCancelled(now: Long = System.currentTimeMillis()): AgentPlan {
+        if (isAllSettled) return this
+        val settled = steps.map { step ->
+            when (step.status) {
+                AgentPlanStepStatus.PENDING, AgentPlanStepStatus.IN_PROGRESS ->
+                    step.copy(
+                        status = AgentPlanStepStatus.CANCELLED,
+                        finishedAt = if (step.finishedAt == 0L) now else step.finishedAt,
+                    )
+                else -> step
+            }
+        }
+        return copy(steps = settled)
+    }
+}
+
+@Serializable
+data class AgentPlanStep(
+    val id: String,
+    val title: String,
+    val description: String = "",
+    val status: AgentPlanStepStatus = AgentPlanStepStatus.PENDING,
+    val result: String = "",
+    val startedAt: Long = 0,
+    val finishedAt: Long = 0,
+)
+
+@Serializable
+enum class AgentPlanStepStatus(val labelRes: Int) {
+    PENDING(R.string.task_plan_status_pending),
+    IN_PROGRESS(R.string.task_plan_status_in_progress),
+    DONE(R.string.task_plan_status_done),
+    FAILED(R.string.task_plan_status_failed),
+    SKIPPED(R.string.task_plan_status_skipped),
+
+    /** Phase 3: 步骤被取消(用户停止 / 流式中断)。 */
+    CANCELLED(R.string.task_plan_status_cancelled),
+
+    /** Phase 3: 步骤执行超时。 */
+    TIMED_OUT(R.string.task_plan_status_timed_out),
+}

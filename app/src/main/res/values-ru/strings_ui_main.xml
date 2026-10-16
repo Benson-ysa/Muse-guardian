@@ -1,0 +1,883 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- ===== Assistant detail pages AssistantDetailPages ===== -->
+    <string name="assistant_detail_title_default">Детали ассистента</string>
+    <string name="assistant_detail_unnamed">(Безымянный)</string>
+    <string name="assistant_detail_loading">Загрузка...</string>
+    <string name="assistant_detail_basic">Основные</string>
+    <string name="assistant_detail_basic_desc">Имя / Аватар / Модель / Сэмплирование</string>
+    <string name="assistant_detail_prompt">Промпт</string>
+    <string name="assistant_detail_prompt_desc">systemPrompt / Шаблон сообщений / Предустановленные сообщения</string>
+    <string name="assistant_detail_extensions">Расширения</string>
+    <string name="assistant_detail_extensions_desc">Быстрые сообщения / Lorebook / Инъекция / Навыки / MCP</string>
+    <string name="assistant_detail_memory">Память</string>
+    <string name="assistant_detail_memory_desc">Переключатель памяти / Глобальная память / Ссылка на недавние чаты / Напоминание о времени</string>
+    <string name="assistant_detail_advanced">Дополнительно</string>
+    <string name="assistant_detail_advanced_desc">Фон / Пользовательский запрос / Теги</string>
+    <string name="assistant_detail_avatar_save_failed">Не удалось сохранить аватар</string>
+    <string name="assistant_detail_no_image_app">Нет приложения для открытия изображений</string>
+    <string name="assistant_detail_pick_image">Выбрать изображение</string>
+    <string name="assistant_detail_clear">Очистить</string>
+    <string name="assistant_detail_avatar">Аватар</string>
+    <string name="assistant_detail_avatar_image_set">Установлен аватар-изображение</string>
+    <string name="assistant_detail_avatar_emoji">Использовать Emoji-аватар</string>
+    <string name="assistant_detail_avatar_initial">Использовать первую букву имени</string>
+    <string name="assistant_detail_name">Имя</string>
+    <string name="assistant_detail_avatar_emoji_label">Аватар Emoji (1-2 символа, можно пусто)</string>
+    <string name="assistant_detail_global_default">Глобальный по умолчанию</string>
+    <string name="assistant_detail_exclusive_model">Эксклюзивная модель</string>
+    <string name="assistant_detail_temperature">Температура: %1$s</string>
+    <string name="assistant_detail_default">По умолчанию</string>
+    <string name="assistant_detail_use_default">Использовать по умолчанию</string>
+    <string name="assistant_detail_top_p_label">Top P (пусто для значения по умолчанию, 0-1)</string>
+    <string name="assistant_detail_max_tokens_label">Max Tokens (пусто для значения по умолчанию)</string>
+    <string name="assistant_detail_context_message_count">Количество сообщений в контексте: %1$d</string>
+    <string name="assistant_detail_reasoning_level">Уровень рассуждения</string>
+    <string name="assistant_detail_stream_output">Потоковый вывод</string>
+    <string name="assistant_detail_stream_output_desc">Если выключено, полный ответ возвращается сразу</string>
+    <!-- v1.0.19: Assistant field completion (summary / useAssistantName / allowGroupChat) -->
+    <string name="assistant_detail_summary">Однострочное резюме</string>
+    <string name="assistant_detail_summary_hint">Используется для списка групповых чатов и подзаголовков карточек помощников.</string>
+    <string name="assistant_detail_use_assistant_name">Показывать имя помощника в чате</string>
+    <string name="assistant_detail_use_assistant_name_desc">Если включено, имя модели заменяется именем помощника.</string>
+    <string name="assistant_detail_allow_group_chat">Разрешить присоединение к групповому чату</string>
+    <string name="assistant_detail_allow_group_chat_desc">Если этот параметр отключен, этот помощник не будет отображаться при выборе участников группового чата.</string>
+    <string name="assistant_detail_select_model">Выбрать эксклюзивную модель</string>
+    <string name="assistant_detail_close">Закрыть</string>
+    <string name="assistant_detail_global_default_selected">Глобальный по умолчанию (выбрано)</string>
+    <string name="assistant_detail_model_selected">%1$s (выбрано)</string>
+    <!-- Phase 6: Model picker UX improvements -->
+    <string name="assistant_detail_use_global_default_card">Использовать глобальную модель по умолчанию</string>
+    <string name="assistant_detail_using_global_model">Текущая глобальная модель по умолчанию: %1$s</string>
+    <string name="assistant_detail_model_hint">Подсказка: в настройках ассистента можно выбрать эксклюзивную модель. Разные ассистенты могут использовать разные AI-модели.</string>
+    <string name="assistant_detail_system_prompt_label">System Prompt (роль / правила)</string>
+    <string name="assistant_detail_message_template_label">Шаблон сообщений (поддерживает переменные {{date}} {{time}} {{session_id}} и др.)</string>
+    <string name="assistant_detail_preset_messages_label">Предустановленные сообщения JSON (продвинутое, напр. [{\"role\":\"system\",\"content\":\"...\"}])</string>
+    <string name="assistant_detail_ext_quick_message">Быстрые сообщения</string>
+    <string name="assistant_detail_ext_lorebook">книга знаний</string>
+    <string name="assistant_detail_ext_mode_injection">Инъекция Prompt</string>
+    <string name="assistant_detail_ext_skill">Навык</string>
+    <string name="assistant_detail_ext_mcp_server">MCP-сервер</string>
+    <string name="assistant_detail_ext_tool">Инструмент</string>
+    <string name="assistant_detail_no_options">Нет доступных вариантов</string>
+    <string name="assistant_detail_done">Готово</string>
+    <string name="assistant_detail_select_all">Выбрать все</string>
+    <string name="assistant_detail_clear_all">Очистить все</string>
+    <string name="assistant_detail_selected_count">Выбрано %1$d</string>
+    <string name="assistant_detail_enable_memory">Включить память</string>
+    <string name="assistant_detail_enable_memory_desc">Если выключено, ассистент не внедряет долгосрочную память</string>
+    <string name="assistant_detail_use_global_memory">Использовать глобальную память</string>
+    <string name="assistant_detail_use_global_memory_desc">При включении ассистент также использует общий профиль, закреплённые воспоминания и опыт. Его собственные факты и недавние чаты доступны при любом значении. Для новых ассистентов функция выключена по умолчанию.</string>
+    <string name="assistant_detail_recent_chats_reference">Ссылка на недавние чаты</string>
+    <string name="assistant_detail_recent_chats_reference_desc">Внедряет краткие сводки недавних чатов в промпт как контекст</string>
+    <string name="assistant_detail_time_reminder">Напоминание о времени</string>
+    <string name="assistant_detail_time_reminder_desc">Внедряет текущее время в разговор</string>
+    <string name="assistant_detail_manual_memory">Ручная память</string>
+    <string name="assistant_detail_add_memory">Добавить память</string>
+    <string name="assistant_detail_add_memory_desc">Вручную введите факты/знания для использования AI</string>
+    <string name="assistant_detail_saved_memory_count">Сохранённая память (%1$d)</string>
+    <string name="assistant_detail_global_pinned_count">Закреплённые глобальные воспоминания (%1$d)</string>
+    <string name="assistant_detail_global_pinned_enabled">Общая память включена, поэтому эти записи добавляются в контекст этого ассистента.</string>
+    <string name="assistant_detail_global_pinned_disabled">Только просмотр. Общая память отключена, поэтому эти записи не добавляются в контекст этого ассистента.</string>
+    <string name="assistant_detail_saved_memory_interaction_hint">Нажмите, чтобы развернуть · Удерживайте для редактирования</string>
+    <string name="assistant_detail_no_memory">Пока нет воспоминаний</string>
+    <string name="assistant_detail_delete_cd">Удалить</string>
+    <string name="assistant_detail_delete_memory">Удалить память</string>
+    <string name="assistant_detail_add_memory_dialog_title">Добавить память</string>
+    <string name="assistant_detail_memory_edit_missing">Это воспоминание не найдено или его содержимое недопустимо</string>
+    <string name="assistant_detail_edit_memory_dialog_title">Изменить воспоминание</string>
+    <string name="assistant_detail_input_fact">Введите факт/знание</string>
+    <string name="assistant_detail_save">Сохранить</string>
+    <string name="assistant_detail_cancel">Отмена</string>
+    <string name="assistant_detail_background_url_label">URL фонового изображения (пусто — без фона)</string>
+    <string name="assistant_detail_background_opacity">Непрозрачность фона: %1$d%%</string>
+    <string name="assistant_detail_gradient_background">Градиентный фон</string>
+    <string name="assistant_detail_gradient_background_desc">Накладывает градиентную маску на фоновое изображение (улучшает читаемость)</string>
+    <string name="assistant_detail_custom_headers_label">Пользовательские заголовки JSON (напр. {\"X-Custom\":\"value\"})</string>
+    <string name="assistant_detail_custom_bodies_label">Пользовательское тело JSON (напр. {\"user\":\"abc\"})</string>
+    <string name="assistant_detail_tags_label">Теги (через запятую, напр. Письмо, Перевод, Код)</string>
+
+    <!-- ===== Memory screen MemoryScreen ===== -->
+    <string name="memory_screen_title">Память</string>
+    <string name="memory_screen_back_cd">Назад</string>
+    <string name="memory_screen_search_fact_hint">Поиск метафактов…</string>
+    <string name="memory_screen_search_cd">Поиск</string>
+    <string name="memory_screen_add_fact_cd">Добавить метафакт</string>
+    <string name="memory_screen_compile_now_cd">Скомпилировать сейчас</string>
+    <string name="memory_screen_compile_now">Скомпилировать сейчас</string>
+    <string name="memory_tab_today">Сегодня</string>
+    <string name="memory_tab_week">Короткий срок</string>
+    <string name="memory_tab_longterm">Долгосрочный</string>
+    <string name="memory_tab_facts">Факты</string>
+    <!-- v1.0.51: memory backfill migration progress -->
+    <string name="memory_backfill_in_progress">Организация памяти истории %1$d/%2$d</string>
+    <string name="memory_backfill_done">Организованы исторические воспоминания, восстановлены %1$d сводки.</string>
+    <string name="memory_screen_layer_summary">Сводка сессии</string>
+    <string name="memory_screen_layer_compile">Результат компиляции</string>
+    <string name="memory_screen_layer_memory">Память</string>
+    <string name="memory_screen_delete_layer">Удалить %1$s</string>
+    <string name="memory_screen_confirm_delete_layer">Удалить %1$s? Действие необратимо.</string>
+    <string name="memory_screen_delete">Удалить</string>
+    <string name="memory_screen_cancel">Отмена</string>
+    <string name="memory_screen_edit_fact">Изменить метафакт</string>
+    <string name="memory_screen_edit_summary">Изменить сводку сессии</string>
+    <string name="memory_open_conversation">Открыть исходный диалог</string>
+    <string name="memory_conversation_meta">Ассистент %1$s · Пространство %2$s</string>
+    <string name="memory_screen_edit_compile">Изменить результат компиляции</string>
+    <string name="memory_screen_edit_memory">Изменить память</string>
+    <string name="memory_screen_no_match">Совпадающая память не найдена</string>
+    <string name="memory_screen_search_results">Результаты поиска (%1$d)</string>
+    <string name="memory_screen_fact_section">① Метафакты (Fact)</string>
+    <string name="memory_screen_no_fact">Пока нет метафактов</string>
+    <string name="memory_screen_fact_limit">Показаны первые 50 из %1$d</string>
+    <string name="memory_screen_summary_section">② Сводки сессий (Summary)</string>
+    <string name="memory_screen_no_summary">Пока нет сводок сессий</string>
+    <string name="memory_screen_compile_section">③ Результаты компиляции (Compile)</string>
+    <string name="memory_screen_no_compile">Пока нет результатов компиляции (ожидание запланированной компиляции)</string>
+    <string name="memory_screen_deep_section">④ Глубокая память (Deep)</string>
+    <string name="memory_screen_deep_desc">Слой Deep — обрабатывающий, без независимого хранилища</string>
+    <string name="memory_screen_fact_total">• Всего метафактов: %1$d</string>
+    <string name="memory_screen_summary_total">• Всего сводок сессий: %1$d</string>
+    <string name="memory_screen_last_updated">• Последнее обновление: %1$s</string>
+    <string name="memory_screen_none">Нет</string>
+    <string name="memory_screen_collapse">Свернуть</string>
+    <string name="memory_screen_expand">Развернуть</string>
+    <string name="memory_screen_edit_cd">Изменить</string>
+    <string name="memory_pin_cd">Закрепить</string>
+    <string name="memory_unpin_cd">Открепить</string>
+    <string name="memory_screen_delete_cd">Удалить</string>
+    <string name="memory_screen_load_failed">Сбой загрузки — полные детали ошибки</string>
+    <string name="memory_screen_copied_trace">Полный стек-трейс скопирован в буфер обмена</string>
+    <string name="memory_screen_copy_trace_cd">Копировать полный стек-трейс</string>
+    <string name="memory_screen_retry">Повторить</string>
+    <string name="memory_screen_input_content">Введите содержание…</string>
+    <string name="memory_screen_save">Сохранить</string>
+    <string name="memory_screen_not_running">Не запущено</string>
+    <string name="memory_screen_has_error">Обнаружены проблемы</string>
+    <string name="memory_screen_normal">Нормально</string>
+    <string name="memory_screen_overview">Обзор памяти</string>
+    <string name="memory_screen_fact_total_label">Всего метафактов</string>
+    <string name="memory_screen_last_compile">Последняя компиляция</string>
+    <string name="memory_screen_no_compile_time">Пока нет</string>
+    <string name="memory_screen_health">Состояние здоровья</string>
+    <string name="memory_screen_collapse_steps">Свернуть детали шагов</string>
+    <string name="memory_screen_view_steps">Просмотреть детали шагов</string>
+    <string name="memory_screen_failed_times">Сбой %1$d раз</string>
+    <string name="memory_screen_last_success">Последний успех: %1$s</string>
+    <string name="memory_screen_error">Ошибка: %1$s</string>
+    <!-- Строки, специфичные для MemorySectionViews.kt -->
+    <string name="memory_screen_input_hint">Введите содержание…</string>
+    <string name="memory_screen_empty_content">Пока нет содержимого</string>
+    <string name="memory_screen_empty_short_term">Пока нет краткосрочных воспоминаний</string>
+    <string name="memory_screen_input_day_hint">Введите содержание за день…</string>
+    <string name="memory_screen_system_status">Состояние системы памяти</string>
+    <string name="memory_screen_no_status_data">Пока нет данных о состоянии</string>
+    <string name="memory_screen_error_compact">Ошибка: %1$s</string>
+    <string name="memory_screen_recent_error">Недавний сбой: %1$s</string>
+    <string name="memory_screen_recent_success">Недавний успех: %1$s</string>
+    <!-- ===== Мастер разрешений (PermissionWizardScreen) ===== -->
+    <string name="permission_sui_detected">Бэкенд Sui обнаружен (root-пользователям не нужно устанавливать APK Shizuku; Sui предоставляет совместимый с Shizuku интерфейс)</string>
+    <string name="permission_global_action_title">Глобальные действия (action_id из ui_global_action)</string>
+    <string name="permission_refresh_status">Обновить статус</string>
+    <string name="permission_termux_title">Канал расширения Termux</string>
+    <string name="permission_termux_apk_installed">Termux установлен</string>
+    <string name="permission_termux_apk_not_installed">Termux не установлен (необязательный канал)</string>
+    <string name="permission_termux_permission_ok">Разрешение на выполнение выдано</string>
+    <string name="permission_termux_permission_missing">Разрешение на выполнение не выдано</string>
+    <string name="permission_termux_probe_ok">Внешний вызов настроен</string>
+    <string name="permission_termux_probe_failed">Внешний вызов не настроен</string>
+    <string name="permission_termux_probe_unchecked">Настройка не проверена</string>
+    <string name="permission_termux_get_btn">Получить Termux</string>
+    <string name="permission_termux_open_btn">Открыть Termux</string>
+    <string name="permission_termux_grant_btn">Выдать разрешение</string>
+    <string name="permission_termux_config_hint">В Termux выполните echo \'allow-external-apps = true\' &gt;&gt; ~/.termux/termux.properties и перезапустите Termux</string>
+    <string name="shizuku_apk_installed">APK Shizuku установлен</string>
+    <string name="shizuku_apk_not_installed">APK Shizuku не установлен</string>
+    <string name="shizuku_service_running">Служба Shizuku запущена</string>
+    <string name="shizuku_service_not_running">Служба Shizuku не запущена (запустите её в приложении Shizuku)</string>
+    <string name="shizuku_status_unauthorized_long">Muse не авторизован для использования Shizuku</string>
+    <string name="permission_open_shizuku_service">Открыть Shizuku, чтобы запустить службу</string>
+    <string name="permission_action_id_help">1 = Назад (BACK)\n2 = Главный экран (HOME)\n3 = Недавние задачи (RECENTS)\n4 = Панель уведомлений (NOTIFICATIONS)\n5 = Быстрые настройки (QUICK_SETTINGS)\n6 = Диалог питания (POWER_DIALOG)\n10 = Закрыть шторку уведомлений (DISMISS_NOTIFICATION_SHADE)\n\nБыстрые инструменты: ui_back (action_id=1), ui_home (action_id=2)</string>
+    <string name="memory_screen_ai_understanding">Как AI понимает вас</string>
+    <string name="memory_screen_no_summary_hint">Сводки пока нет; она будет создана по мере продолжения чата</string>
+    <string name="memory_screen_click_collapse">Нажмите, чтобы свернуть</string>
+    <string name="memory_screen_click_expand">Нажмите, чтобы развернуть полную сводку памяти</string>
+    <!-- v1.98: Experience library -->
+    <string name="memory_screen_experience_title">Библиотека опыта</string>
+    <string name="memory_screen_experience_desc">Накопленные лучшие практики и ноу-хау; AI будет ссылаться на них в похожих задачах</string>
+    <string name="memory_screen_experience_empty">Пока нет записей. Нажмите кнопку + в правом нижнем углу, чтобы добавить</string>
+    <string name="memory_screen_experience_add_cd">Добавить опыт</string>
+    <string name="memory_screen_experience_count">Всего %1$d записей</string>
+    <string name="memory_screen_experience_add_dialog_title">Новый опыт</string>
+    <string name="memory_screen_experience_edit_dialog_title">Изменить опыт</string>
+    <string name="memory_screen_experience_title_label">Заголовок</string>
+    <string name="memory_screen_experience_title_hint">Краткое описание, напр. «Тайм-аут корутины Kotlin»</string>
+    <string name="memory_screen_experience_content_label">Подробности</string>
+    <string name="memory_screen_experience_content_hint">Шаги, предостережения, фрагменты кода и т. д.</string>
+    <string name="memory_screen_experience_category_label">Категория (необязательно)</string>
+    <string name="memory_screen_experience_tags_label">Теги (через запятую, необязательно)</string>
+    <string name="memory_screen_experience_delete_confirm">Удалить этот опыт?</string>
+
+    <!-- v2.0: overview stat card -->
+    <string name="memory_overview_total">Всего фактов</string>
+    <string name="memory_overview_important">Важный/Критический</string>
+    <string name="memory_overview_layers">Слои памяти</string>
+
+    <!-- ===== Settings screen SettingsScreen ===== -->
+    <string name="settings_screen_title">Настройки</string>
+    <string name="settings_screen_back_cd">Назад</string>
+    <string name="settings_screen_appearance_group_cd">Группа «Внешний вид и персонализация»</string>
+    <string name="settings_screen_appearance">Внешний вид и персонализация</string>
+    <string name="settings_screen_group_assistants">Мои ассистенты</string>
+    <string name="settings_screen_group_models">Модели и возможности</string>
+    <string name="settings_screen_group_chat_display">Чат и отображение</string>
+    <string name="settings_screen_group_memory">Память и проактивные сообщения</string>
+    <string name="settings_screen_group_data_privacy">Данные и конфиденциальность</string>
+    <string name="settings_screen_group_tools">Инструменты и подключения</string>
+    <string name="settings_screen_group_about">О приложении и помощь</string>
+    <string name="settings_screen_user_profile_cd">Профиль, имя/персона, нажмите для входа</string>
+    <string name="settings_screen_user_profile">Профиль</string>
+    <string name="settings_screen_user_profile_desc">Обращение / Имя ассистента / Персона пользователя</string>
+    <string name="settings_screen_appearance_cd">Внешний вид, тема/размер шрифта, нажмите для входа</string>
+    <string name="settings_screen_appearance_label">Внешний вид</string>
+    <string name="settings_screen_appearance_desc">Тема / Размер шрифта</string>
+    <string name="settings_screen_chat_cd">Чат, отображение сообщений/взаимодействие/дополнительно, нажмите для входа</string>
+    <string name="settings_screen_chat">Чат</string>
+    <string name="settings_screen_chat_desc">Отображение сообщений / Взаимодействие / Дополнительно</string>
+    <string name="settings_screen_media_cd">Медиа, голос/TTS/аудиовыход, нажмите для входа</string>
+    <string name="settings_screen_media">Озвучивание</string>
+    <string name="settings_screen_media_desc">Голос / TTS / Аудиовыход</string>
+    <string name="settings_screen_memory_data_group_cd">Группа «Память и данные»</string>
+    <string name="settings_screen_memory_data">Память и данные</string>
+    <string name="settings_screen_memory_notification_cd">Память и уведомления, параметры памяти/библиотека опыта/политика уведомлений, нажмите для входа</string>
+    <string name="settings_screen_memory_notification">Память и уведомления</string>
+    <string name="settings_screen_memory_notification_desc">Параметры памяти / Библиотека опыта / Политика уведомлений</string>
+    <string name="settings_screen_data_backup_cd">Данные и резервное копирование, облачное резервное копирование/Web-сервер, нажмите для входа</string>
+    <string name="settings_screen_data_backup">Данные и резервное копирование</string>
+    <string name="settings_screen_data_backup_desc">Облачное резервное копирование / Web-сервер</string>
+    <string name="settings_screen_data_import_cd">Импорт данных, миграция данных из других приложений, нажмите для входа</string>
+    <string name="settings_screen_data_import">Импорт данных</string>
+    <string name="settings_screen_data_import_desc">Миграция из RikkaHub / Kelivo</string>
+    <string name="settings_screen_rag_cd">Поиск знаний, конфигурация RAG/Embedding/параметры блоков, нажмите для входа</string>
+    <string name="settings_screen_rag">Поиск знаний</string>
+    <string name="settings_screen_rag_desc">Конфигурация RAG / Embedding / Параметры блоков</string>
+    <!-- Data &amp; Privacy group (PII Guard) -->
+    <string name="settings_screen_privacy_group_cd">Данные &amp; Группа конфиденциальности</string>
+    <string name="settings_screen_pii_guard_cd">Защита конфиденциальности PII, маскирование конфиденциальной информации перед отправкой, переключение</string>
+    <string name="settings_screen_pii_guard">Защита конфиденциальности персональных данных</string>
+    <string name="settings_screen_pii_guard_desc">Автоматическая маска телефона/электронной почты/удостоверения личности и т. д. перед отправкой</string>
+    <string name="settings_screen_model_service">Модели и сервисы</string>
+    <string name="settings_screen_model_service_group_cd">Группа «Модели и сервисы»</string>
+    <string name="settings_screen_provider_cd">Провайдеры, управление AI-провайдерами, нажмите для входа</string>
+    <string name="settings_screen_provider">Провайдеры</string>
+    <string name="settings_screen_model_catalog_desc">Просмотр и исправление контекста, возможностей и максимального вывода моделей</string>
+    <string name="settings_screen_task_routing_desc">Уровневые модели для фоновых задач</string>
+    <string name="settings_screen_provider_desc">Управление AI-провайдерами</string>
+    <string name="settings_screen_assistant_cd">Ассистенты, управление ассистентами/мировыми книгами, нажмите для входа</string>
+    <string name="settings_screen_assistant">Ассистенты</string>
+    <string name="settings_screen_assistant_desc">Управление ассистентами и мировыми книгами</string>
+    <string name="settings_screen_agent_cd">Agent, выбор ассистента/совместная работа/проактивные сообщения, нажмите для входа</string>
+    <string name="settings_screen_agent_desc">Выбор ассистента / Совместная работа / Проактивные сообщения</string>
+    <string name="settings_screen_advanced_group_cd">Группа «Дополнительно»</string>
+    <string name="settings_screen_advanced">Дополнительно</string>
+    <string name="settings_screen_security_desc">Шаблон обмена / Настройки экспорта</string>
+    <string name="settings_screen_proxy_cd">%1$s, %2$s, нажмите для входа</string>
+    <string name="settings_screen_experiments_cd">Экспериментальное, переключатели нестабильных функций, нажмите для входа</string>
+    <string name="settings_screen_experiments">Экспериментальное</string>
+    <string name="settings_screen_experiments_desc">Переключатели нестабильных функций</string>
+    <string name="settings_screen_stats_cd">Статистика, просмотр статистики использования и теплокарты, нажмите для входа</string>
+    <string name="settings_screen_stats">Статистика</string>
+    <string name="settings_screen_stats_desc">Просмотр статистики использования и теплокарты</string>
+    <string name="quota_title">Дневная квота</string>
+    <string name="quota_plan_free">Бесплатно</string>
+    <string name="quota_plan_pro">Про</string>
+    <string name="quota_chats">Чаты</string>
+    <string name="quota_images">Генерация изображений</string>
+    <string name="quota_searches">Веб-поиск</string>
+    <!-- v1.0.4: Notification listener -->
+    <string name="settings_screen_notification_listener">Прослушиватель уведомлений</string>
+    <string name="connection_center_title">Центр подключений</string>
+    <string name="connection_center_desc">Каналы, MCP, плагины и одобрение инструментов</string>
+    <string name="channel_page_title">Каналы сообщений</string>
+    <string name="message_action_annotate">Заметка</string>
+    <string name="message_annotate_title">Заметки к сообщению</string>
+    <string name="message_annotate_hint">Напишите заметку…</string>
+    <string name="connector_page_title">Коннекторы</string>
+    <string name="connector_intro">Подключение внешних сервисов (календарь/заметки/код). Укажите эндпоинты и учётные данные приложения; авторизация через браузер, данные шифруются.</string>
+    <string name="connector_add">Добавить коннектор</string>
+    <string name="connector_connect">Подключить</string>
+    <string name="connector_connect_success">Подключено: %1$s</string>
+    <string name="connector_connect_failed">Ошибка подключения: %1$s</string>
+    <string name="connector_empty">Коннекторов пока нет.</string>
+    <string name="connector_config_corrupt">Конфигурация повреждена, данные сохранены, можно импортировать повторно</string>
+    <string name="connector_field_authorize">URL авторизации</string>
+    <string name="connector_field_token">URL токена</string>
+    <string name="connector_field_scope">Scope</string>
+    <string name="connector_field_client_id">Client ID</string>
+    <string name="connector_field_client_secret">Client Secret</string>
+    <string name="channel_inbox_title">Недавно полученные</string>
+    <string name="channel_intro_title">Отправка сообщений в ваш IM</string>
+    <string name="channel_intro">После настройки ассистент сможет отправлять сообщения в Feishu/QQ через инструменты. Учётные данные шифруются и хранятся только на этом устройстве.</string>
+    <string name="channel_add">Добавить канал</string>
+    <string name="channel_edit_title">Изменить канал</string>
+    <string name="channel_edit">Изменить</string>
+    <string name="channel_delete_confirm">Удалить этот канал?</string>
+    <string name="channel_empty">Каналов пока нет. Добавьте кнопкой выше.</string>
+    <string name="channel_save">Сохранить</string>
+    <string name="channel_field_platform">Платформа</string>
+    <string name="channel_field_name">Название</string>
+    <string name="channel_field_app_id">App ID</string>
+    <string name="channel_field_app_secret">App Secret</string>
+    <string name="channel_webhook_receive">Включить вебхуки платформы</string>
+    <string name="channel_webhook_receive_desc">По умолчанию отключено. Включайте только после настройки внешнего URL обратного вызова на платформе.</string>
+    <string name="channel_webhook_verification_token">Verification Token</string>
+    <string name="channel_webhook_feishu_hint">Только для вручную настроенных событийных callback Feishu. Укажите тот же Verification Token, что и в Feishu. Поддерживаются только незашифрованные callback; оставьте Encrypt Key пустым. Для постоянного подключения это не нужно.</string>
+    <string name="channel_webhook_qq_hint">Только для вручную настроенных callback QQ. Задайте здесь стойкий случайный токен и добавьте его в URL callback как ?token=... . Также нужны актуальные подпись Ed25519 и метка времени, проверяемые с помощью указанного выше App Secret. Для постоянного подключения это не нужно.</string>
+    <string name="channel_field_target">ID получателя</string>
+    <string name="channel_field_qq_type">Тип получателя QQ</string>
+    <string name="channel_type_group">Группа</string>
+    <string name="channel_type_c2c">Личный чат</string>
+    <string name="channel_auto_reply">Автоответ</string>
+    <string name="channel_auto_reply_desc">Автоматически запускает ассистента при получении сообщений и отвечает (каждый запуск расходует квоту модели)</string>
+    <string name="channel_err_ai_timeout">Тайм-аут вызова ИИ</string>
+    <string name="channel_err_no_assistant">Нет доступного ассистента для создания автоответа</string>
+    <string name="channel_weclaw_bind">Привязать сканированием</string>
+    <string name="channel_weclaw_bind_title">Привязка WeChat ClawBot</string>
+    <string name="channel_weclaw_bind_hint">Отсканируйте QR-код в WeChat для привязки</string>
+    <string name="channel_weclaw_bind_loading">Получение QR-кода…</string>
+    <string name="channel_weclaw_bind_failed">Не удалось получить QR-код: </string>
+    <string name="channel_weclaw_status_scaned">Отсканировано — подтвердите на телефоне</string>
+    <string name="channel_weclaw_status_expired">QR-код истёк, попробуйте снова</string>
+    <string name="channel_weclaw_unbound_hint">Не привязано (отсканируйте для получения данных)</string>
+    <string name="channel_telegram_hint">В App Secret укажите Bot Token от @BotFather; цель — chat_id (можно оставить пустым, автоответ вернётся отправителю).</string>
+    <string name="channel_dingtalk_hint">В App ID укажите ClientID (AppKey) приложения, в App Secret — ClientSecret; режим приёма бота установите Stream (без публичного URL).</string>
+    <string name="settings_screen_notification_listener_desc">Разрешите AI читать уведомления других приложений</string>
+    <!-- v1.0.4: AI tools -->
+    <string name="settings_screen_tools">Инструменты</string>
+    <string name="settings_screen_tools_desc">Просмотр инструментов и разрешений, которые может вызывать ИИ</string>
+    <string name="settings_screen_about_group_cd">Группа «О приложении»</string>
+    <string name="settings_screen_about">О приложении</string>
+    <string name="settings_screen_tutorial_cd">Руководство, вводный гайд, нажмите для входа</string>
+    <string name="settings_screen_tutorial">Руководство</string>
+    <string name="settings_screen_tutorial_desc">Вводный гайд / Описание функций</string>
+    <string name="settings_screen_about_cd">О приложении, версия/лицензии с открытым исходным кодом, нажмите для входа</string>
+    <string name="settings_screen_about_desc">Версия / Лицензии с открытым исходным кодом</string>
+    <string name="settings_screen_debug_log_cd">Отладочный журнал, просмотр журналов приложения и ошибок, нажмите для входа</string>
+    <string name="settings_screen_debug_log">Отладочный журнал</string>
+    <string name="settings_screen_debug_log_desc">Просмотр журналов приложения и ошибок</string>
+
+    <!-- v1.133: Check for updates entry in About group -->
+    <string name="settings_screen_check_update_cd">Проверьте наличие обновлений, вручную проверьте последнюю версию GitHub, нажмите, чтобы активировать</string>
+    <string name="settings_screen_check_update">Проверьте наличие обновлений</string>
+    <string name="settings_screen_check_update_desc">Проверьте GitHub на наличие новых выпусков</string>
+
+    <!-- v1.132: Settings search + group reorg -->
+    <string name="settings_search_cd">Поиск по настройкам</string>
+    <string name="settings_search_hint">Поиск по настройкам…</string>
+    <string name="settings_search_prompt">Введите ключевое слово для поиска по всем настройкам</string>
+    <string name="settings_search_no_results">совпадений</string>
+    <string name="settings_screen_cancel">Отмена</string>
+    <string name="settings_screen_data_backup_group">Данные и резервное копирование</string>
+
+    <!-- v1.97 gap8: Tools group (standalone translate page entry) -->
+    <string name="settings_screen_tools_group_cd">Группа «Инструменты»</string>
+    <string name="settings_screen_translate_cd">AI-перевод, отдельный инструмент перевода, нажмите для входа</string>
+    <string name="settings_screen_translate">AI-перевод</string>
+    <string name="settings_screen_translate_desc">Многоязычный перевод, поддержка вставки/копирования</string>
+
+    <!-- v1.25: Vision Assist (let text-only models "see" images via vision model) -->
+    <string name="settings_screen_vision">Визуальная помощь</string>
+    <string name="settings_screen_vision_desc">Позволяет текстовым моделям анализировать изображения через визуальную модель</string>
+    <string name="settings_vision_title">Визуальная помощь</string>
+    <string name="settings_vision_description">При использовании текстовой модели, не поддерживающей ввод изображений, автоматически вызывается визуальная модель для анализа изображений и внедрения описаний в разговор.</string>
+    <string name="settings_vision_enabled">Включить визуальную помощь</string>
+    <string name="settings_vision_enabled_subtitle">Автоматически отправлять изображения в визуальную модель для анализа</string>
+    <string name="settings_vision_model_section">Визуальная модель</string>
+    <string name="settings_vision_no_models">Не найдено моделей, поддерживающих визуальный ввод. Добавьте визуальную модель в настройках провайдера.</string>
+    <string name="vision_analysis_starting">Анализ изображения с помощью модели видения</string>
+    <string name="vision_analysis_done">Проанализировано %1$d изображение(я) с моделью зрения.</string>
+    <string name="vision_analysis_failed">Анализ изображения не удался: %1$s</string>
+    <string name="vision_assist_label">Vision Assist</string>
+    <string name="vision_assist_analyzing">Vision Assist · Анализ %1$d/%2$d</string>
+    <string name="vision_assist_done">Vision Assist · Готово</string>
+    <string name="vision_assist_failed">Vision Assist · Не удалось</string>
+
+    <!-- ===== Search screen SearchScreen ===== -->
+    <string name="search_back_cd">Назад</string>
+    <string name="search_cancel">Отмена</string>
+    <string name="search_placeholder">Поиск сессий/сообщений/настроек...</string>
+    <string name="search_empty_hint">Введите ключевые слова для поиска сессий, сообщений или настроек</string>
+    <string name="search_tab_sessions">Сессии</string>
+    <string name="search_tab_message_content">Содержание сообщения</string>
+    <string name="search_section_message_content">Содержание сообщения</string>
+    <string name="search_section_translate">Переводы</string>
+    <string name="search_section_quick_notes">Быстрые заметки</string>
+    <string name="search_suggestion_backup">Резервное копирование</string>
+    <string name="search_suggestion_today">Сегодня</string>
+    <string name="search_suggestion_summary">Краткое содержание</string>
+    <string name="search_suggestion_report">Отчет</string>
+    <string name="search_suggestion_idea">Идеи</string>
+    <string name="search_no_result">Совпадающих результатов не найдено</string>
+    <string name="search_try_other">Попробуйте другие ключевые слова</string>
+    <string name="search_section_sessions">Сессии</string>
+    <string name="search_section_messages">Сообщения</string>
+    <string name="search_section_settings">Настройки</string>
+    <string name="search_new_session">Новая сессия</string>
+    <string name="search_time_today">Сегодня %1$s</string>
+    <string name="search_time_yesterday">Вчера %1$s</string>
+    <string name="search_index_proactive_message">Проактивные сообщения</string>
+    <string name="search_index_chat_behavior">Настройки поведения чата</string>
+    <string name="search_index_deep_thinking">Глубокое мышление</string>
+    <string name="search_index_web_server">Web-сервер</string>
+    <string name="search_index_data_backup">Данные и резервное копирование</string>
+    <string name="search_index_cloud_backup">Облачное резервное копирование</string>
+    <string name="search_index_theme">Тема</string>
+    <string name="search_index_appearance">Настройки внешнего вида</string>
+    <string name="search_index_font_size">Размер шрифта</string>
+    <string name="search_index_pin_lock">PIN-блокировка</string>
+    <string name="search_index_security">Безопасность и обмен</string>
+    <string name="search_index_assistant_manage">Управление ассистентами</string>
+    <string name="search_index_assistants_page">Страница ассистентов</string>
+    <string name="search_index_memory">Память</string>
+    <string name="search_index_memory_settings">Настройки памяти и уведомлений</string>
+    <string name="search_index_skill">Навык</string>
+    <string name="search_index_skill_manage">Управление навыками</string>
+    <string name="search_index_knowledge">База знаний</string>
+    <string name="search_index_knowledge_page">Страница базы знаний</string>
+    <string name="search_index_scheduled_task">Запланированные задачи</string>
+    <string name="search_index_scheduled_task_page">Страница запланированных задач</string>
+    <string name="search_index_mcp">МКП</string>
+    <string name="search_index_model_service">Модели и сервисы</string>
+    <string name="search_index_provider">Провайдер</string>
+    <string name="search_index_user_profile">Персона пользователя</string>
+    <string name="search_index_user_profile_edit">Изменить персону пользователя</string>
+
+    <!-- ===== Skill screen SkillScreen ===== -->
+    <string name="skill_management">Управление навыками</string>
+    <string name="skill_back_cd">Назад</string>
+    <string name="skill_import_cd">Импортировать .skill.json</string>
+    <string name="skill_intro">Навыки — это инструменты, которые может вызывать LLM. Если включено, ассистент может вызывать их в разговоре по мере необходимости; если выключено, они не видны модели. Нажмите кнопку импорта в правом верхнем углу, чтобы импортировать файл .skill.json.</string>
+    <string name="skill_no_skill_title">Навыков пока нет</string>
+    <string name="skill_no_skill_subtitle">Скажите ИИ «создай навык XX» или нажмите + в правом нижнем углу, чтобы импортировать файл навыка</string>
+    <string name="skill_import_result">Результат импорта</string>
+    <string name="skill_got_it">Понятно</string>
+    <string name="skill_importing">Импорт</string>
+    <string name="skill_importing_detail">Чтение и анализ документа...</string>
+    <string name="skill_open_picker_failed">Не удалось открыть выбор файла: %1$s</string>
+    <string name="skill_imported">Импортировано: %1$s</string>
+    <string name="skill_recipe_export_cd">Экспорт набора навыков</string>
+    <string name="skill_recipe_imported">Набор импортирован: навыков %1$d</string>
+    <string name="skill_recipe_empty">Нет собственных навыков для экспорта</string>
+    <string name="skill_restore_default">Сбросить настройки</string>
+    <string name="skill_restored">Настройки %1$s восстановлены</string>
+    <string name="skill_import_failed">Не удалось сохранить: %1$s</string>
+    <string name="skill_import_error">Сбой импорта: %1$s</string>
+    <string name="skill_operation_failed">Сбой операции: %1$s</string>
+    <string name="skill_unnamed">(Безымянный)</string>
+    <string name="skill_enabled">Включено</string>
+    <string name="skill_disabled">Выключено</string>
+    <string name="skill_built_in">Встроено</string>
+    <string name="skill_built_in_seed">Встроено (сид)</string>
+    <string name="skill_custom">Пользовательский</string>
+    <string name="skill_detail_cd">Подробности</string>
+    <string name="skill_parameters_schema">Схема параметров</string>
+    <string name="skill_use_cases">Сценарии использования</string>
+    <string name="skill_label_category">Категория</string>
+    <string name="skill_label_implementation">Реализация</string>
+    <string name="skill_label_source">Источник</string>
+    <string name="skill_close">Закрыть</string>
+    <string name="skill_row_cd">%1$s, %2$s, нажмите для просмотра подробностей</string>
+    <string name="skill_use_case_read_file">Когда нужно прочитать заметки, конфиги или кэшированные файлы в приложении, LLM вызывает это автоматически.</string>
+    <string name="skill_use_case_write_file">Когда нужно сохранить заметки, создать документы или сохранить данные, LLM вызывает это автоматически.</string>
+    <string name="skill_use_case_http_get">Когда нужно запросить внешние API (например, погода, курсы валют), LLM вызывает это автоматически.</string>
+    <string name="skill_use_case_http_post">Когда нужно отправить данные во внешние сервисы (например, отправить webhook), LLM вызывает это автоматически.</string>
+    <string name="skill_use_case_web_search">Когда вы спрашиваете о реальном времени (новости, рыночные данные, последние обновления), LLM автоматически ищет в Интернете.</string>
+    <string name="skill_use_case_web_fetch">Если вы укажете веб-ссылку, LLM получит текст страницы; длинный результат сохраняется полностью и доступен по частям.</string>
+    <string name="skill_use_case_knowledge_search">Когда ваш вопрос касается документов базы знаний, LLM ищет в базе знаний, а не угадывает.</string>
+    <string name="skill_use_case_arxiv_search">Когда вы спрашиваете об академических статьях или направлениях исследований, LLM ищет в репозитории препринтов arXiv.</string>
+    <string name="skill_use_case_install_skill">Когда вы описываете новую потребность в возможности (например, «создай навык для проверки курсов валют»), LLM автоматически создаёт и устанавливает новый навык.</string>
+    <!-- ===== Assistant detail: regex rules ===== -->
+    <string name="assistant_detail_regex_title">Правила замены регулярными выражениями</string>
+    <string name="assistant_detail_regex_desc">Применяет замены regex к сообщениям пользователя/ассистента (замена имён ролей, фильтр чувствительных слов, нормализация формата и т. д.)</string>
+    <string name="assistant_detail_regex_add">Добавить правило</string>
+    <string name="assistant_detail_regex_empty">Правил пока нет. Нажмите «Добавить правило», чтобы создать</string>
+    <string name="assistant_detail_regex_edit_title">Изменить правило</string>
+    <string name="assistant_detail_regex_name_label">Название правила</string>
+    <string name="assistant_detail_regex_name_hint">Напр. Замена имени роли</string>
+    <string name="assistant_detail_regex_find_label">Поиск regex</string>
+    <string name="assistant_detail_regex_find_hint">Напр. \\bAI\\b</string>
+    <string name="assistant_detail_regex_replace_label">Строка замены</string>
+    <string name="assistant_detail_regex_replace_hint">Напр. Ассистент (поддерживает обратную ссылку $1)</string>
+    <string name="assistant_detail_regex_scope_label">Область действия</string>
+    <string name="assistant_detail_regex_scope_user">Только сообщения пользователя</string>
+    <string name="assistant_detail_regex_scope_assistant">Только сообщения ассистента</string>
+    <string name="assistant_detail_regex_scope_both">Оба (пользователь + ассистент)</string>
+    <string name="assistant_detail_regex_visual_only">Только отображаемая замена (не влияет на ввод LLM)</string>
+    <string name="assistant_detail_regex_enabled">Включено</string>
+    <string name="assistant_detail_regex_delete_cd">Удалить правило</string>
+    <string name="assistant_detail_regex_invalid">Ошибка синтаксиса регулярного выражения</string>
+
+    <!-- ===== QR code share/scan ===== -->
+    <string name="qr_share_title">Поделиться QR-кодом провайдера</string>
+    <string name="qr_share_cd">QR-код настройки провайдера</string>
+    <string name="qr_share_warning">Этот QR-код содержит API Key в открытом виде. Делитесь только с доверенными получателями</string>
+    <string name="qr_share_btn">Поделиться QR-кодом</string>
+    <string name="qr_scan_title">Сканировать QR-код</string>
+    <string name="qr_scan_pick_image">Выбрать изображение QR-кода из галереи</string>
+    <string name="qr_scan_pick_button">Выбрать изображение</string>
+    <string name="qr_scan_scanning">Распознавание…</string>
+    <string name="qr_scan_failed">Не удалось распознать QR-код. Убедитесь, что изображение чёткое, и попробуйте снова</string>
+    <string name="qr_scan_btn">Сканировать QR-код для импорта</string>
+    <string name="qr_import_success">Импортирован провайдер: %1$s</string>
+    <string name="qr_import_invalid">Неверный формат QR-кода; это не настройка провайдера</string>
+
+    <!-- ===== Stats screen ===== -->
+    <string name="stats_unknown_model">Неизвестная модель</string>
+    <string name="stats_default_assistant">Ассистент по умолчанию</string>
+    <string name="stats_deleted_session">Удалённая сессия</string>
+
+    <!-- ===== Assistant detail pages AssistantDetailPages ===== -->
+
+    <!-- ===== Memory screen MemoryScreen ===== -->
+    <!-- v1.98: Experience library -->
+
+    <!-- ===== Settings screen SettingsScreen ===== -->
+
+    <!-- v1.97 gap8: Tools group (standalone translate page entry) -->
+
+    <!-- ===== Search screen SearchScreen ===== -->
+
+    <!-- ===== Skill screen SkillScreen ===== -->
+    <!-- ===== Assistant detail: regex rules ===== -->
+
+    <!-- ===== QR code share/scan ===== -->
+
+    <!-- ===== Stats screen ===== -->
+
+    <!-- ===== P1-6: OAuth login (ProviderEditPage) ===== -->
+    <string name="oauth_login">OAuth вход</string>
+    <string name="oauth_login_success">OAuth вход выполнен</string>
+    <string name="oauth_login_failed">Ошибка входа OAuth: %1$s</string>
+    <string name="oauth_device_code_prompt">Посетите %1$s и введите код: %2$s</string>
+    <string name="oauth_polling">Ожидание авторизации...</string>
+    <string name="oauth_open_verification_uri">Открыть ссылку</string>
+
+    <!-- ===== P2-11: OAuth credential isolation (revoke / auto refresh) ===== -->
+    <string name="oauth_revoke">Отозвать доступ</string>
+    <string name="oauth_revoke_confirm">Отозвать доступ OAuth для этого провайдера?</string>
+    <string name="oauth_revoke_success">Доступ отозван</string>
+    <string name="oauth_token_expired">Срок действия авторизации истёк, войдите снова</string>
+    <string name="oauth_token_refreshed">Авторизация автоматически обновлена</string>
+    <string name="oauth_stored">Авторизация сохранена</string>
+
+    <!-- ===== P1-4: Tablet adaptation (responsive layout) ===== -->
+    <string name="settings_adaptive_layout">Адаптивный макет</string>
+
+    <!-- ===== P2-2: Upstream model diff sheet (ModelDiffSheet) ===== -->
+    <string name="model_diff_title">Различия моделей</string>
+    <string name="model_diff_new">Новые (%1$d)</string>
+    <string name="model_diff_removed">Удалённые (%1$d)</string>
+    <string name="model_diff_unchanged">Без изменений (%1$d)</string>
+    <string name="model_diff_add_all">Добавить все новые</string>
+    <string name="model_diff_remove_all">Удалить все отсутствующие</string>
+    <string name="model_diff_kept_badge">Удалено (оставлено)</string>
+    <string name="model_diff_apply">Применить выбранные</string>
+    <string name="model_diff_empty_new">Нет новых моделей</string>
+    <string name="model_diff_empty_removed">Нет удалённых моделей</string>
+
+    <!-- ===== P2-3: Ollama vision/tools capability inference ===== -->
+    <string name="ollama_vision_inferred">Зрение (вывод)</string>
+    <string name="ollama_tools_inferred">Использование инструментов (вывод)</string>
+    <!-- ===== P2-1: Provider collision detection (ProviderSection warning card) ===== -->
+    <string name="provider_collision_warning">Обнаружено %1$d возможно дублирующихся конфигураций провайдера</string>
+
+    <!-- ===== P2-4: Audit log (AuditLogPage) ===== -->
+    <string name="settings_audit_log">Журнал аудита</string>
+    <string name="audit_log_clear">Очистить журнал</string>
+    <string name="audit_log_empty">Нет записей журнала</string>
+    <string name="audit_log_clear_confirm">Подтвердить очистку всех журналов аудита?</string>
+    <string name="audit_log_category_all">Все</string>
+    <string name="audit_log_category_api">Вызов API</string>
+    <string name="audit_log_category_user">Действие пользователя</string>
+    <string name="audit_log_category_auth">Аутентификация</string>
+    <string name="audit_log_category_system">Система</string>
+    <string name="audit_log_search_hint">Поисковое действие/цель/подробности</string>
+    <string name="audit_log_clear_search">Очистить поиск</string>
+    <string name="audit_log_no_match">Нет соответствующих журналов</string>
+    <string name="audit_log_result_count">Показаны %1$d из %2$d</string>
+    <string name="audit_log_export">Экспорт JSON</string>
+    <string name="audit_log_export_empty">Нет журналов для экспорта</string>
+    <string name="audit_log_export_subject">журналы аудита muse — записи %1$d</string>
+    <string name="audit_log_export_chooser">Делитесь журналами аудита</string>
+    <string name="audit_log_export_failed">Ошибка экспорта: невозможно получить URI файла.</string>
+
+    <!-- ===== P2-8: Video Generation (SettingsScreen entry + VideoGenerationPage) ===== -->
+    <!-- Video generation default params entry (provider/model/duration/resolution) -->
+
+    <!-- ===== v1.133: 5 standalone sub-page entries split out from SettingsModelPage ===== -->
+    <string name="settings_screen_web_search">Веб-поиск</string>
+    <string name="settings_screen_web_search_desc">Поисковая система/ключ API/конечная точка</string>
+    <string name="settings_screen_channel_desc">Свяжите сообщения с Feishu / QQ / WeChat и другими платформами</string>
+    <string name="settings_screen_asr">Распознавание речи</string>
+    <string name="settings_screen_asr_desc">Преобразование речи в текст (Система/DashScope/Шаг)</string>
+    <string name="settings_screen_mcp">MCP-серверы</string>
+    <string name="settings_screen_mcp_desc">Серверы инструментов протокола контекста модели</string>
+    <string name="settings_screen_assistant_resources">Помощники Ресурсы</string>
+    <string name="settings_screen_assistant_resources_desc">Избранное / История / Быстрые сообщения / Быстрое введение / Навыки</string>
+    <string name="settings_assistant_resources_title">Помощники Ресурсы</string>
+    <string name="video_gen_title">Генерация видео</string>
+    <string name="video_gen_prompt">Опишите видео, которое хотите сгенерировать</string>
+    <string name="video_gen_model">Модель</string>
+    <string name="video_gen_duration">Длительность</string>
+    <string name="video_gen_resolution">Разрешение</string>
+    <string name="video_gen_reference_image">Справочное изображение (опционально)</string>
+    <string name="video_gen_select_image">Выбирайте из местных</string>
+    <string name="video_gen_clear_image">Очистить эталонное изображение</string>
+    <string name="video_gen_image_compressed">Сжатый: %1$s</string>
+    <string name="video_gen_image_load_failed">Не удалось загрузить изображение: %1$s</string>
+    <string name="video_gen_submit">Сгенерировать видео</string>
+    <string name="video_gen_pending">В очереди</string>
+    <string name="video_gen_processing">Генерация...</string>
+    <string name="video_gen_success">Успех</string>
+    <string name="video_gen_failed">Ошибка: %1$s</string>
+    <string name="video_gen_timeout">Тайм-аут генерации</string>
+    <string name="video_gen_open_video">Открыть видео</string>
+    <string name="video_gen_no_app">Нет приложения для воспроизведения видео</string>
+    <string name="video_gen_apikey_required">Введите API Key</string>
+    <string name="video_gen_provider">Провайдер</string>
+    <string name="video_gen_no_provider">Нет доступных провайдеров. Добавьте провайдера с API Key в меню провайдеров.</string>
+
+    <!-- ===== P2-5: SiliconFlow free model fallback (PresetProviders / ProviderEditPage) ===== -->
+    <string name="preset_siliconflow">SiliconFlow</string>
+    <string name="preset_siliconflow_free">Бесплатные модели SiliconFlow</string>
+    <string name="preset_siliconflow_free_desc">Набор бесплатных моделей с открытым исходным кодом от SiliconFlow</string>
+    <string name="siliconflow_fill_free_models">Заполнить бесплатными моделями</string>
+    <string name="siliconflow_fill_free_models_confirm">Заменить текущие модели списком бесплатных моделей SiliconFlow, подтвердить?</string>
+    <string name="memory_legacy_reset_hint">Старые данные памяти несовместимы и были сброшены; резервная копия сохранена</string>
+    <string name="free_model_service_unavailable">Бесплатная квота недоступна. Добавьте API-ключ или попробуйте позже.</string>
+
+    <!-- ===== P2-10: Provider plugin management (ProviderPluginPage) ===== -->
+    <string name="provider_plugins_title">Менеджер плагинов</string>
+    <string name="muse_plugins_external">Внешние плагины</string>
+    <string name="provider_plugins_empty">Нет плагинов</string>
+    <string name="provider_plugins_import">Импортировать плагин</string>
+    <string name="provider_plugins_delete">Удалить плагин</string>
+    <string name="provider_plugins_convert">Преобразовать в провайдера</string>
+    <string name="provider_plugins_import_failed">Ошибка импорта: %1$s</string>
+    <string name="provider_plugins_import_success">Импорт выполнен</string>
+    <string name="provider_plugins_delete_confirm">Подтвердить удаление этого плагина?</string>
+    <string name="provider_plugins_delete_confirm_named">Удалить плагин «%1$s»? После удаления он станет недоступен. Повторно импортируйте пакет для восстановления.</string>
+    <string name="muse_plugins_publisher_fingerprint">Издатель: %1$s · Отпечаток ключа: %2$s</string>
+    <string name="muse_plugins_developer_info">Информация для разработчиков</string>
+
+    <!-- ===== P2-7: Workspace (WorkspaceScreen + tool descriptions) ===== -->
+    <string name="workspace_title">Рабочее пространство</string>
+    <string name="workspace_desc">Локальное управление файлами и временное хранилище</string>
+    <string name="workspace_empty">Рабочее пространство пусто</string>
+    <string name="workspace_new_file">Новый файл</string>
+    <string name="workspace_new_folder">Новая папка</string>
+    <string name="workspace_file_name">Имя файла</string>
+    <string name="workspace_delete_confirm">Подтвердить удаление \"%1$s\"? Действие необратимо</string>
+    <string name="workspace_rename">Переименовать</string>
+    <string name="workspace_read_only_too_large">Файл слишком большой для предпросмотра (лимит 1 МБ)</string>
+    <string name="workspace_path_copied">Путь скопирован</string>
+
+    <string name="browser_address_bar">Введите URL или поисковый запрос</string>
+    <string name="browser_run_js">Выполнить JavaScript</string>
+    <string name="browser_back">Назад</string>
+    <string name="browser_forward">Вперёд</string>
+    <string name="browser_refresh">Обновить</string>
+    <string name="browser_close">Закрыть</string>
+
+    <!-- ===== P2-9: Voice Cloning (VoiceCloningPage + MediaSettingsPage entry) ===== -->
+    <string name="voice_cloning_title">Клонирование голоса</string>
+    <string name="voice_cloning_provider">Провайдер</string>
+    <string name="voice_cloning_api_key">API-ключ</string>
+    <string name="voice_cloning_new_voice">Клонировать новый голос</string>
+    <string name="voice_cloning_voice_name">Имя голоса</string>
+    <string name="voice_cloning_select_audio">Выбрать образец аудио</string>
+    <string name="voice_cloning_submit">Начать клонирование</string>
+    <string name="voice_cloning_list_empty">Нет клонированных голосов</string>
+    <string name="voice_cloning_list_title">Клонированные голоса</string>
+    <string name="voice_cloning_delete_confirm">Подтвердить удаление этого клонированного голоса?</string>
+    <string name="voice_cloning_success">Клонирование успешно</string>
+    <string name="voice_cloning_failed">Ошибка клонирования: %1$s</string>
+    <string name="voice_cloning_audio_required">Сначала выберите образец аудио</string>
+
+    <!-- ===== P2-13: Desktop adaptation (ChromeOS / Android Desktop) ===== -->
+    <!-- Shortcut descriptions (shown in settings/help pages) -->
+    <string name="desktop_shortcuts_send">Enter: Отправить</string>
+    <string name="desktop_shortcuts_newline">Shift+Enter: Новая строка</string>
+    <string name="desktop_shortcuts_search">Ctrl+K: Поиск</string>
+    <string name="desktop_shortcuts_new_chat">Ctrl+N: Новый чат</string>
+    <string name="desktop_shortcuts_settings">Ctrl+,: Настройки</string>
+    <string name="desktop_shortcuts_copy_reply">Ctrl+Shift+C: Копировать ответ</string>
+    <string name="desktop_shortcuts_close">Esc: Закрыть</string>
+    <!-- Right-click context menu items -->
+    <string name="desktop_context_copy">Копировать</string>
+    <string name="desktop_context_regenerate">Перегенерировать</string>
+    <string name="desktop_context_delete">Удалить</string>
+    <string name="desktop_context_share">Поделиться</string>
+
+    <!-- P2-12 Rich Text Input -->
+    <string name="settings_rich_input">Расширенный текстовый ввод</string>
+    <string name="settings_rich_input_desc">Показывать панель инструментов форматирования Markdown над полем ввода</string>
+    <string name="rich_input_format">Формат</string>
+    <string name="rich_input_bold">Жирный</string>
+    <string name="rich_input_italic">Курсив</string>
+    <string name="rich_input_inline_code">Встроенный код</string>
+    <string name="rich_input_code_block">Блок кода</string>
+    <string name="rich_input_quote">Цитата</string>
+    <string name="rich_input_ulist">Маркированный список</string>
+    <string name="rich_input_olist">Нумерованный список</string>
+    <string name="rich_input_link">Ссылка</string>
+    <string name="rich_input_link_text">Текст ссылки</string>
+    <string name="rich_input_link_url">URL ссылки</string>
+    <string name="rich_input_link_insert">Вставить ссылку</string>
+    <string name="chat_compressing_banner">Сжатие истории разговора…</string>
+    <string name="chat_updating_memory_banner">Обновление памяти…</string>
+    <string name="chat_draft_restored">Черновик восстановлен</string>
+    <string name="chat_loading_more_history">Загрузка истории…</string>
+    <string name="chat_performance_indicator">Показано %1$d из %2$d</string>
+    <string name="chat_video_generating">Генерация видео, может занять десятки секунд…</string>
+    <string name="ocr_processing_hint">Распознавание текста на изображении…</string>
+    <string name="search_searching">Поиск…</string>
+    <string name="settings_screen_quick_notes">Быстрые заметки</string>
+    <string name="settings_screen_quick_notes_cd">Быстрые заметки — записывайте идеи, нажмите, чтобы открыть</string>
+    <string name="settings_screen_quick_notes_desc">Записывайте идеи: категории/напоминания/шифрование</string>
+    <string name="settings_vision_manual_selected">Выбрать вручную</string>
+    <string name="settings_vision_probe_button">Проверить выбранную модель зрения</string>
+    <string name="settings_vision_probe_desc">Отправляет встроенное тестовое изображение выбранной модели зрения, чтобы проверить поддержку визуального ввода.</string>
+    <string name="settings_vision_probe_disabled">Включите Визуальный помощник и сначала выберите модель зрения.</string>
+    <string name="settings_vision_probe_failed">Ошибка теста: %1$s</string>
+    <string name="settings_vision_probe_no_model">Сначала выберите модель зрения.</string>
+    <string name="settings_vision_probe_running">Тестирование…</string>
+    <string name="settings_vision_probe_section">Пробный тест</string>
+    <string name="settings_vision_probe_success">Успешно: модель зрения вернула описание из %1$d символов.</string>
+    <string name="settings_vision_show_all_models">Показать все модели</string>
+    <string name="settings_vision_show_all_models_subtitle">Расширенный режим реле: показывает все модели, можно вручную выбрать модель зрения, не обнаруженную автоматически</string>
+    <string name="skill_delete">Удалить</string>
+    <string name="skill_delete_confirm_message">Удалить «%1$s»? Это действие нельзя отменить.</string>
+    <string name="skill_delete_confirm_title">Подтверждение удаления</string>
+    <string name="skill_delete_failed_ui">Ошибка удаления: %1$s</string>
+    <string name="tool_resume_starting">Возобновление прерванного вызова инструмента…</string>
+    <string name="tool_resume_step">Выполняется %1$s (%2$d/%3$d)…</string>
+    <string name="tts_not_ready">TTS инициализируется, повторите позже</string>
+    <string name="chat_jump_to_unread">К первому непрочитанному · %1$d</string>
+    <string name="chat_list_reorder">Перетащите для сортировки</string>
+    <!-- 前端修复 (i18n-3.x): 设置页搜索索引 SettingsEntry title i18n(临时复制中文,后续补译) -->
+    <string name="settings_screen_entry_tts_playback">Озвучивание TTS</string>
+    <string name="settings_screen_entry_api_key">API Key</string>
+    <string name="settings_screen_entry_ocr">Распознавание текста OCR</string>
+    <string name="settings_screen_entry_archived">Архивные чаты</string>
+    <string name="settings_screen_entry_font_size">Размер шрифта</string>
+    <string name="settings_screen_entry_theme_mode">Режим темы</string>
+    <string name="settings_screen_entry_scheduled_theme">Запланированная тема</string>
+    <string name="settings_screen_entry_enter_send">Отправка по Enter</string>
+    <string name="settings_screen_entry_auto_scroll">Автопрокрутка</string>
+    <string name="settings_screen_entry_timestamps">Метки времени сообщений</string>
+    <string name="settings_screen_entry_tts_speed">Скорость TTS</string>
+    <string name="settings_screen_entry_memory_toggle">Переключатель памяти</string>
+    <string name="settings_screen_entry_proxy_switch">Переключатель прокси</string>
+    <string name="settings_screen_entry_rag_model">Модель поиска</string>
+    <string name="settings_screen_entry_chunking">Стратегия разбиения</string>
+    <string name="settings_screen_entry_tool_approval">Режим одобрения инструментов</string>
+    <string name="settings_screen_entry_collab">Совместный ассистент</string>
+    <string name="settings_screen_archived_desc">Просмотр и восстановление архивных диалогов</string>
+    <string name="settings_screen_share">Поделиться</string>
+    <string name="settings_share_page_title">Поделиться</string>
+    <string name="settings_search_result_count">Найдено результатов: %1$d</string>
+    <string name="settings_screen_miniphone_desc">Ранняя версия экспериментальной функции</string>
+    <string name="model_diff_clear_add">Очистить новые модели</string>
+    <string name="model_diff_clear_remove">Очистить удалённые модели</string>
+    <!-- v1.0.85: release localization -->
+    <string name="workspace_import_file">Импортировать из файлового менеджера</string>
+    <string name="workspace_import_success">Импортировано: %1$d</string>
+    <string name="workspace_import_failed">Не удалось импортировать файл: %1$s</string>
+    <string name="chat_fork_success">Создан новый диалог из текущей беседы</string>
+    <string name="chat_list_archived_empty">Архивированных диалогов нет</string>
+    <string name="chat_list_archived_entry">В архиве (%1$d)</string>
+    <string name="chat_list_archived_restore">Восстановить</string>
+    <string name="chat_list_archived_toast">Архивировано. Восстановить можно в разделе \"Архив\".</string>
+    <string name="chat_list_edit">Изменить</string>
+    <string name="chat_list_edit_archive">В архив</string>
+    <string name="chat_list_edit_delete">Удалить</string>
+    <string name="chat_list_edit_done">Обработано элементов: %1$d</string>
+    <string name="chat_list_edit_exit">Выйти</string>
+    <string name="chat_list_edit_select_all">Выбрать всё</string>
+    <string name="chat_list_restored_toast">Восстановлено</string>
+    <string name="greeting_afternoon">Добрый день</string>
+    <string name="greeting_days_birthday">День рождения через %1$d дн.</string>
+    <string name="greeting_days_event">%1$d дн. — %2$s: %3$s</string>
+    <string name="greeting_evening">Добрый вечер</string>
+    <string name="greeting_late_night">Уже глубокая ночь</string>
+    <string name="greeting_memory_0">%1$s ещё не очень хорошо тебя знает</string>
+    <string name="greeting_memory_few">%1$s постепенно узнаёт тебя</string>
+    <string name="greeting_memory_huge">%1$s понимает тебя лучше всех и запомнил %2$d воспоминаний</string>
+    <string name="greeting_memory_many">Ты и %1$s уже хорошо знакомы</string>
+    <string name="greeting_memory_max">%1$s разговаривает с тобой обо всём</string>
+    <string name="greeting_memory_mid">%1$s запомнил %2$d воспоминаний и становится ближе</string>
+    <string name="greeting_morning">Доброе утро</string>
+    <string name="greeting_noon">Добрый день</string>
+    <string name="greeting_today_birthday">Сегодня день рождения</string>
+    <string name="greeting_tomorrow_birthday">Завтра день рождения</string>
+    <string name="greeting_tomorrow_event">Завтра %1$s: %2$s</string>
+    <string name="muse_plugins_confirmed">Плагин подтверждён и включён</string>
+    <string name="muse_plugins_draft">Ожидает подтверждения (не будет выполняться)</string>
+    <string name="muse_plugins_draft_saved">Сохранено как отключённый черновик</string>
+    <string name="muse_plugins_install_confirm_action">Подтвердить установку и включить</string>
+    <string name="muse_plugins_install_confirm_capabilities">Заявленные возможности: %1$s</string>
+    <string name="muse_plugins_install_confirm_code">Точка входа: %1$d байт · доп. файлов: %2$d · SHA-256 входа: %3$s</string>
+    <string name="muse_plugins_install_confirm_summary">Версия %1$s · Автор %2$s · Внешний код будет выполняться в ограниченной JS-песочнице</string>
+    <string name="muse_plugins_install_confirm_title">Подтверждение установки: %1$s</string>
+    <string name="muse_plugins_install_confirm_tools">Предоставляет инструменты: %1$s</string>
+    <string name="muse_plugins_install_confirm_warning">Неподписанный внешний код. Он не будет обращаться к браузеру или сети; устанавливается и включается только после вашего подтверждения.</string>
+    <string name="muse_plugins_install_save_draft">Только сохранить отключённый черновик</string>
+    <string name="muse_plugins_install_trust_publisher_action">Довериться издателю и установить</string>
+    <string name="muse_plugins_install_trusted_warning">Подпись действительна, и издатель доверен этому устройству.</string>
+    <string name="muse_plugins_install_unsigned_warning">Неподписанный внешний код можно только сохранить как отключённый черновик; его нельзя установить или выполнить.</string>
+    <string name="muse_plugins_install_untrusted_warning">Подпись проверена, но издатель неизвестен (%1$s). Проверьте отпечаток открытого ключа %2$s; установка и включение возможны только после доверия.</string>
+    <string name="muse_plugins_none">Нет</string>
+    <string name="muse_plugins_review_failed">Проверка безопасности не пройдена: %1$s</string>
+    <string name="muse_plugins_review_tools">Инструменты: %1$s</string>
+    <string name="muse_plugins_security_rejected">Плагин не соответствует политике безопасности внешних плагинов</string>
+    <string name="muse_plugins_signature_invalid">Недействительная подпись</string>
+    <string name="muse_plugins_signature_status">Статус подписи: %1$s</string>
+    <string name="muse_plugins_signature_trusted">Проверена и доверена этим устройством</string>
+    <string name="muse_plugins_signature_unsigned">Без подписи</string>
+    <string name="muse_plugins_signature_unsupported">Неподдерживаемый формат подписи</string>
+    <string name="muse_plugins_signature_untrusted">Подпись действительна, но издателю не доверяют</string>
+    <string name="muse_plugins_trust_catalog_empty">Сейчас используется встроенная официальная корневая система доверия; собственных корней нет.</string>
+    <string name="muse_plugins_trust_catalog_remove_action">Удалить</string>
+    <string name="muse_plugins_trust_catalog_removed">Корень доверия каталога удалён; кэш маркетплейса очищен</string>
+        <!-- B7-01: Plugin configuration contribution -->
+    <string name="muse_plugins_config">Настройки плагина</string>
+    <string name="muse_plugins_open_panel">Открыть панель</string>
+    <string name="muse_plugins_config_save_success">Настройки сохранены</string>
+    <string name="muse_plugins_config_load_failed">Не удалось загрузить настройки</string>
+    <string name="muse_plugins_trust_catalog_title">Корень доверия каталога</string>
+    <string name="muse_plugins_trust_publisher_fingerprint">Отпечаток %1$s</string>
+    <string name="muse_plugins_trust_publishers_empty">Вы ещё не доверились ни одному издателю. При установке плагина неизвестного издателя вам будет предложено подтвердить доверие.</string>
+    <string name="muse_plugins_trust_publishers_title">Доверенные издатели</string>
+    <string name="muse_plugins_trust_revoke_action">Отозвать доверие</string>
+    <string name="muse_plugins_trust_revoke_confirm">После отзыва установленные плагины издателя %1$s будут автоматически отключены, а для повторной установки или обновления потребуется снова явное доверие.</string>
+    <string name="muse_plugins_trust_revoke_done">Доверие этому издателю отозвано; связанные плагины отключены</string>
+    <string name="muse_plugins_trust_revoke_title">Отозвать доверие издателю?</string>
+    <string name="muse_plugins_trust_title">Управление доверием</string>
+    <string name="muse_plugins_unknown_author">Неизвестен</string>
+    <string name="muse_plugins_unsigned_draft_only">Без подписи: можно сохранить только как отключённый черновик</string>
+    <string name="connector_error_activity_unavailable">Не удалось получить Activity</string>
+    <string name="channel_conversation_role_assistant">Ассистент</string>
+    <string name="channel_conversation_role_user">Собеседник</string>
+    <string name="channel_conversation_turn_line">%1$s: %2$s</string>
+    <!-- v2.2.1: отдельный провайдер доступности (необязательное улучшение) -->
+    <string name="permission_a11y_provider_title">Отдельный провайдер доступности</string>
+    <string name="permission_a11y_provider_installed">Отдельная версия установлена (переживает обновления)</string>
+    <string name="permission_a11y_provider_not_installed">Не установлена (необязательно)</string>
+    <string name="permission_a11y_provider_desc">После установки отдельной версии разрешение специальных возможностей сохраняется при обновлении или переустановке основного приложения. Необязательно.</string>
+    <string name="permission_a11y_provider_install_btn">Установить отдельную версию</string>
+    <string name="permission_a11y_provider_install_failed">Не удалось открыть установщик</string>
+    <!-- v2.2.1: привязка по QR WeChat — ошибка сети / автообновление -->
+    <string name="channel_weclaw_status_unstable">Ошибка сети, повторная попытка…</string>
+    <string name="channel_weclaw_status_refreshed">QR-код истёк и был обновлён — отсканируйте заново</string>
+</resources>

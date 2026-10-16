@@ -1,0 +1,75 @@
+# Git ignore for Muse project submodule
+.gradle/
+.idea/
+.kotlin/
+build/
+build_alt/
+*.iml
+*.ipr
+*.iws
+local.properties
+keystore.properties
+*.keystore
+*.jks
+*.env
+*.log
+.DS_Store
+Thumbs.db
+
+# 项目文档（仅保留首页 README）
+/docs/*
+!/docs/README.md
+!/docs/README_EN.md
+!/docs/ENGINEERING_DISCIPLINE.md
+!/docs/后台保活与进程恢复.md
+!/docs/回归资产清单.md
+!/docs/rebuild/
+!/docs/rebuild/**
+!/docs/assets/
+!/docs/assets/readme/
+!/docs/assets/readme/**
+
+# 贡献/安全/计划文档（项目代码不包含这些）
+CONTRIBUTING.md
+!/CONTRIBUTING.md
+SECURITY.md
+Muse_Product_Enhancement_Plan.md
+_skill_existing.txt
+report_*.txt
+
+# 临时文件
+compile_log2.txt
+__pycache__/
+*.pyc
+tmp_head.kt
+tmp_*.kt
+build_log*.txt
+build-log*.txt
+build_output*.txt
+.tmp/
+
+# 测试数据库产物
+*.db
+*.db-wal
+*.db-shm
+
+# 软著申请材料
+软件著作权申请材料/
+
+# 发布 APK 不入库(仅挂 GitHub Release 附件)
+releases/**/*.apk
+
+# F-05: 发布 manifest 为构建产物(每次构建生成,不入库)
+release/
+
+# README 预览产物(gen_preview.py 随时重新生成,不入库)
+docs/assets/readme/preview.html
+docs/assets/readme/preview-*.png
+
+# CMake 构建产物(终端二期原生构建)
+.cxx/
+**/.cxx/
+
+# P0 内置运行时产物(由 tools/runtime-pack 脚本生成；分发走独立资产渠道,不入库)
+app/src/main/jniLibs/
+app/src/main/assets/muse-runtime-assets.zip

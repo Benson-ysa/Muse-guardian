@@ -1,0 +1,230 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- ===== ToolsScreen.kt ===== -->
+    <!-- Title and intro -->
+    <string name="tools_screen_title">AI 도구</string>
+    <string name="tools_intro_what">도구는 알림 읽기, 계산, 코드 실행 등과 같이 AI가 호출할 수 있는 기능입니다.</string>
+    <string name="tool_exec_empty_result">도구 %1$s가 완료되었지만 표시할 내용을 반환하지 않았습니다.</string>
+    <string name="tools_intro_manage">어시스턴트 상세 페이지 → 확장 기능 → 도구에서 어시스턴트별 도구를 활성화/비활성화할 수 있습니다.</string>
+
+    <!-- Stats -->
+    <string name="tools_stats_count">%1$d 도구 · %2$d 고위험</string>
+
+    <!-- Built-in plugins -->
+    <string name="tools_plugins_section">내장 플러그인</string>
+    <string name="tools_plugins_desc">플러그인은 필요한 권한과 활성화 시기를 선언하는 대략적인 기능 세트입니다.</string>
+
+    <!-- Risk level badges -->
+    <string name="tools_risk_safe">안전한</string>
+    <string name="tools_risk_normal">정상</string>
+    <string name="tools_risk_high">높은</string>
+
+    <!-- Tool detail dialog -->
+    <string name="tools_detail_category_label">카테고리: %1$s</string>
+    <string name="tools_detail_params">매개변수</string>
+    <string name="tools_detail_sandbox_title">샌드박스 보안 제한</string>
+    <string name="tools_detail_sandbox_content">• 시스템 페이지에서 격리된 WebView V8 엔진 기반\n• 가져오기/XHR/WebSocket 비활성화, 네트워크 액세스 없음\n• blockNetworkLoads는 모든 네트워크 요청을 가로챕니다\n• 무한 루프를 방지하기 위한 기본 제한 시간은 10초입니다\n• 호출 전 사용자 확인 필요(고위험 도구 권한)</string>
+
+    <!-- Parameter row -->
+    <string name="tools_param_required">필수의</string>
+
+    <!-- Tool categories -->
+    <string name="tools_category_built_in">내장 도구</string>
+    <string name="tools_category_local">로컬 도구</string>
+    <string name="tools_category_mcp">MCP 도구</string>
+
+    <!-- Plugin capability captions -->
+    <string name="tools_permissions_label">권한:</string>
+    <string name="tools_activation_label">활성화:</string>
+
+    <!-- ===== v1.0.20: ToolsSettingsPage.kt (Tool Approval Management) ===== -->
+    <!-- Title and search -->
+    <string name="tools_settings_title">도구 승인</string>
+    <string name="tools_settings_search_hint">검색 도구 이름 또는 설명</string>
+
+    <!-- Stats (N tools · always-allow X · ask Y · always-deny Z) -->
+    <string name="tools_settings_stats">%1$d 도구 · 항상 허용 %2$d · 요청 %3$d · 항상 거부 %4$d</string>
+
+    <!-- Risk level group titles -->
+    <string name="tools_settings_section_safe">안전한 도구(읽기 전용/쿼리)</string>
+    <string name="tools_settings_section_normal">일반 도구(국소적 부작용)</string>
+    <string name="tools_settings_section_high">고위험 도구(되돌릴 수 없음/민감함)</string>
+
+    <!-- Empty state -->
+    <string name="tools_settings_empty">일치하는 도구를 찾을 수 없습니다.</string>
+
+    <!-- Footer policy explanation -->
+    <string name="tools_settings_footer_section">정책 설명</string>
+    <string name="tools_settings_policy_always_allow">항상 허용</string>
+    <string name="tools_settings_policy_always_allow_desc">도구 호출은 자동으로 승인됩니다.</string>
+    <string name="tools_settings_policy_ask">매번 물어보세요</string>
+    <string name="tools_settings_policy_ask_desc">호출 전에 승인 카드가 표시됩니다.</string>
+    <string name="tools_settings_policy_always_deny">항상 거부</string>
+    <string name="tools_settings_policy_always_deny_desc">도구가 비활성화되었습니다.</string>
+
+    <!-- Short labels for the per-tool segmented control -->
+    <string name="tools_settings_policy_always_allow_short">허용하다</string>
+    <string name="tools_settings_policy_ask_short">묻다</string>
+    <string name="tools_settings_policy_always_deny_short">부인하다</string>
+    <string name="tools_empty_title">등록된 도구가 없습니다</string>
+    <string name="tools_empty_subtitle">플러그인 또는 MCP 설정을 확인한 후 이 페이지를 다시 열어 주세요.</string>
+
+    <!-- I18N-01 batch2: ToolCallVisuals 摘要/标签 -->
+    <string name="tool_summary_add_calendar_event">달력 일정을 추가했습니다</string>
+    <string name="tool_summary_add_contact">연락처를 추가했습니다</string>
+    <string name="tool_summary_calculator">계산했습니다</string>
+    <string name="tool_summary_calendar_today">달력을 확인했습니다</string>
+    <string name="tool_summary_cancel_reminder">알림을 취소했습니다</string>
+    <string name="tool_summary_clipboard_read">클립보드를 읽었습니다</string>
+    <string name="tool_summary_clipboard_write">클립보드에 작성했습니다</string>
+    <string name="tool_summary_cover_generation">표지를 생성했습니다</string>
+    <string name="tool_summary_current_status">상태를 확인했습니다</string>
+    <string name="tool_summary_delegate_agent">하위 에이전트에 위임했습니다</string>
+    <string name="tool_summary_dns_lookup">DNS 조회</string>
+    <string name="tool_summary_download">파일을 다운로드했습니다</string>
+    <string name="tool_summary_execute_code">코드를 실행했습니다</string>
+    <string name="tool_summary_execute_javascript">스크립트를 실행했습니다</string>
+    <string name="tool_summary_execute_shell">명령을 실행했습니다</string>
+    <string name="tool_summary_generate_image">이미지를 생성했습니다</string>
+    <string name="tool_summary_generate_password">비밀번호를 생성했습니다</string>
+    <string name="tool_summary_generate_video">동영상을 생성했습니다</string>
+    <string name="tool_summary_get_battery_info">배터리를 확인했습니다</string>
+    <string name="tool_summary_get_contacts_list">연락처를 읽었습니다</string>
+    <string name="tool_summary_get_cpu_info">CPU를 확인했습니다</string>
+    <string name="tool_summary_get_current_time">시간을 확인했습니다</string>
+    <string name="tool_summary_get_device_info">기기 정보를 읽었습니다</string>
+    <string name="tool_summary_get_location">위치를 확인했습니다</string>
+    <string name="tool_summary_get_memory_info">메모리를 확인했습니다</string>
+    <string name="tool_summary_get_network_info">네트워크를 확인했습니다</string>
+    <string name="tool_summary_get_public_ip">공인 IP를 확인했습니다</string>
+    <string name="tool_summary_get_recent_notifications">알림을 읽었습니다</string>
+    <string name="tool_summary_get_storage_info">저장 공간을 확인했습니다</string>
+    <string name="tool_summary_get_weather">날씨를 확인했습니다</string>
+    <string name="tool_summary_hash_text">해시를 계산했습니다</string>
+    <string name="tool_summary_json_pretty">JSON을 포맷했습니다</string>
+    <string name="tool_summary_list_files">파일을 나열했습니다</string>
+    <string name="tool_summary_list_installed_apps">앱을 나열했습니다</string>
+    <string name="tool_summary_list_reminders">알림을 나열했습니다</string>
+    <string name="tool_summary_make_phone_call">전화를 걸었습니다</string>
+    <string name="tool_summary_notify">알림을 보냈습니다</string>
+    <string name="tool_summary_open_app">앱을 열었습니다</string>
+    <string name="tool_summary_open_maps">지도를 열었습니다</string>
+    <string name="tool_summary_open_url">웹페이지를 열었습니다</string>
+    <string name="tool_summary_pin_memory">기억을 고정했습니다</string>
+    <string name="tool_summary_ping_host">호스트에 ping을 보냈습니다</string>
+    <string name="tool_summary_plugin_market_install">플러그인을 설치했습니다</string>
+    <string name="tool_summary_plugin_market_search">플러그인 마켓을 검색했습니다</string>
+    <string name="tool_summary_plugin_market_uninstall">플러그인을 제거했습니다</string>
+    <string name="tool_summary_plugin_market_set_enabled">플러그인을 켜거나 껐습니다</string>
+    <string name="tool_summary_find_tools">도구 라이브러리를 검색했습니다</string>
+    <string name="tool_summary_device_shell">기기 명령을 실행했습니다</string>
+    <string name="tool_summary_terminal_exec">터미널 명령을 실행했습니다</string>
+    <string name="tool_summary_termux_exec">Termux 명령을 실행했습니다</string>
+    <string name="tool_summary_proactive_message_wish">프로액티브 메시지를 저장했습니다</string>
+    <string name="tool_summary_quick_note_add">빠른 메모를 만들었습니다</string>
+    <string name="tool_summary_quick_note_delete">빠른 메모를 삭제했습니다</string>
+    <string name="tool_summary_quick_note_get">빠른 메모를 읽었습니다</string>
+    <string name="tool_summary_quick_note_list">빠른 메모를 나열했습니다</string>
+    <string name="tool_summary_quick_note_pin">빠른 메모를 고정했습니다</string>
+    <string name="tool_summary_quick_note_update">빠른 메모를 수정했습니다</string>
+    <string name="tool_summary_read_file">파일을 읽었습니다</string>
+    <string name="tool_summary_recall_experience">경험을 회상했습니다</string>
+    <string name="tool_summary_record_experience">경험을 기록했습니다</string>
+    <string name="tool_summary_resource_add">리소스를 추가했습니다</string>
+    <string name="tool_summary_resource_delete">리소스를 삭제했습니다</string>
+    <string name="tool_summary_resource_get">리소스를 읽었습니다</string>
+    <string name="tool_summary_resource_list">리소스를 나열했습니다</string>
+    <string name="tool_summary_resource_search">리소스를 검색했습니다</string>
+    <string name="tool_summary_run_command">명령을 실행했습니다</string>
+    <string name="tool_summary_schedule_reminder">알림을 설정했습니다</string>
+    <string name="tool_summary_search_memory">기억을 검색했습니다</string>
+    <string name="tool_summary_send_email">이메일을 보냈습니다</string>
+    <string name="tool_summary_send_sms">문자를 보냈습니다</string>
+    <string name="tool_summary_set_alarm">알람을 설정했습니다</string>
+    <string name="tool_summary_set_timer">타이머를 시작했습니다</string>
+    <string name="tool_summary_share_text">텍스트를 공유했습니다</string>
+    <string name="tool_summary_show_card">카드를 표시했습니다</string>
+    <string name="tool_summary_speak_text">텍스트를 소리 내어 읽었습니다</string>
+    <string name="tool_summary_subagent_close">하위 작업을 종료했습니다</string>
+    <string name="tool_summary_subagent_run">하위 작업을 실행했습니다</string>
+    <string name="tool_summary_subagent_task">하위 작업을 시작했습니다</string>
+    <string name="tool_summary_take_photo">사진을 찍었습니다</string>
+    <string name="tool_summary_todo_write">할 일을 수정했습니다</string>
+    <string name="tool_summary_translate">번역했습니다</string>
+    <string name="tool_summary_unpin_memory">기억 고정을 해제했습니다</string>
+    <string name="tool_summary_web_search">웹을 검색했습니다</string>
+    <string name="tool_summary_workspace_write">워크스페이스에 작성했습니다</string>
+    <string name="tool_summary_write_file">파일을 작성했습니다</string>
+    <string name="tool_summary_prefix_browser">브라우저를 조작했습니다</string>
+    <string name="tool_summary_prefix_channel">채널을 관리했습니다</string>
+    <string name="tool_summary_prefix_clipboard">클립보드를 조작했습니다</string>
+    <string name="tool_summary_prefix_mcp">MCP 도구를 호출했습니다</string>
+    <string name="tool_summary_prefix_quick_note">빠른 메모를 관리했습니다</string>
+    <string name="tool_summary_prefix_resource">리소스를 관리했습니다</string>
+    <string name="tool_summary_prefix_scheduled_task">예약 작업을 관리했습니다</string>
+    <string name="tool_summary_prefix_subagent">하위 작업을 관리했습니다</string>
+    <string name="tool_summary_prefix_workspace">워크스페이스를 조작했습니다</string>
+    <string name="tool_summary_default_success">도구를 호출했습니다</string>
+    <string name="tool_summary_default_fail">도구 호출 실패</string>
+<string name="tool_summary_failed">%1$s 실패</string>
+    <string name="tool_terminal_timeout">시간 초과로 중단됨</string>
+    <string name="tool_terminal_interrupted">중단됨</string>
+    <string name="tool_label_calculator">계산기</string>
+    <string name="tool_label_calendar_today">달력 보기</string>
+    <string name="tool_label_clipboard_read">클립보드 읽기</string>
+    <string name="tool_label_clipboard_write">클립보드 쓰기</string>
+    <string name="tool_label_delegate_agent">하위 에이전트 위임</string>
+    <string name="tool_label_dns_lookup">DNS 조회</string>
+    <string name="tool_label_execute_code">코드 실행</string>
+    <string name="tool_label_execute_javascript">스크립트 실행</string>
+    <string name="tool_label_execute_shell">Shell 명령</string>
+    <string name="tool_label_generate_image">이미지 생성</string>
+    <string name="tool_label_generate_video">동영상 생성</string>
+    <string name="tool_label_get_current_time">현재 시간</string>
+    <string name="tool_label_get_device_info">기기 정보</string>
+    <string name="tool_label_get_location">위치 가져오기</string>
+    <string name="tool_label_get_weather">날씨</string>
+    <string name="tool_label_list_files">파일 나열</string>
+    <string name="tool_label_list_installed_apps">앱 목록</string>
+    <string name="tool_label_make_phone_call">전화 걸기</string>
+    <string name="tool_label_mcp_tool">MCP 도구</string>
+    <string name="tool_label_notify">알림 보내기</string>
+    <string name="tool_label_open_app">앱 열기</string>
+    <string name="tool_label_open_url">웹페이지 열기</string>
+    <string name="tool_label_ping_host">Ping</string>
+    <string name="tool_label_plugin_market_install">플러그인 설치</string>
+    <string name="tool_label_plugin_market_search">플러그인 마켓</string>
+    <string name="tool_label_plugin_market_uninstall">플러그인 제거</string>
+    <string name="tool_label_plugin_market_set_enabled">플러그인 켜기/끄기</string>
+    <string name="tool_label_find_tools">도구 찾기</string>
+    <string name="tool_label_device_shell">기기 명령</string>
+    <string name="tool_label_terminal_exec">터미널 명령</string>
+    <string name="tool_label_termux_exec">Termux 명령</string>
+    <string name="tool_label_quick_note_add">새 빠른 메모</string>
+    <string name="tool_label_quick_note_list">빠른 메모</string>
+    <string name="tool_label_read_file">파일 읽기</string>
+    <string name="tool_label_schedule_reminder">알림</string>
+    <string name="tool_label_search_memory">기억 검색</string>
+    <string name="tool_label_send_sms">문자 보내기</string>
+    <string name="tool_label_set_alarm">알람</string>
+    <string name="tool_label_set_timer">타이머</string>
+    <string name="tool_label_show_card">카드 표시</string>
+    <string name="tool_label_speak_text">소리 내어 읽기</string>
+    <string name="tool_label_subagent_task">하위 작업</string>
+    <string name="tool_label_translate">번역</string>
+    <string name="tool_label_web_search">웹 검색</string>
+    <string name="tool_label_write_file">파일 쓰기</string>
+    <string name="tool_label_workspace_write">워크스페이스 쓰기</string>
+    <string name="tool_trace_running">실행 중…</string>
+    <string name="tool_trace_empty">결과 없음</string>
+    <string name="plugin_market_load_failed">카탈로그를 불러오지 못했습니다</string>
+    <string name="plugin_market_state_invalid">카탈로그 상태가 만료되었습니다. 새로고침하세요</string>
+    <string name="plugin_download_failed">플러그인 다운로드에 실패했습니다</string>
+    <string name="plugin_review_failed">플러그인 패키지 검토에 실패했습니다</string>
+    <string name="plugin_install_failed">설치에 실패했습니다</string>
+    <string name="plugin_json_too_large">공급자 플러그인 JSON이 크기 제한(%1$dKB)을 초과했습니다</string>
+    <string name="plugin_file_read_failed">선택한 파일을 읽을 수 없습니다</string>
+    <string name="plugin_public_key_invalid">공개 키가 잘못되었습니다</string>
+    <string name="plugin_rollback_failed">롤백에 실패했습니다</string>
+    <string name="tool_target_all_tools">모든 도구</string>
+</resources>

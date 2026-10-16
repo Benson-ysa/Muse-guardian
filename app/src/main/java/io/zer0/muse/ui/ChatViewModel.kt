@@ -1,0 +1,7444 @@
+package io.zer0.muse.ui
+
+import android.content.Context
+import android.net.Uri
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.viewModelScope
+import io.zer0.ai.ChatService
+import io.zer0.ai.core.ChatRequestMode
+import io.zer0.ai.core.ChatStreamEvent
+import io.zer0.ai.core.ChatStopReason
+import io.zer0.ai.core.MessageRole
+import io.zer0.ai.core.Model
+import io.zer0.ai.core.ModelContextWindowRegistry
+import io.zer0.ai.core.ProviderConfig
+import io.zer0.ai.core.ProviderError
+import io.zer0.ai.core.ProviderException
+import io.zer0.ai.core.ProviderType
+import io.zer0.ai.core.ReasoningLevel
+import io.zer0.ai.core.ToolCall
+import io.zer0.ai.core.UIMessage
+import io.zer0.ai.core.inferFromMessage
+import io.zer0.ai.image.ImageService
+import io.zer0.common.AppDispatchers
+import io.zer0.common.Logger
+import io.zer0.common.Perf
+import io.zer0.common.resultOf
+import io.zer0.memory.summary.SessionSummaryManager
+import io.zer0.memory.ticker.MemoryTicker
+import io.zer0.muse.util.ErrorMessages
+import io.zer0.muse.data.MultiAgentConfig
+import io.zer0.muse.data.SettingsRepository
+import io.zer0.muse.data.artifact.ArtifactExtractor
+import io.zer0.muse.network.NetworkMonitor
+import io.zer0.muse.data.artifact.ArtifactEntity
+import io.zer0.muse.data.artifact.ArtifactRepository
+import io.zer0.muse.data.assistant.AssistantEntity
+import io.zer0.muse.data.assistant.AssistantRepository
+import io.zer0.muse.data.audit.AuditLogger
+import io.zer0.muse.data.milestone.MilestoneChecker
+import io.zer0.muse.data.lorebook.LorebookEntity
+import io.zer0.muse.data.lorebook.LorebookRepository
+import io.zer0.muse.data.promptinjection.PromptInjectionEntity
+import io.zer0.muse.data.promptinjection.PromptInjectionRepository
+import io.zer0.muse.data.quickmsg.QuickMessageEntity
+import io.zer0.muse.data.quickmsg.QuickMessageRepository
+import io.zer0.muse.data.session.SearchResult
+import io.zer0.muse.data.session.SessionEntity
+import io.zer0.muse.data.session.SessionRepository
+import io.zer0.muse.doc.DocumentParser
+import io.zer0.muse.R
+import io.zer0.muse.notification.MuseNotificationManager
+import io.zer0.muse.notification.MuseNotificationTarget
+import io.zer0.muse.schedule.ChatGenerationManager
+import io.zer0.muse.schedule.ChatGenerationService
+import io.zer0.muse.schedule.UserActivityProfile
+import io.zer0.muse.tools.ToolApprovalPolicy
+import io.zer0.muse.tools.AgentRouter
+import io.zer0.muse.tools.captureLargeToolOutput
+import io.zer0.muse.tools.DelegationContract
+import io.zer0.muse.tools.DelegationContextBuilder
+import io.zer0.muse.tools.ToolApprovalState
+import io.zer0.muse.tools.ToolConfigStore
+import io.zer0.muse.tools.ToolPermissionResolver
+import io.zer0.muse.tools.SessionPermissionMode
+import io.zer0.muse.tools.SessionPermissionStore
+import io.zer0.muse.tools.SessionToolLoadRegistry
+import io.zer0.muse.tools.ToolLoopHost
+import io.zer0.muse.tools.StreamRoundParams
+import io.zer0.muse.tools.StreamRoundResult
+import io.zer0.muse.tools.ToolLoopParams
+import io.zer0.muse.tools.ToolRegistry
+import io.zer0.muse.tools.ToolExposurePolicy
+import io.zer0.muse.tools.ToolRoundPresentationPolicy
+import io.zer0.muse.tools.ToolRiskLevel
+import io.zer0.muse.chat.InternalPromptMarkers
+import io.zer0.muse.chat.PendingToolCallStore
+import io.zer0.muse.data.chat.ConversationTree
+import io.zer0.muse.data.chat.ConversationTreeSnapshotStore
+import io.zer0.muse.data.chat.rewrite.ConversationEventDraft
+import io.zer0.muse.data.chat.rewrite.ConversationEventType
+import io.zer0.muse.data.chat.rewrite.ConversationRebuildFlagStore
+import io.zer0.muse.data.chat.rewrite.ConversationService
+import io.zer0.muse.data.chat.rewrite.MessageCommit
+import io.zer0.muse.data.chat.rewrite.MessageCommitRequest
+import io.zer0.muse.data.chat.rewrite.buildCommitParts
+import io.zer0.muse.data.session.ConversationTurnEntity
+import io.zer0.muse.session.WarmupHistory
+import io.zer0.muse.transformer.CompressionDiagnostics
+import io.zer0.muse.transformer.ContextCompressTransformer
+import io.zer0.muse.transformer.ConversationMemoryInjectionTransformer
+import io.zer0.muse.transformer.LorebookTransformer
+import io.zer0.muse.transformer.MemoryInjectionTransformer
+import io.zer0.muse.transformer.PromptInjectionTransformer
+import io.zer0.muse.transformer.TemplateTransformer
+import io.zer0.muse.transformer.ThinkTagTransformer
+import io.zer0.muse.transformer.TimeReminderTransformer
+import io.zer0.muse.transformer.TransformContext
+import io.zer0.muse.transformer.TransformerPipeline
+import io.zer0.muse.transformer.splitThinkTagsForStreaming
+import io.zer0.muse.ui.chat.ChatStateAccessor
+import io.zer0.muse.ui.chat.ChatAudioCoordinator
+import io.zer0.muse.ui.chat.ChatGenerationController
+import io.zer0.muse.ui.chat.GenerationDeps
+import io.zer0.muse.ui.chat.ChatInputController
+import io.zer0.muse.ui.chat.ChatMediaController
+// P2-23: 媒体生成工具的会话投递宿主(工具本体已迁至 io.zer0.muse.tools.MediaGenToolsImpl)
+import io.zer0.muse.ui.chat.ChatMediaGenHost
+import io.zer0.muse.ui.chat.ChatMessageController
+import io.zer0.muse.ui.chat.ChatSessionController
+import io.zer0.muse.ui.chat.SessionDeps
+import io.zer0.muse.ui.chat.ChatSettingsController
+import io.zer0.muse.ui.chat.SessionModelSelectionStore
+import io.zer0.muse.ui.chat.ChatStateStore
+import io.zer0.muse.ui.chat.SystemPromptCache
+import io.zer0.muse.ui.chat.ChatVoiceState
+import io.zer0.muse.ui.chat.ChatGenerationState
+import io.zer0.muse.ui.chat.SendRequest
+import io.zer0.muse.ui.chat.ChatToolController
+import io.zer0.muse.ui.chat.SessionFlowBridge
+import io.zer0.muse.ui.chat.ChatDocumentCoordinator
+import io.zer0.muse.ui.chat.ChatExportCoordinator
+import io.zer0.muse.ui.chat.ChatMiscCoordinator
+import io.zer0.muse.ui.chat.ChatStreamCoordinator
+import io.zer0.muse.ui.chat.completionToStreamEvents
+import io.zer0.muse.ui.chat.shouldRetryToolChoiceCompatibility
+import io.zer0.muse.ui.chat.ChatTaskCardCoordinator
+import io.zer0.muse.ui.chat.ImageGenCoordinator
+import io.zer0.muse.ui.chat.SlashCommand
+import io.zer0.muse.ui.chat.StreamRunState
+import io.zer0.muse.ui.chat.TokenCountSnapshot
+import io.zer0.muse.ui.common.feedback.MuseToast
+import io.zer0.muse.ui.speech.TtsManager
+import io.zer0.muse.ui.speech.PlaybackState
+import io.zer0.muse.ui.speech.VoiceConversationState
+import io.zer0.muse.ui.taskcard.AgentPlan
+import io.zer0.muse.util.TokenEstimator
+import io.zer0.muse.util.retryOnNetworkError
+import io.zer0.muse.web.WebSearchConfig
+import io.zer0.muse.web.WebSearchService
+import io.zer0.muse.asr.ASRState
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.filter
+import kotlinx.coroutines.flow.update
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.firstOrNull
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.takeWhile
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlin.uuid.Uuid
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+
+/**
+ * v0.49: 聊天错误信息(支持多错误并存)。
+ *
+ * @param id 错误唯一 id(用于 dismiss)
+ * @param type 错误类型
+ * @param message 错误消息
+ * @param timestamp 发生时间
+ * @param isRecoverable 是否可恢复(如网络错误可重试,API key 错误需用户处理)
+ */
+data class ChatError(
+    val id: String = java.util.UUID.randomUUID().toString(),
+    val type: ChatErrorType,
+    val message: String,
+    val timestamp: Long = System.currentTimeMillis(),
+    val isRecoverable: Boolean = true,
+)
+
+/** v0.49: 错误类型枚举,用于分类展示与处理策略。 */
+enum class ChatErrorType {
+    NETWORK, // 网络错误
+    API_KEY, // API key 无效
+    RATE_LIMIT, // 限流
+    MODEL_ERROR, // 模型返回错误
+    TOOL_ERROR, // 工具执行错误
+    UNKNOWN, // 未知错误
+}
+
+/**
+ * 聊天页状态。
+ *
+ * # v1.0.20: 字段分组说明(渐进式拆分,控制风险)
+ *
+ * 当前 [ChatUiState] 含数十个字段,任一变化都触发 state 新值,引发意外重组。
+ * 完整拆分(把字段挪到子状态 data class)改动面极大,所有访问点都要改,风险高。
+ * 故采用渐进式:保持顶层结构不变,按变化频率分组注释,UI 层用 derivedStateOf 收窄重组范围。
+ *
+ * ## 高频变化字段(UI 重组敏感,建议用 derivedStateOf 包裹读取)
+ *  - [input]:用户每次按键都变化
+ *  - [isStreaming]:流式开始/结束变化
+ *  - [isWaitingFirstToken]:首 token 到达前后变化
+ *  - [visionProgress]:视觉分析每完成一张图变化
+ *  - [isOcrProcessing] / [toolProgressMessage]:短暂等待阶段变化
+ *  - [isSpeaking] / [speakingMessageId]:TTS 朗读状态变化
+ *  - [asrState]:ASR 流式状态变化
+ *  - [messages]:流式过程中每个 delta 都更新(已被 StreamController 节流)
+ *
+ * ## 低频变化字段(配置/会话/列表等,重组影响小)
+ *  - [sessions] / [archivedSessions] / [folders]:会话列表变化
+ *  - [assistants] / [currentAssistant]:助手配置变化
+ *  - [providers] / [activeProviderId] / [selectedModelId]:Provider 配置变化
+ *  - [chatPreferences] / [mediaConfig] / [webSearchConfig]:设置变化
+ *  - [favoriteMessages] / [quickMessages] / [lorebooks]:列表数据变化
+ *
+ * ## 派生/瞬态字段(由其他字段推导,不直接驱动重组)
+ *  - [isConfigured]:由 providers 派生
+ *  - [error]:由 errors.firstOrNull() 派生
+ *  - [toast]:一次性 Toast,UI 消费后清空
+ *
+ * 后续完整拆分路线图(本次不做,标注 TODO):
+ *  - TODO(state-split): 把高频字段抽到 `ChatUIState`(input/isStreaming/isWaitingFirstToken/visionProgress)
+ *  - TODO(state-split): 把工具相关抽到 `ToolsState`(toolCallHistory/pendingToolApprovals/taskCards)
+ *  - TODO(state-split): 把 Agent 相关抽到 `ChatAgentState`(isAgentMode/agentSessionId/delegationChain)
+ *
+ * @param messages 完整消息列表(含占位的 assistant 流式消息)
+ * @param input 当前输入框文本
+ * @param isStreaming 是否正在流式输出
+ * @param errors v0.49: 错误信息列表(支持多错误并存),空表示无错误
+ * @param isConfigured 是否已配置 Provider(决定显示"去设置"引导)
+ * @param currentSessionId 当前会话 id(null 表示未初始化)
+ * @param sessions 全部会话列表(侧栏用,按 updatedAt 降序)
+ * @param isDrawerOpen 侧栏是否展开
+ * @param searchQuery 搜索框文本
+ * @param searchResults 搜索结果列表(空列表表示无搜索或无结果)
+ * @param isSearching 是否正在搜索
+ * @param isDrawMode 绘图模式(P5-G):开启后 send 调用 ImageService 而非 ChatService
+ * @param isGeneratingImage 是否正在生成图片(P5-G)
+ * @param isTranslating 是否正在翻译(P5-F)
+ * @param translatingMessageId 正在翻译的消息 id(null 表示无)
+ * @param assistants 全部 Assistant 列表(Phase 8.2 侧栏选择器用)
+ * @param currentAssistant 当前会话绑定的 Assistant(Phase 8.2,影响 systemPrompt/模型/工具/记忆)
+ * @param favoriteMessages 跨会话收藏的消息列表(Phase 8.3,收藏面板用)
+ */
+
+/**
+ * F-10: 流式生成阶段状态机(单一状态源)。
+ *
+ *  - [IDLE]: 无生成;
+ *  - [CONNECTING]: 已发送,等待首个 token;
+ *  - [STREAMING]: 正文流式输出中;
+ *  - [TOOLING]: 工具调用执行阶段;
+ *  - [INTERRUPTED]: 被用户停止/会话切换中断,内容保留;
+ *  - [FINISHED]: 正常完成;
+ *  - [FAILED]: 出错终止。
+ *
+ * UI/通知/统计统一从 [ChatStreamState.phase] 派生, 不各自判断分散布尔。
+ */
+enum class ChatStreamPhase { IDLE, CONNECTING, STREAMING, TOOLING, INTERRUPTED, FINISHED, FAILED }
+
+data class ChatStreamState(
+    /** F-10: 生成阶段(单一状态源;isStreaming 等布尔保持兼容派生)。 */
+    val phase: ChatStreamPhase = ChatStreamPhase.IDLE,
+    val isStreaming: Boolean = false,
+    /**
+     * v1.0.3: 流式启动后是否仍在等待首个 token(含 ContentDelta / ReasoningDelta)。
+     *
+     * - true: 处于"思考中"阶段,UI 显示 ShimmerBubble 骨架屏 + "思考中"文字
+     * - false: 已收到首 token,进入"正在写"阶段,UI 显示 StreamingCursor 光标 + 流式文本
+     *
+     * 与 [isStreaming] 的关系:
+     *  - 发送时:isStreaming=true, isWaitingFirstToken=true
+     *  - 首 token 到达:isStreaming=true, isWaitingFirstToken=false
+     *  - 流式结束/出错/停止:isStreaming=false, isWaitingFirstToken=false
+     *
+     * 区分两阶段的好处:
+     *  1. 首 token 到达后立即让 ShimmerBubble 消失,避免"loading → 突然大量文字"的视觉断层
+     *  2. UI 可以分别给两阶段不同的视觉反馈(骨架屏 vs 流式光标)
+     *  3. reasoning-only 阶段(模型只输出思考链,content 仍空)不会被误判为"还在等待"
+     */
+    val isWaitingFirstToken: Boolean = false,
+    /**
+     * v1.0.4: 视觉辅助分析进度(null=未在分析)。
+     *
+     * 当纯文本模型需要通过视觉辅助分析图片时,UI 可据此显示"正在分析图片 2/4…"。
+     * 与 [isWaitingFirstToken] 配合:视觉分析期间 ShimmerBubble 显示视觉进度文字。
+     */
+    val visionProgress: io.zer0.muse.vision.VisionProgress? = null,
+    /**
+     * v1.138: 已视觉辅助处理过的用户消息 ID 集合。
+     *
+     * 当主模型不支持视觉、通过 VisionBridge 分析图片后,将用户消息 ID 加入此集合。
+     * UI 层据此在图片下方显示"辅助视觉 · 已分析"标签,让用户知道图片经过了视觉辅助处理。
+     */
+    val visionAssistedMessageIds: Set<String> = emptySet(),
+    /**
+     * v1.0.4 (P0): OCR 识别进度标志。
+     *
+     * 用户从相册选图并以 OCR 模式识别文字时,识别期间(1-3s)设置 true,
+     * ShimmerBubble 显示"正在识别图片文字…"。
+     */
+    val isOcrProcessing: Boolean = false,
+    /**
+     * v1.0.4 (P0): 工具调用恢复时的进度文本(断点续传路径用)。
+     *
+     * 当用户进入有未完成工具调用的会话并点击恢复时,ShimmerBubble 显示此文本。
+     * 流式工具调用路径已通过 TaskCard 显示进度,无需此字段。
+     */
+    val toolProgressMessage: String? = null,
+    /**
+     * 断点续传:当前会话未完成的工具调用数量。
+     *
+     * 大于 0 时 ChatScreen 顶部展示恢复 Banner(恢复执行 / 丢弃)。
+     * 由 [ChatViewModel.switchSession] / [ChatViewModel.resumePendingToolCalls] /
+     * [ChatViewModel.discardPendingToolCalls] 维护。
+     */
+    val pendingToolCallCount: Int = 0,
+)
+
+data class ChatToolsState(
+    val isCompressing: Boolean = false,
+    val compressionPhase: ManualCompressionPhase = ManualCompressionPhase.IDLE,
+    val taskCards: Map<String, io.zer0.muse.ui.taskcard.TaskCardData> = emptyMap(),
+    val toolCallHistory: List<ToolCallRecord> = emptyList(),
+    val pendingToolApprovals: List<PendingToolApproval> = emptyList(),
+)
+
+/** v1.205 B2: 待发送队列条目(入队时快照文本与图片,单独发送时恢复)。 */
+data class PendingMessage(
+    val text: String,
+    val images: List<String> = emptyList(),
+)
+
+data class ChatInputState(
+    val input: String = "",
+    /** Phase 8.6: 待发送的本地图片 base64 列表(无 data: 前缀)。 */
+    val pendingImages: List<String> = emptyList(),
+    /** v1.136 T10: 待发送的文档列表(已解析为纯文本,发送时合并到消息内容)。 */
+    val pendingDocuments: List<io.zer0.muse.ui.chat.PendingDocument> = emptyList(),
+    /** v1.91: ASR 状态机(流式模式)。 */
+    val asrState: ASRState = ASRState(),
+    /** 引用回复:当前正在回复的目标消息(仅 UI 层,发送后清空)。 */
+    val replyingTo: UIMessage? = null,
+    /** v1.57: 引用回复的自定义引用文本(用户可在引用卡片编辑裁剪,null 时用 replyingTo.content)。 */
+    val replyQuoteOverride: String? = null,
+    /**
+     * v1.0.47 P5: 输入历史(本会话内已发送的消息文本,用于输入框上箭头回调)。
+     *
+     * 最近 N 条(默认 50),上箭头按时间倒序遍历,下箭头正向遍历。
+     * 仅存内存,不持久化(会话结束清空)。
+     */
+    val inputHistory: List<String> = emptyList(),
+    /** v1.0.47 P5: 输入历史导航索引(null=不在历史导航中,0=最近一条)。 */
+    val inputHistoryIndex: Int? = null,
+    /** 功能2: 当前输入是否为从 DataStore 恢复的草稿。 */
+    val hasDraft: Boolean = false,
+    /** v1.205 B2: 待发送消息队列(生成期间排队,逐条预览/编辑/删除/单独发送)。 */
+    val sendQueue: List<PendingMessage> = emptyList(),
+)
+
+data class ChatSessionState(
+    val currentSessionId: String? = null,
+    val sessions: List<SessionEntity> = emptyList(),
+    /** v1.72: 会话列表首次加载标志(避免闪空状态,DB 首次 emit 前显示 loading) */
+    val isSessionsLoading: Boolean = true,
+    /** v1.0.62: 会话列表加载失败信息(null=正常)。 */
+    val sessionsError: String? = null,
+    /** v0.45: 已归档会话列表(归档 FilterCard 用)。 */
+    val archivedSessions: List<SessionEntity> = emptyList(),
+    /** ST-01: 归档会话列表加载失败信息(null=正常)。 */
+    val archivedSessionsError: String? = null,
+    /** Phase 9.1 (M13): 全部文件夹(Drawer 按 folderId 分组渲染会话)。 */
+    val folders: List<io.zer0.muse.data.session.FolderEntity> = emptyList(),
+)
+
+data class ChatAgentState(
+    /** v1.28: 是否为 Agent Tab 模式(决定 send 用 agentSessionId 还是 currentSessionId)。 */
+    val isAgentMode: Boolean = false,
+    /** v1.28: Agent Tab 专用会话 id(独立于任务的 currentSessionId)。 */
+    val agentSessionId: String? = null,
+    val assistants: List<AssistantEntity> = emptyList(),
+    /** v1.72: 助手列表首次加载标志(避免闪空状态) */
+    val isAssistantsLoading: Boolean = true,
+    val currentAssistant: AssistantEntity? = null,
+    /** v1.201: 委派链路根节点(空列表表示无委派)。 */
+    val delegationChain: List<io.zer0.muse.tools.DelegationChainTracker.ChainNode> = emptyList(),
+    /** v1.201: 当前活跃的委派暂停请求(null 表示无待确认)。 */
+    val activePauseRequest: io.zer0.muse.tools.DelegationPauseManager.PauseRequest? = null,
+    /** v1.202: 当前会话活跃的后台子 agent 线程(SubagentTaskListCard 渲染用,空列表表示无)。 */
+    val activeSubagentThreads: List<io.zer0.muse.data.subagent.SubagentThreadStore.ThreadEntry> = emptyList(),
+    /** v1.202: 当前会话待处理(PENDING)的后台子 agent 任务(SubagentTaskListCard 渲染用)。 */
+    val pendingSubagentTasks: List<io.zer0.muse.tools.DeferredResultStore.DeferredTask> = emptyList(),
+    // ── P6: Agent Mode 增强 ──────────────────────────────────────────
+    /** v1.0.47 P6-2: 当前模型是否为弱工具调用模型(Agent Mode 下显示降级提示)。 */
+    val isWeakToolModel: Boolean = false,
+    /** v1.0.47 P6-2: 弱工具模型降级提示文案(null = 非弱工具模型,不显示)。 */
+    val weakToolHint: String? = null,
+    /** v1.0.47 P6-3: 会话锁定(Agent Mode ON 时锁定,禁止切换助手/清空消息)。 */
+    val isSessionLocked: Boolean = false,
+    /** v1.0.47 P6-4: Agent Mode 提示卡片文案(null = 不显示卡片)。 */
+    val agentModeHint: String? = null,
+)
+
+class ChatUiState(
+    val streamState: ChatStreamState = ChatStreamState(),
+    val inputState: ChatInputState = ChatInputState(),
+    val sessionState: ChatSessionState = ChatSessionState(),
+    val agentState: ChatAgentState = ChatAgentState(),
+    val toolsState: ChatToolsState = ChatToolsState(),
+    /** B7-01: 消息多选模式。 */
+    val selectionMode: Boolean = false,
+    /** B7-01: 已选消息 id 集合。 */
+    val selectedMessageIds: Set<String> = emptySet(),
+    /** v1.137 B2: 会话切换中标志 — true 时 UI 保持上一帧消息(不显示空列表),消除切换闪烁。 */
+    val isSwitchingSession: Boolean = false,
+    val errors: List<ChatError> = emptyList(),
+    val isConfigured: Boolean = false,
+    /** 是否正在拉取上游模型列表(底部模型切换面板用)。 */
+    val isFetchingModels: Boolean = false,
+    /** 拉取上游模型错误信息。 */
+    val fetchModelsError: String? = null,
+    /**
+     * v1.93+: 本次 switchSession 是否命中内存 LRU 缓存(调试用)。
+     *
+     * - true: 命中 [SessionMemoryCache],跳过了 DB 查询,直接复用内存消息快照
+     * - false: 未命中(或后台正在生成需走 DB),从 DB 分页加载
+     *
+     * 仅用于性能追踪与调试,不影响业务逻辑。
+     */
+    val memoryCacheHit: Boolean = false,
+    val isDrawerOpen: Boolean = false,
+    val searchQuery: String = "",
+    val searchResults: List<SearchResult> = emptyList(),
+    val isSearching: Boolean = false,
+    /**
+     * v2.x: 搜索页 Tab 当前选中索引(0=会话, 1=消息内容)。
+     *
+     * Tab=0 沿用原有"会话标题/预览匹配 + 设置项匹配"逻辑(展示 [searchResults] + matchedSessions);
+     * Tab=1 展示 [messageResults](消息内容搜索,FTS4 snippet + 点击跳转传 messageId)。
+     * U-19: 默认进入消息内容 Tab(全文搜索会话+消息),会话 Tab 仍可手动切换。
+     */
+    val searchTab: Int = 1,
+    /** v2.x: 消息内容搜索结果(仅在 searchTab=1 时展示,由 FTS4 + snippet 生成)。 */
+    val messageResults: List<SearchResult> = emptyList(),
+    /** v2.x: 是否正在执行消息内容搜索(独立于 [isSearching],避免两个 Tab 互相干扰)。 */
+    val isSearchingMessages: Boolean = false,
+    /** v1.0.62: 搜索失败信息(null=正常),会话/消息内容 Tab 共用。 */
+    val searchError: String? = null,
+    /**
+     * v2.x: 从搜索结果点击消息跳转时,目标消息 id。
+     *
+     * ChatScreen 进入会话后会读取此字段滚动到该消息并触发高亮,完成后由
+     * [ChatViewModel.consumeTargetMessage] 清空(避免重复触发)。
+     */
+    val targetMessageId: String? = null,
+    /**
+     * v2.x: 搜索高亮关键词(从搜索结果跳转时携带,用于 MessageBubble 内文本高亮)。
+     *
+     * 仅当 [highlightedMessageId] 非空时有效;高亮结束后清空。
+     */
+    val searchHighlightQuery: String? = null,
+    /**
+     * v2.x: 当前正在短暂高亮的消息 id(从搜索结果跳转滚动定位后设置,几秒后清空)。
+     *
+     * ChatScreen 据此为对应 MessageBubble 传 highlightText,实现"进入会话高亮目标消息"。
+     */
+    val highlightedMessageId: String? = null,
+    val isDrawMode: Boolean = false,
+    /** v0.34: 当前绘图参数(可临时覆盖设置中的默认值)。 */
+    val imageGenParams: io.zer0.ai.image.ImageGenParams = io.zer0.ai.image.ImageGenParams(),
+    val isGeneratingImage: Boolean = false,
+    /**
+     * v1.0.4 (P1): 视频生成中标志。
+     *
+     * LLM 调用 generate_video 工具时设为 true,完成/失败/取消时设为 false。
+     * ChatScreen 显示 VideoGenerationPlaceholder 占位卡片,与 ImageGenerationPlaceholder 对称。
+     * 注:execGenerateVideo 还会通过 updateAssistant(content="正在生成视频...") 在助手消息气泡
+     * 内同步进度,本字段是补充占位卡片反馈,不是替代。
+     */
+    val isGeneratingVideo: Boolean = false,
+    val isTranslating: Boolean = false,
+    val translatingMessageId: Uuid? = null,
+    val favoriteMessages: List<UIMessage> = emptyList(),
+    /** v1.77: 收藏列表首次加载标志(避免闪空状态) */
+    val isFavoritesLoading: Boolean = true,
+    /** ST-01: 收藏列表加载失败信息(null=正常)。 */
+    val favoritesError: String? = null,
+    /**
+     * v1.104 U7: 已命名的收藏分组标签列表(去重升序,不含 NULL 未分组)。
+     *
+     * 由 DAO observeAllFavoriteTags 聚合,UI 据此渲染顶部 FilterChip 行。
+     */
+    val favoriteTags: List<String> = emptyList(),
+    /**
+     * v1.104 U7: 当前选中的分组筛选条件。
+     *
+     *  - null = 显示全部收藏
+     *  - 非空字符串 = 仅显示该 tag 下的收藏
+     *  - 特殊值 [FAVORITE_TAG_UNGROUPED] = 仅显示未分组(favoriteTag=null)的收藏
+     *
+     * FavoritesScreen 在本地对 favoriteMessages 做过滤,不在 ViewModel 预过滤,
+     * 保证 favoriteMessages 始终是全量(便于"全部"chip 显示总数)。
+     */
+    val favoriteTagFilter: String? = null,
+    /**
+     * v2.0: 预设分类筛选(全部/灵感/代码/学习/自定义)。
+     * 与 favoriteTagFilter 互斥,优先级高于 favoriteTagFilter。
+     * null = 不按预设分类筛选,回退到 favoriteTagFilter。
+     */
+    val favoriteGroup: String? = null,
+    /** Phase 8.4: 是否启用联网搜索(InputBar 上的开关,运行时切换)。 */
+    val webSearchEnabled: Boolean = false,
+    /**
+     * v0.45: 当前上下文 token 占用估算(含 system prompt + 全部消息文本)。
+     *
+     * 由 [ChatViewModel.updateContextTokenCount] 实时更新,UI 据此渲染占用圆环。
+     * 流式过程中每 50 字符更新一次(避免过于频繁),非流式时立即更新。
+     */
+    val contextTokenCount: Int = 0,
+    /**
+     * v0.45: 当前模型的上下文窗口大小(token 数)。
+     *
+     * 0 表示未知(模型未声明 contextWindow),UI 不显示占用圆环。
+     * 切换会话 / 选择模型时由 [ChatViewModel.refreshContextMaxTokens] 刷新。
+     */
+    val contextMaxTokens: Int = 0,
+    /**
+     * v2.x: 上下文检查点的边界消息 id（null = 本会话还没有检查点）。
+     *
+     * 界面据此在对话流里画一条"上下文已压缩"分隔线，并把该消息及更早的老消息默认收起。
+     * 这是**仅界面**的展示锚点：发给模型的历史由 [io.zer0.muse.transformer.ContextCheckpointMerge]
+     * 在组装阶段过滤，两者不共用同一份数据，避免互相污染。
+     */
+    val contextCheckpointBoundaryId: String? = null,
+    /** v2.x: 累计并入摘要的消息条数（0 = 未知/旧检查点，分隔线不显示条数）。 */
+    val contextCheckpointTotalCovered: Int = 0,
+    /**
+     * v1.0.47: Token 估算开关(默认关闭)。
+     *
+     * 用户在设置页显式开启后,输入框显示当前输入 token 估算,
+     * AI 消息底部显示 completionTokens,顶部栏显示上下文占用。
+     * 关闭时不做任何 token 计算,避免 BPE 编码性能开销。
+     */
+    val tokenEstimateEnabled: Boolean = false,
+    /** v1.0.47 P5-2: 长文本粘贴转文件开关(默认开启)。 */
+    val pasteAsFileEnabled: Boolean = true,
+    /** v1.0.47 P5-2: 长文本粘贴转文件阈值(字符数)。 */
+    val pasteAsFileThreshold: Int = 2000,
+    /** v1.0.47 P5-3: Token 计数菜单是否展开。仅 tokenEstimateEnabled=true 时可触发。 */
+    val tokenCountVisible: Boolean = false,
+    /** v1.0.47 P5-3: Token 计数快照(打开菜单时计算一次,避免每次按键重算 BPE)。 */
+    val tokenSnapshot: TokenCountSnapshot? = null,
+    /**
+     * v0.45: 是否正在执行"更新记忆并压缩"。
+     *
+     * 手动压缩按钮点击后置 true,完成后置 false。UI 据此显示转圈 + 禁用按钮。
+     */
+    /** v0.39: 深度思考开关(聊天时临时启用 HIGH 推理,覆盖助手默认 reasoningLevel)。 */
+    val deepThinkingEnabled: Boolean = false,
+    /**
+     * v1.0.47 P5-6: 深度思考级别(仅在 [deepThinkingEnabled]=true 时生效)。
+     *
+     * 默认 HIGH(向后兼容 v0.39 行为)。用户可点击输入栏级别胶囊在
+     * LOW → MEDIUM → HIGH → XHIGH 之间循环。
+     * 不支持推理的模型在 [ChatStreamCoordinator] 内自动降级为 AUTO,不会报错。
+     */
+    val deepThinkingLevel: ReasoningLevel = ReasoningLevel.HIGH,
+    /** Phase 8.4: Web 搜索配置(用于 Settings 页编辑)。 */
+    val webSearchConfig: WebSearchConfig = WebSearchConfig(),
+    /** Phase 8.5: 当前会话绑定的快捷消息列表(InputBar 上方 chip 行用)。 */
+    val quickMessages: List<QuickMessageEntity> = emptyList(),
+    /** Phase 8.5: 当前激活的模式(用于 PromptInjection,default 表示无注入)。 */
+    val currentMode: String = "default",
+    /** Phase 8.5: 全部 Lorebook 条目(管理页用)。 */
+    val lorebooks: List<LorebookEntity> = emptyList(),
+    /** ST-01: 世界书列表加载失败信息(null=正常)。 */
+    val lorebooksError: String? = null,
+    /** Phase 8.5: 全部 PromptInjection 条目(管理页用)。 */
+    val promptInjections: List<PromptInjectionEntity> = emptyList(),
+    /** Phase 8.5: 全部 QuickMessage 条目(管理页用,含 global + 各 Assistant 绑定的)。 */
+    val allQuickMessages: List<QuickMessageEntity> = emptyList(),
+    /** v1.58: Prompt 模板列表(预置场景提示词,从 plus 菜单进入模板库选择)。 */
+    val promptTemplates: List<io.zer0.muse.data.prompttemplate.PromptTemplate> = emptyList(),
+    /** Phase 8.7: TTS 是否正在朗读(用于 InputBar 禁用/MessageBubble 高亮)。 */
+    val isSpeaking: Boolean = false,
+    /** Phase 8.7: 正在朗读的消息 id(null 表示无)。 */
+    val speakingMessageId: Uuid? = null,
+    /** Phase 8.8: 任务卡映射(assistant 消息 id → TaskCardData),工具调用计划展示。 */
+    /** v1.55: Agent 工作流计划映射(planId → AgentPlan),结构化任务规划展示。 */
+    val agentPlans: Map<String, io.zer0.muse.ui.taskcard.AgentPlan> = emptyMap(),
+    /** Phase 9.3 (M2): ASR 配置(provider/apiKey/model)。 */
+    val asrConfig: io.zer0.muse.asr.AsrConfig = io.zer0.muse.asr.AsrConfig(),
+    /** 阶段 5: 全部已配置 Provider(底部模型切换面板用)。 */
+    val providers: List<io.zer0.ai.core.ProviderConfig> = emptyList(),
+    /** 阶段 5: 当前激活 Provider id。 */
+    val activeProviderId: String? = null,
+    /** 阶段 5: 当前选中模型 id(null 表示回退到激活 Provider 的首个模型)。 */
+    val selectedModelId: String? = null,
+    /** v1.60-A: 工具模型 id(工具调用轮次使用,null 表示沿用主对话模型)。 */
+    val toolModelId: String? = null,
+    /** v0.31: 聊天行为偏好(从设置读取,UI 据此控制渲染与交互)。 */
+    val chatPreferences: io.zer0.muse.data.ChatPreferences = io.zer0.muse.data.ChatPreferences(),
+    /** v0.32: 分享模板(从设置读取,exportSessionAsMarkdown 据此过滤内容)。 */
+    val shareTemplate: io.zer0.muse.data.ShareTemplateConfig = io.zer0.muse.data.ShareTemplateConfig(),
+    /** v0.33: 媒体配置(从设置读取,录音/TTS 据此控制采样率/语速/音高/语言/输出方式)。 */
+    val mediaConfig: io.zer0.muse.data.MediaConfig = io.zer0.muse.data.MediaConfig(),
+    /**
+     * v2.3: 流式结束后填充的本次回复性能摘要,UI 可以在 MessageBubble 底部显示。
+     *
+     * 格式:"模型:xxx | 耗时:xxms | TTFT:xxms | 速率:xx tok/s | 字符:xx | 工具调用:N | 轮次:N"。
+     * 仅 debugMode=true 时填充,否则为 null。每次 launchStream 启动时重置。
+     */
+    val debugInfo: String? = null,
+    /**
+     * v0.51: 一次性 Toast 提示(模型切换等场景)。
+     *
+     * 用 Toast 而非 Snackbar:Snackbar 通道已被 [errors] 占用,模型切换提示不应被错误
+     * 消息挤掉,所以走独立 Toast 通道。UI 用 LaunchedEffect 观察本字段,非空时弹 Toast
+     * 并立即调 [ChatViewModel.clearToast] 清空(避免重组时重复弹)。
+     */
+    val toast: String? = null,
+    /** v1.25: 多 Agent 协作配置(团队列表与总开关)。 */
+    val multiAgentConfig: MultiAgentConfig = MultiAgentConfig(),
+    /** v1.43: 当前选中的产物卡片(用于 ArtifactViewerDialog 弹窗)。 */
+    val selectedArtifact: io.zer0.muse.data.artifact.ArtifactEntity? = null,
+    /** v1.45: 列表滚动位置缓存(切页/后台后恢复,避免回到顶端)。 */
+    val listFirstVisibleItemIndex: Int = 0,
+    val listFirstVisibleItemScrollOffset: Int = 0,
+    /**
+     * v2.2.1: Agent 页面(agent 模式)独立的滚动位置缓存。
+     *
+     * 普通会话维持"跟随最后一条消息";Agent 页面返回时恢复用户离开前停留的位置。
+     * agentListFirstVisibleItemIndex < 0 表示"未记录",进入时回落到列表底部。
+     */
+    val agentListFirstVisibleItemIndex: Int = -1,
+    val agentListFirstVisibleItemScrollOffset: Int = 0,
+    /** v2.2.1: agent 滚动缓存归属的会话 id(会话变化时缓存失效,回落到列表底部)。 */
+    val agentScrollOwnerSessionId: String? = null,
+    /** v1.45: 消息级展开状态缓存(mood/reasoning 折叠状态不因切页丢失)。 */
+    val messageExpandedStates: Map<String, MessageExpandedState> = emptyMap(),
+    /** v1.53-A1: 是否还有更早的历史消息可加载(上滑加载更多用)。 */
+    val hasMoreHistory: Boolean = false,
+    /** v1.53-A1: 是否正在加载更多历史消息(防止重复触发)。 */
+    val isLoadingMore: Boolean = false,
+    /**
+     * v1.53-A1: 最近一次"加载更多"插入的历史条数。
+     *
+     * UI 监听该字段变化(>0)后,通过 [listState.scrollToItem] 跳过新插入的条数,
+     * 保持用户视觉位置不跳动(原来在顶部的消息现在在该 index),然后调
+     * [ChatViewModel.clearHistoryLoadCount] 清空。
+     */
+    val lastHistoryLoadCount: Int = 0,
+    /** v1.94: 当前会话的工具调用记录(用于 InputBar 动态胶囊展示)。 */
+    /** v2.3: 任务模型路由开关(开启后根据输入内容自动推荐模型)。 */
+    val taskRoutingEnabled: Boolean = false,
+    /** 待审批的工具调用列表(ToolApprovalCard 用)。 */
+    /** P3: 当前会话的工具权限模式(TRUSTED/ASK/STRICT),默认 ASK。 */
+    val sessionPermissionMode: SessionPermissionMode = SessionPermissionMode.ASK,
+    /**
+     * v1.0.16: 本次应用开启期间批准全部工具调用(内存态,不持久化)。
+     *
+     * 用户在 ToolApprovalCard 勾选"本次开启期间批准全部工具"后置 true,
+     * 之后所有工具调用直接 Auto 执行,不再弹审批卡片。
+     * 应用冷启动后 ChatUiState 重建,自动回到 false。
+     */
+    val appRunAllowAllTools: Boolean = false,
+    /**
+     * F-4: /pin 置顶的消息文本(内存态,不持久化)。
+     *
+     * null = 未置顶。值为最后一条用户消息的正文,渲染为消息列表顶部的置顶横幅;
+     * /pin 再次置顶同一条消息时清空(取消置顶)。切换会话后由 switchSession 清空。
+     */
+    val pinnedMessageContent: String? = null,
+) {
+    val isStreaming: Boolean get() = streamState.isStreaming
+    val isWaitingFirstToken: Boolean get() = streamState.isWaitingFirstToken
+    val visionProgress: io.zer0.muse.vision.VisionProgress? get() = streamState.visionProgress
+    val visionAssistedMessageIds: Set<String> get() = streamState.visionAssistedMessageIds
+    val isOcrProcessing: Boolean get() = streamState.isOcrProcessing
+    val toolProgressMessage: String? get() = streamState.toolProgressMessage
+    val pendingToolCallCount: Int get() = streamState.pendingToolCallCount
+    val isCompressing: Boolean get() = toolsState.isCompressing
+    val compressionPhase: ManualCompressionPhase get() = toolsState.compressionPhase
+    val taskCards: Map<String, io.zer0.muse.ui.taskcard.TaskCardData> get() = toolsState.taskCards
+    val toolCallHistory: List<ToolCallRecord> get() = toolsState.toolCallHistory
+    val pendingToolApprovals: List<PendingToolApproval> get() = toolsState.pendingToolApprovals
+    val input: String get() = inputState.input
+    val hasDraft: Boolean get() = inputState.hasDraft
+    val inputHistory: List<String> get() = inputState.inputHistory
+    val inputHistoryIndex: Int? get() = inputState.inputHistoryIndex
+    val pendingImages: List<String> get() = inputState.pendingImages
+    val pendingDocuments: List<io.zer0.muse.ui.chat.PendingDocument> get() = inputState.pendingDocuments
+    val replyingTo: UIMessage? get() = inputState.replyingTo
+    val replyQuoteOverride: String? get() = inputState.replyQuoteOverride
+    val asrState: ASRState get() = inputState.asrState
+    val sendQueue: List<PendingMessage> get() = inputState.sendQueue
+    val sessions: List<SessionEntity> get() = sessionState.sessions
+    val currentSessionId: String? get() = sessionState.currentSessionId
+    val archivedSessions: List<SessionEntity> get() = sessionState.archivedSessions
+    val folders: List<io.zer0.muse.data.session.FolderEntity> get() = sessionState.folders
+    val isSessionsLoading: Boolean get() = sessionState.isSessionsLoading
+    val sessionsError: String? get() = sessionState.sessionsError
+    val archivedSessionsError: String? get() = sessionState.archivedSessionsError
+    val isAgentMode: Boolean get() = agentState.isAgentMode
+    val agentSessionId: String? get() = agentState.agentSessionId
+    val assistants: List<AssistantEntity> get() = agentState.assistants
+    val isAssistantsLoading: Boolean get() = agentState.isAssistantsLoading
+    val currentAssistant: AssistantEntity? get() = agentState.currentAssistant
+    val delegationChain: List<io.zer0.muse.tools.DelegationChainTracker.ChainNode> get() = agentState.delegationChain
+    val activePauseRequest: io.zer0.muse.tools.DelegationPauseManager.PauseRequest? get() = agentState.activePauseRequest
+    val activeSubagentThreads: List<io.zer0.muse.data.subagent.SubagentThreadStore.ThreadEntry> get() = agentState.activeSubagentThreads
+    val pendingSubagentTasks: List<io.zer0.muse.tools.DeferredResultStore.DeferredTask> get() = agentState.pendingSubagentTasks
+    val isWeakToolModel: Boolean get() = agentState.isWeakToolModel
+    val weakToolHint: String? get() = agentState.weakToolHint
+    val isSessionLocked: Boolean get() = agentState.isSessionLocked
+    val agentModeHint: String? get() = agentState.agentModeHint
+
+    /** v0.49: 向后兼容 — 现有读 state.error 的地方取第一条错误消息。 */
+    val error: String? get() = errors.firstOrNull()?.message
+
+    fun copy(
+        streamState: ChatStreamState = this.streamState,
+        inputState: ChatInputState = this.inputState,
+        sessionState: ChatSessionState = this.sessionState,
+        agentState: ChatAgentState = this.agentState,
+        toolsState: ChatToolsState = this.toolsState,
+        isSwitchingSession: Boolean = this.isSwitchingSession,
+        selectionMode: Boolean = this.selectionMode,
+        selectedMessageIds: Set<String> = this.selectedMessageIds,
+        errors: List<ChatError> = this.errors,
+        isConfigured: Boolean = this.isConfigured,
+        isFetchingModels: Boolean = this.isFetchingModels,
+        fetchModelsError: String? = this.fetchModelsError,
+        memoryCacheHit: Boolean = this.memoryCacheHit,
+        isDrawerOpen: Boolean = this.isDrawerOpen,
+        searchQuery: String = this.searchQuery,
+        searchResults: List<SearchResult> = this.searchResults,
+        isSearching: Boolean = this.isSearching,
+        searchTab: Int = this.searchTab,
+        messageResults: List<SearchResult> = this.messageResults,
+        isSearchingMessages: Boolean = this.isSearchingMessages,
+        searchError: String? = this.searchError,
+        targetMessageId: String? = this.targetMessageId,
+        searchHighlightQuery: String? = this.searchHighlightQuery,
+        highlightedMessageId: String? = this.highlightedMessageId,
+        isDrawMode: Boolean = this.isDrawMode,
+        imageGenParams: io.zer0.ai.image.ImageGenParams = this.imageGenParams,
+        isGeneratingImage: Boolean = this.isGeneratingImage,
+        isGeneratingVideo: Boolean = this.isGeneratingVideo,
+        isTranslating: Boolean = this.isTranslating,
+        translatingMessageId: Uuid? = this.translatingMessageId,
+        favoriteMessages: List<UIMessage> = this.favoriteMessages,
+        isFavoritesLoading: Boolean = this.isFavoritesLoading,
+        favoritesError: String? = this.favoritesError,
+        favoriteTags: List<String> = this.favoriteTags,
+        favoriteTagFilter: String? = this.favoriteTagFilter,
+        favoriteGroup: String? = this.favoriteGroup,
+        webSearchEnabled: Boolean = this.webSearchEnabled,
+        contextTokenCount: Int = this.contextTokenCount,
+        contextMaxTokens: Int = this.contextMaxTokens,
+        contextCheckpointBoundaryId: String? = this.contextCheckpointBoundaryId,
+        contextCheckpointTotalCovered: Int = this.contextCheckpointTotalCovered,
+        tokenEstimateEnabled: Boolean = this.tokenEstimateEnabled,
+        pasteAsFileEnabled: Boolean = this.pasteAsFileEnabled,
+        pasteAsFileThreshold: Int = this.pasteAsFileThreshold,
+        tokenCountVisible: Boolean = this.tokenCountVisible,
+        tokenSnapshot: TokenCountSnapshot? = this.tokenSnapshot,
+        deepThinkingEnabled: Boolean = this.deepThinkingEnabled,
+        deepThinkingLevel: ReasoningLevel = this.deepThinkingLevel,
+        webSearchConfig: WebSearchConfig = this.webSearchConfig,
+        quickMessages: List<QuickMessageEntity> = this.quickMessages,
+        currentMode: String = this.currentMode,
+        lorebooks: List<LorebookEntity> = this.lorebooks,
+        lorebooksError: String? = this.lorebooksError,
+        promptInjections: List<PromptInjectionEntity> = this.promptInjections,
+        allQuickMessages: List<QuickMessageEntity> = this.allQuickMessages,
+        promptTemplates: List<io.zer0.muse.data.prompttemplate.PromptTemplate> = this.promptTemplates,
+        isSpeaking: Boolean = this.isSpeaking,
+        speakingMessageId: Uuid? = this.speakingMessageId,
+        taskCards: Map<String, io.zer0.muse.ui.taskcard.TaskCardData> = this.taskCards,
+        agentPlans: Map<String, io.zer0.muse.ui.taskcard.AgentPlan> = this.agentPlans,
+        asrConfig: io.zer0.muse.asr.AsrConfig = this.asrConfig,
+        providers: List<io.zer0.ai.core.ProviderConfig> = this.providers,
+        activeProviderId: String? = this.activeProviderId,
+        selectedModelId: String? = this.selectedModelId,
+        toolModelId: String? = this.toolModelId,
+        chatPreferences: io.zer0.muse.data.ChatPreferences = this.chatPreferences,
+        shareTemplate: io.zer0.muse.data.ShareTemplateConfig = this.shareTemplate,
+        mediaConfig: io.zer0.muse.data.MediaConfig = this.mediaConfig,
+        debugInfo: String? = this.debugInfo,
+        toast: String? = this.toast,
+        multiAgentConfig: MultiAgentConfig = this.multiAgentConfig,
+        selectedArtifact: io.zer0.muse.data.artifact.ArtifactEntity? = this.selectedArtifact,
+        listFirstVisibleItemIndex: Int = this.listFirstVisibleItemIndex,
+        listFirstVisibleItemScrollOffset: Int = this.listFirstVisibleItemScrollOffset,
+        agentListFirstVisibleItemIndex: Int = this.agentListFirstVisibleItemIndex,
+        agentListFirstVisibleItemScrollOffset: Int = this.agentListFirstVisibleItemScrollOffset,
+        agentScrollOwnerSessionId: String? = this.agentScrollOwnerSessionId,
+        messageExpandedStates: Map<String, MessageExpandedState> = this.messageExpandedStates,
+        hasMoreHistory: Boolean = this.hasMoreHistory,
+        isLoadingMore: Boolean = this.isLoadingMore,
+        lastHistoryLoadCount: Int = this.lastHistoryLoadCount,
+        toolCallHistory: List<ToolCallRecord> = this.toolCallHistory,
+        taskRoutingEnabled: Boolean = this.taskRoutingEnabled,
+        pendingToolApprovals: List<PendingToolApproval> = this.pendingToolApprovals,
+        sessionPermissionMode: SessionPermissionMode = this.sessionPermissionMode,
+        appRunAllowAllTools: Boolean = this.appRunAllowAllTools,
+        pinnedMessageContent: String? = this.pinnedMessageContent,
+        isStreaming: Boolean = this.isStreaming,
+        isWaitingFirstToken: Boolean = this.isWaitingFirstToken,
+        visionProgress: io.zer0.muse.vision.VisionProgress? = this.visionProgress,
+        visionAssistedMessageIds: Set<String> = this.visionAssistedMessageIds,
+        isOcrProcessing: Boolean = this.isOcrProcessing,
+        toolProgressMessage: String? = this.toolProgressMessage,
+        pendingToolCallCount: Int = this.pendingToolCallCount,
+        input: String = this.input,
+        hasDraft: Boolean = this.hasDraft,
+        inputHistory: List<String> = this.inputHistory,
+        inputHistoryIndex: Int? = this.inputHistoryIndex,
+        pendingImages: List<String> = this.pendingImages,
+        pendingDocuments: List<io.zer0.muse.ui.chat.PendingDocument> = this.pendingDocuments,
+        replyingTo: UIMessage? = this.replyingTo,
+        replyQuoteOverride: String? = this.replyQuoteOverride,
+        sendQueue: List<PendingMessage> = this.sendQueue,
+        asrState: ASRState = this.asrState,
+        sessions: List<SessionEntity> = this.sessions,
+        currentSessionId: String? = this.currentSessionId,
+        archivedSessions: List<SessionEntity> = this.archivedSessions,
+        archivedSessionsError: String? = this.archivedSessionsError,
+        folders: List<io.zer0.muse.data.session.FolderEntity> = this.folders,
+        isSessionsLoading: Boolean = this.isSessionsLoading,
+        sessionsError: String? = this.sessionsError,
+        isAgentMode: Boolean = this.isAgentMode,
+        agentSessionId: String? = this.agentSessionId,
+        assistants: List<AssistantEntity> = this.assistants,
+        isAssistantsLoading: Boolean = this.isAssistantsLoading,
+        currentAssistant: AssistantEntity? = this.currentAssistant,
+        delegationChain: List<io.zer0.muse.tools.DelegationChainTracker.ChainNode> = this.delegationChain,
+        activePauseRequest: io.zer0.muse.tools.DelegationPauseManager.PauseRequest? = this.activePauseRequest,
+        activeSubagentThreads: List<io.zer0.muse.data.subagent.SubagentThreadStore.ThreadEntry> = this.activeSubagentThreads,
+        pendingSubagentTasks: List<io.zer0.muse.tools.DeferredResultStore.DeferredTask> = this.pendingSubagentTasks,
+        isWeakToolModel: Boolean = this.isWeakToolModel,
+        weakToolHint: String? = this.weakToolHint,
+        isSessionLocked: Boolean = this.isSessionLocked,
+        agentModeHint: String? = this.agentModeHint,
+    ): ChatUiState = ChatUiState(
+        streamState =
+        streamState.copy(
+            isStreaming = isStreaming,
+            isWaitingFirstToken = isWaitingFirstToken,
+            visionProgress = visionProgress,
+            visionAssistedMessageIds = visionAssistedMessageIds,
+            isOcrProcessing = isOcrProcessing,
+            toolProgressMessage = toolProgressMessage,
+            pendingToolCallCount = pendingToolCallCount,
+        ),
+        inputState =
+        inputState.copy(
+            input = input,
+            hasDraft = hasDraft,
+            inputHistory = inputHistory,
+            inputHistoryIndex = inputHistoryIndex,
+            pendingImages = pendingImages,
+            pendingDocuments = pendingDocuments,
+            replyingTo = replyingTo,
+            replyQuoteOverride = replyQuoteOverride,
+            asrState = asrState,
+            sendQueue = sendQueue,
+        ),
+        sessionState =
+        sessionState.copy(
+            sessions = sessions,
+            currentSessionId = currentSessionId,
+            archivedSessions = archivedSessions,
+            archivedSessionsError = archivedSessionsError,
+            folders = folders,
+            isSessionsLoading = isSessionsLoading,
+            sessionsError = sessionsError,
+        ),
+        agentState =
+        agentState.copy(
+            isAgentMode = isAgentMode,
+            agentSessionId = agentSessionId,
+            assistants = assistants,
+            isAssistantsLoading = isAssistantsLoading,
+            currentAssistant = currentAssistant,
+            delegationChain = delegationChain,
+            activePauseRequest = activePauseRequest,
+            activeSubagentThreads = activeSubagentThreads,
+            pendingSubagentTasks = pendingSubagentTasks,
+            isWeakToolModel = isWeakToolModel,
+            weakToolHint = weakToolHint,
+            isSessionLocked = isSessionLocked,
+            agentModeHint = agentModeHint,
+        ),
+        isSwitchingSession = isSwitchingSession,
+        selectionMode = selectionMode,
+        selectedMessageIds = selectedMessageIds,
+        errors = errors,
+        isConfigured = isConfigured,
+        isFetchingModels = isFetchingModels,
+        fetchModelsError = fetchModelsError,
+        memoryCacheHit = memoryCacheHit,
+        isDrawerOpen = isDrawerOpen,
+        searchQuery = searchQuery,
+        searchResults = searchResults,
+        isSearching = isSearching,
+        searchTab = searchTab,
+        messageResults = messageResults,
+        isSearchingMessages = isSearchingMessages,
+        searchError = searchError,
+        targetMessageId = targetMessageId,
+        searchHighlightQuery = searchHighlightQuery,
+        highlightedMessageId = highlightedMessageId,
+        isDrawMode = isDrawMode,
+        imageGenParams = imageGenParams,
+        isGeneratingImage = isGeneratingImage,
+        isGeneratingVideo = isGeneratingVideo,
+        isTranslating = isTranslating,
+        translatingMessageId = translatingMessageId,
+        favoriteMessages = favoriteMessages,
+        isFavoritesLoading = isFavoritesLoading,
+        favoritesError = favoritesError,
+        favoriteTags = favoriteTags,
+        favoriteTagFilter = favoriteTagFilter,
+        favoriteGroup = favoriteGroup,
+        webSearchEnabled = webSearchEnabled,
+        contextTokenCount = contextTokenCount,
+        contextMaxTokens = contextMaxTokens,
+        tokenEstimateEnabled = tokenEstimateEnabled,
+        pasteAsFileEnabled = pasteAsFileEnabled,
+        pasteAsFileThreshold = pasteAsFileThreshold,
+        tokenCountVisible = tokenCountVisible,
+        tokenSnapshot = tokenSnapshot,
+        toolsState =
+        toolsState.copy(
+            taskCards = taskCards,
+            toolCallHistory = toolCallHistory,
+            pendingToolApprovals = pendingToolApprovals,
+        ),
+        deepThinkingEnabled = deepThinkingEnabled,
+        deepThinkingLevel = deepThinkingLevel,
+        webSearchConfig = webSearchConfig,
+        quickMessages = quickMessages,
+        currentMode = currentMode,
+        lorebooks = lorebooks,
+        lorebooksError = lorebooksError,
+        promptInjections = promptInjections,
+        allQuickMessages = allQuickMessages,
+        promptTemplates = promptTemplates,
+        isSpeaking = isSpeaking,
+        speakingMessageId = speakingMessageId,
+        agentPlans = agentPlans,
+        asrConfig = asrConfig,
+        providers = providers,
+        activeProviderId = activeProviderId,
+        selectedModelId = selectedModelId,
+        toolModelId = toolModelId,
+        chatPreferences = chatPreferences,
+        shareTemplate = shareTemplate,
+        mediaConfig = mediaConfig,
+        debugInfo = debugInfo,
+        toast = toast,
+        multiAgentConfig = multiAgentConfig,
+        selectedArtifact = selectedArtifact,
+        listFirstVisibleItemIndex = listFirstVisibleItemIndex,
+        listFirstVisibleItemScrollOffset = listFirstVisibleItemScrollOffset,
+        agentListFirstVisibleItemIndex = agentListFirstVisibleItemIndex,
+        agentListFirstVisibleItemScrollOffset = agentListFirstVisibleItemScrollOffset,
+        agentScrollOwnerSessionId = agentScrollOwnerSessionId,
+        messageExpandedStates = messageExpandedStates,
+        hasMoreHistory = hasMoreHistory,
+        isLoadingMore = isLoadingMore,
+        lastHistoryLoadCount = lastHistoryLoadCount,
+        taskRoutingEnabled = taskRoutingEnabled,
+        sessionPermissionMode = sessionPermissionMode,
+        appRunAllowAllTools = appRunAllowAllTools,
+        pinnedMessageContent = pinnedMessageContent,
+    )
+}
+
+data class ToolCallRecord(
+    val toolName: String,
+    val arguments: String,
+    val result: String,
+    val isSuccess: Boolean,
+    val timestamp: Long,
+    /** Stable execution identity; legacy records default to empty. */
+    val traceId: String = "",
+    val sessionId: String = "",
+    val turnId: String = "",
+    val generationId: String = "",
+    val roundIndex: Int = -1,
+    val toolCallId: String = "",
+    val executionId: String = "",
+    val startedAt: Long? = null,
+    val finishedAt: Long? = null,
+    val status: String = if (isSuccess) "COMPLETED" else "FAILED",
+    val terminationReason: String? = null,
+)
+
+/** 待审批的工具调用(ToolApprovalCard 用)。 */
+
+data class PendingToolApproval(
+    val toolCallId: String,
+    val toolName: String,
+    val argumentsPreview: String,
+    val alwaysAllow: Boolean = false,
+    /** v1.0.16: 本次开启期间批准全部工具(内存态,不持久化) */
+    val appRunAllowAll: Boolean = false,
+    /**
+     * v1.x: 用户在审批卡片中选择的参考图(data URI 格式,如 "data:image/jpeg;base64,...")。
+     *
+     * 仅对 generate_image 等支持参考图的工具有效;批准后通过
+     * [ToolApprovalState.Approved.argOverrides] 注入工具执行参数(reference_image 键)。
+     * LLM 自身无法访问用户本地相册,故本字段是图生图参考图的主要来源。
+     */
+    val referenceImageOverride: String? = null,
+)
+
+/**
+ * v1.45: 单条消息的 UI 展开状态缓存。
+ *
+ * 用 null 表示"尚未被用户手动切换过,使用 chatPreferences 中的默认值"。
+ */
+data class MessageExpandedState(
+    val isMoodExpanded: Boolean? = null,
+    val isReasoningExpanded: Boolean? = null,
+    val isReflectionExpanded: Boolean? = null,
+    /** v2.4.6: 译文块展开状态。 */
+    val isTranslationExpanded: Boolean? = null,
+)
+
+@OptIn(ExperimentalCoroutinesApi::class)
+/**
+ * 聊天页 ViewModel — 整个 App 的核心业务中枢。
+ *
+ * 职责:
+ *  - 会话/消息的加载、发送、流式接收、停止、重试、编辑、删除
+ *  - 多模态:文本 + 图片(用户拍照/相册 + AI 生成图)+ 附件(文档 OCR 解析)
+ *  - 工具调用:Skill 系统(9 个内置实现 + 用户导入 .skill.json)+ MCP 动态工具
+ *  - 上下文管道:6 步 Transformer 顺序处理(Memory → Time → Lorebook → PromptInjection → Template → ThinkTag/MoodTag → 压缩)
+ *  - 系统提示组装:SystemPromptAssembler 把 Assistant 配置 + 用户画像 + 记忆组合成最终 system prompt
+ *  - Web 搜索:深思考开关开启时,LLM 自主决定何时调用 web_search/web_fetch
+ *  - 深思考:开关切换 ReasoningLevel.HIGH(8000 tokens 预算)
+ *  - TTS:流式生成完成后可触发系统 TTS 播报
+ *  - 通知:流式启动/进度/完成/错误/停止处调用 MuseNotificationManager
+ *
+ * 状态管理:单一 [state] StateFlow,UI 通过 collectAsStateWithLifecycle 订阅。
+ * 协程:所有网络/DB 操作用 viewModelScope,工具调用有 2 分钟超时([TOOL_TIMEOUT_MS])。
+ */
+// i18n 后续提取路线图(整体迁移时统一处理,本处暂缓)— 本 ViewModel 已注入
+// appContext(见下方构造函数),后续可用 appContext.getString(R.string.xxx) 或
+// ErrorMessage.toLocalizedString(appContext) 替换以下区域的中文字符串:
+// MuseToast.show / reportError / addError / errors.emit / toast /
+// fetchModelsError / 各 ChatError.message / 通知文本 / 步骤进度文案 / 导出 markdown 标签等。
+// Logger 日志/TAG/LLM 提示词不提取。
+// @REFACTOR: 建议拆分的子组件
+//   - ChatSessionManager: 会话创建/切换/归档逻辑
+//   - ChatStreamOrchestrator: 流式请求/重连/超时
+//   - ChatToolDispatcher: ToolCall 路由与执行
+//   - ChatContextController: 上下文管理与压缩
+//   - ChatAudioController: TTS/ASR 状态管理
+//   - ChatErrorHandler: 错误分类与用户提示
+
+/**
+ * v1.131: 剥离 @文档名 标记的正则 — 文件级常量,避免每次 [buildWebSearchQuery] 调用都新建。
+ *
+ * 用于在 web 搜索前清理 user query 中的 @mention(知识库引用语义),
+ * 防止其污染搜索关键词。
+ */
+private val KNOWLEDGE_MENTION_REGEX = Regex("@[^\\s@]+")
+
+/** R-TEST-06: 发送守卫纯逻辑（防空消息/流式中/Agent 会话创建重入）。 */
+internal fun canStartGeneration(text: String, images: List<String>, isStreaming: Boolean, isCreatingAgentSession: Boolean): Boolean =
+    (text.isNotBlank() || images.isNotEmpty()) && !isStreaming && !isCreatingAgentSession
+
+/** R-TEST-06: 发送前合并待发送文档内容与用户输入(文档文本 + 用户输入)。 */
+internal fun buildSendText(
+    rawText: String,
+    documentContents: List<String>,
+    budget: io.zer0.muse.context.ContextBudget = io.zer0.muse.context.ContextBudget(),
+): String {
+    val docText = documentContents.joinToString("\n\n---\n\n")
+    // M4.3: 附件正文受统一 ContextBudget 上限约束(保留头部,截断可诊断);
+    // 用户输入在拼接顺序的最后,不会被附件截断吞掉。
+    val clampedDoc = budget.clampText(io.zer0.muse.context.ContextSection.ATTACHMENT_TEXT, docText)
+    return when {
+        documentContents.isEmpty() -> rawText
+        rawText.isBlank() -> clampedDoc
+        else -> "$clampedDoc\n\n---\n\n$rawText"
+    }
+}
+
+/** R-TEST-06: 仅当非流式、最后一条为带 [已中断] 标记的助手消息时才允许续写。 */
+internal fun canContinueGeneration(isStreaming: Boolean, lastMessage: UIMessage?): Boolean = !isStreaming && lastMessage != null &&
+    lastMessage.role == MessageRole.ASSISTANT &&
+    lastMessage.content.contains("[已中断]")
+
+/** R-TEST-06: 去掉 [已中断] 尾部标记,保留断点前内容。 */
+internal fun resumeFromInterrupted(content: String): String = content.removeSuffix("\n\n[已中断]").removeSuffix("[已中断]")
+
+/**
+ * C-11: 计算 [a] 与 [b] 的最长公共前缀长度(按 Unicode 代码单位)。
+ *
+ * 纯函数,供断点续传去重(duplicateRemaining)使用:当 provider 改写/补全返回内容时,
+ * 返回内容与已显示内容前缀并非逐字一致(原精确 startsWith 匹配会整体漏去重,
+ * 导致重复/跳变)。以 LCP 判定重叠量,仅跳过重叠部分,保留改写后的新内容。
+ *
+ * 例:longestCommonPrefix("今天天气很好", "今天天下雨") == 3(跳过"今天天")。
+ */
+internal fun longestCommonPrefix(a: String, b: String): Int {
+    val max = minOf(a.length, b.length)
+    var i = 0
+    while (i < max && a[i] == b[i]) i++
+    return i
+}
+
+/**
+ * 续传去重的保守裁剪策略。
+ *
+ * 只有两种情况可以证明 delta 是重放内容：
+ * 1. 整个 delta 都是旧前缀；
+ * 2. delta 覆盖了剩余旧前缀，后面才是新内容。
+ *
+ * 若 delta 在旧前缀中途分叉，公共前缀可能只是新内容的巧合开头；
+ * 此时返回 0，保留整段 delta，避免把用户真正的新首字吞掉。
+ */
+internal fun resumeOverlapToDrop(duplicateRemaining: String, delta: String): Int {
+    if (duplicateRemaining.isEmpty() || delta.isEmpty()) return 0
+    val overlap = longestCommonPrefix(duplicateRemaining, delta)
+    // A partial matching chunk may be legitimate new continuation text. Only drop
+    // a delta that proves the entire remaining old answer was replayed; otherwise
+    // prefer visible duplication over silently swallowing user-visible characters.
+    return overlap.takeIf { it == duplicateRemaining.length } ?: 0
+}
+
+/**
+ * v2.0: 续传时判定 provider 是否“从头重写” — 原文已被大面积消费(重叠量 >= 原文一半且至少 6 字符)
+ * 后出现分叉,说明新一轮是重新生成的完整回复,应用新文替换旧内容而不是追加,避免重复拼接。
+ */
+internal fun shouldReplaceOnResumeRewrite(duplicateTotal: Int, consumedChars: Int, minOverlap: Int = 6): Boolean =
+    duplicateTotal > 0 && consumedChars >= maxOf(minOverlap, duplicateTotal / 2)
+
+/**
+ * v2.0: Done 阶段兑底 — 新一轮尝试的文本把原文开头片段写回来了时,
+ * 同样视为“从头重写”,应替换旧内容(旧文+新文重复拼接的最后一层保护)。
+ */
+internal fun shouldReplaceOnResumeSupersede(original: String?, attemptText: String?, currentContent: String): Boolean {
+    if (original.isNullOrEmpty() || attemptText.isNullOrEmpty()) return false
+    val head = original.take(SUPERSEDE_HEAD_CHARS)
+    if (head.length < 4) return false
+    if (!attemptText.contains(head)) return false
+    return !currentContent.contentEquals(attemptText)
+}
+
+/** [shouldReplaceOnResumeSupersede] 比对的原文头部片段长度。 */
+private const val SUPERSEDE_HEAD_CHARS = 6
+
+/**
+ * C-12: 判定某轮是否可用 [toolModel] 作为请求模型。
+ *
+ * 工具轮(上一轮结果含 toolCalls)默认走 toolModel;但当本轮历史仍含图片、
+ * 而 [toolModel] 不支持视觉输入时,继续把图发给不支持视觉的模型会导致 HTTP 400,
+ * 此时应回退主模型(其视觉能力已在 prepareVisionContext 判定/降级)。
+ * 未配置 toolModel 或历史无图时返回 true,保持默认行为。
+ *
+ * @param history 本轮将要发送的对话历史
+ * @param toolModel 用户配置的工具模型(已增强识别能力)
+ */
+internal fun canUseToolModelForRound(history: List<UIMessage>, toolModel: Model): Boolean {
+    if (toolModel.supportsVisionInput()) return true
+    val hasImages = history.any { it.imageBase64List.isNotEmpty() }
+    return !hasImages
+}
+
+/** R-TEST-06: 重生成仅当非流式、有会话且当前用户变体可选时可用。 */
+internal fun canRegenerate(isStreaming: Boolean, hasSession: Boolean, hasSelectedUserVariant: Boolean): Boolean =
+    !isStreaming && hasSession && hasSelectedUserVariant
+
+/** Build the source text used by message translation, including reasoning-only replies. */
+internal fun buildTranslationSourceText(message: UIMessage): String {
+    val content = message.content.trim()
+    val reasoning = message.reasoning.orEmpty().trim()
+    return when {
+        content.isNotBlank() && reasoning.isNotBlank() ->
+            "${InternalPromptMarkers.BODY_HEADER}:\n$content\n\n${InternalPromptMarkers.THINKING_HEADER}:\n$reasoning"
+        content.isNotBlank() -> content
+        else -> reasoning
+    }
+}
+
+internal fun effectiveChatSessionId(state: ChatUiState): String? = if (state.isAgentMode) state.agentSessionId else state.currentSessionId
+
+// 渐进式拆分阶段仍需平铺注入依赖；保持 Koin 参数顺序稳定，避免大范围行为变更。
+@Suppress("LongParameterList")
+class ChatViewModel(
+    private val chatService: ChatService,
+    private val settings: SettingsRepository,
+    private val memoryTicker: MemoryTicker,
+    private val sessionRepository: SessionRepository,
+    // v2.x: 会话检查点读取器 —— 上下文组装时据此把"已压缩边界之前"的内容换成摘要
+    private val checkpointReader: io.zer0.memory.summary.ContextCheckpointReader,
+    private val imageService: ImageService,
+    private val videoGenerationService: io.zer0.ai.video.VideoGenerationService,
+    private val documentParser: DocumentParser,
+    private val toolRegistry: ToolRegistry,
+    private val assistantRepository: AssistantRepository,
+    private val webSearchService: WebSearchService,
+    private val lorebookRepository: LorebookRepository,
+    private val quickMessageRepository: QuickMessageRepository,
+    private val promptInjectionRepository: PromptInjectionRepository,
+    private val ocrManager: io.zer0.muse.doc.OcrManager,
+    private val ttsManager: TtsManager,
+    private val skillRepository: io.zer0.muse.data.skill.SkillRepository,
+    private val skillExecutor: io.zer0.muse.tools.SkillExecutor,
+    // v1.201: 委派暂停管理器 + 链路追踪器(与 SkillExecutor 共享同一 Koin single 实例)
+    private val delegationPauseManager: io.zer0.muse.tools.DelegationPauseManager,
+    private val delegationChainTracker: io.zer0.muse.tools.DelegationChainTracker,
+    private val agentRouter: AgentRouter,
+    private val folderRepository: io.zer0.muse.data.session.FolderRepository,
+    private val notificationManager: MuseNotificationManager,
+    // v0.30-a: 系统提示组装器(6 步工作流第 1 步)
+    private val systemPromptAssembler: io.zer0.muse.transformer.SystemPromptAssembler,
+    // v1.43: 应用级生成管理器(切页/后台保持生成)
+    private val chatGenerationManager: ChatGenerationManager,
+    // v1.43: 产物仓库(会话内嵌产物卡片)
+    private val artifactRepository: ArtifactRepository,
+    // v1.43: 应用 Context,用于启动前台服务
+    private val appContext: Context,
+    // v1.54: RAG 服务(知识库自动注入)
+    private val ragService: io.zer0.muse.rag.RagService,
+    // v1.25: 视觉辅助桥接器(让纯文本模型通过视觉模型"看到"图片)
+    private val visionBridge: io.zer0.muse.vision.VisionBridge,
+    // P2-4: 审计日志记录器(在消息发送入口记录用户发消息事件)
+    private val auditLogger: AuditLogger,
+    // P3: 会话级工具权限模式持久化
+    private val sessionPermissionStore: SessionPermissionStore,
+    // v1.0.15: 网络状态监听器(StreamInterrupted 后等待网络恢复自动重连)
+    private val networkMonitor: NetworkMonitor,
+    // v2.1: 用户活跃度画像,用户发消息时记录活动 + 更新对话结束类型,驱动自适应主动消息调度
+    private val activityProfile: UserActivityProfile,
+    // v1.202: 异步委派结果回灌(订阅 completedTasks,把后台完成的子 agent 结果作为 interlude 注入主对话)
+    private val deferredResultStore: io.zer0.muse.tools.DeferredResultStore,
+    // v1.202: 子 agent 线程管理器(暴露活跃子 agent 线程给 UI 展示)
+    private val subagentThreadStore: io.zer0.muse.data.subagent.SubagentThreadStore,
+    // v1.x: 会话级资源管理器(引用计数 + idle 清理)
+    private val sessionManager: io.zer0.muse.session.ConversationSessionManager,
+    // P1-1: Hook 注册表(注入 ToolOrchestrator + 消息处理 Hook)
+    private val hookRegistry: io.zer0.muse.hook.HookRegistry? = null,
+    // v1.0.52 P2-3: AI 记忆自动保存(对话中实时提取实体/关系/合并/分类)
+    private val memoryAutoSaveScheduler: io.zer0.memory.ai.MemoryAutoSaveScheduler? = null,
+    // B0-08: 里程碑检查器(生成结束后检查是否触发里程碑)
+    private val milestoneChecker: MilestoneChecker? = null,
+    // B2-04: 统一由 Koin 注入 ToolOrchestrator(主会话/子代理共享审批链路)
+    private val toolOrchestrator: io.zer0.muse.tools.ToolOrchestrator,
+    // B2-04: 子代理审批路由(注册本实例为 delegate,子代理需审批时弹主会话审批卡)
+    private val toolApprovalRouter: io.zer0.muse.tools.ToolApprovalRouter,
+    /** P0 对话树选择快照存储(可为 null,测试环境不注入)。 */
+    private val treeSnapshotStore: ConversationTreeSnapshotStore? = null,
+    // v1.x: 会话级浏览器实例注册表(每个会话独立 WebView,删除会话时释放)
+    private val browserManagerRegistry: io.zer0.muse.tools.BrowserManagerRegistry? = null,
+    // v1.x: 工具配置存储(审批策略持久化) — Koin 注入单例,
+    // 消除直接 new 导致的 DataStore 同文件多实例崩溃
+    private val toolConfigStore: io.zer0.muse.tools.ToolConfigStore? = null,
+    /** MCP 注册表,用于在首条消息前等待助手绑定的 server 完成 tools/list。 */
+    private val mcpRegistry: io.zer0.muse.mcp.McpRegistry? = null,
+    /** 统一生成/工具执行资源注册表,用于按 session 取消和 late-result 诊断。 */
+    private val executionRegistry: io.zer0.muse.session.SessionExecutionRegistry? = null,
+    /**
+     * P2-23: 媒体生成工具实现(Koin single,与 ToolRegistrarBootstrapper 注册工具的是同一实例)。
+     *
+     * 工具本体已在 App 启动时注册进 [ToolRegistry],本类只负责在初始化时安装会话投递宿主
+     * ([ChatMediaGenHost]),让 generate_image / generate_video / generate_qr_code 的结果
+     * 能写回"当前正在生成的助手消息"。测试环境不注入时为 null(宿主不安装,工具退化为
+     * 返回文件路径/URL)。
+     */
+    private val mediaGenTools: io.zer0.muse.tools.MediaGenToolsImpl? = null,
+    // v2.x: 委员会 — 从主对话随时召唤临时群聊讨论并把结论回灌(与群聊页共享同一调度器实例)
+    private val groupChatScheduler: io.zer0.muse.schedule.GroupChatScheduler? = null,
+    private val groupChatRepository: io.zer0.muse.data.groupchat.GroupChatRepository? = null,
+    private val conversationSummaryManager: SessionSummaryManager? = null,
+) : ViewModel(), ChatStateAccessor, io.zer0.muse.tools.ToolApprovalBridge {
+    // v1.0.54: autoSave 去重状态(30 秒内同会话只跑一次,防堆积)
+    private var lastAutoSaveSessionId: String? = null
+    private var lastAutoSaveAt: Long = 0L
+
+    /** 新旧链路适配层；默认仅在显式打开 shadow 开关时写入事件。 */
+    private val conversationService = ConversationService(sessionRepository)
+    private val messageCommit = MessageCommit(sessionRepository)
+
+    /**
+     * 记录不影响用户行为的 shadow 事件。
+     * CancellationException 必须继续上抛，避免诊断写入吞掉用户停止生成。
+     */
+    private suspend fun recordConversationShadow(event: ConversationEventDraft) = generationController.recordConversationShadow(event)
+
+    companion object {
+        /** v0.47: 工具调用超时阈值(2 分钟),超时则终止,避免阻塞流式输出。 */
+        private const val TOOL_TIMEOUT_MS = 120_000L
+
+        /** 审批卡不能无限期阻塞后台生成；超时按拒绝处理。 */
+        private const val TOOL_APPROVAL_TIMEOUT_MS = 60_000L
+
+        /** v2.x 工具瘦身阶段1:粘性工具扫描的历史消息上限(从后往前)。 */
+        private const val STICKY_HISTORY_SCAN_MESSAGES = 50
+
+        /** v1.53-A1: 消息分页页大小(初始加载 + 上滑加载更多的窗口大小)。 */
+        private const val MESSAGE_PAGE_SIZE = 50
+
+        /**
+         * v2.5.3 (P3-3): 流式期间落盘节流阀值。
+         *
+         * 每个生成流对应一个会话，因此这两项即“按 session 批量 flush”的粒度：
+         * 累计新增内容少于 [PERSIST_CHAR_THRESHOLD] 字符、且距上次落盘不足
+         * [PERSIST_TIME_THRESHOLD_MS] 时跳过写盘，避免逐 chunk 放大写盘量。
+         */
+        private const val PERSIST_CHAR_THRESHOLD = 300
+        private const val PERSIST_TIME_THRESHOLD_MS = 2000L
+
+        /** 自动压缩安全尾部：系统保留最近少量消息和完整工具轮次,用户无需选择条数。 */
+        private const val COMPRESSION_SAFETY_TAIL_MESSAGES = 10
+
+        /** v1.79 (L-CV1): 工具轮次上限读取失败时的回退值(正常路径由设置决定,0=无限制)。 */
+        private const val MAX_TOOL_ROUNDS = 25
+
+        /**
+         * v1.134 P1-1: 流式自动重试最大次数(NETWORK/RATE_LIMIT 错误)。
+         * v1.0.16: 从 2 提到 3,退避 3s/10s/30s,覆盖典型切后台时长(5-15s)。
+         */
+        private const val MAX_STREAM_RETRIES = 3
+
+        /**
+         * v1.0.17: StreamInterrupted 智能续传等待网络恢复的超时时间(毫秒)。
+         *
+         * 网络中断后轮询 [NetworkMonitor.isOnline],最多等待 30s;
+         * 超时未恢复则降级为手动重试(保留部分内容 + isRecoverable)。
+         * 30s 覆盖典型切后台 / 网络切换时长(5-15s),避免无限等待。
+         */
+        private const val NETWORK_RECOVERY_TIMEOUT_MS = 30_000L
+
+        /** v1.0.17: 等待网络恢复时的轮询间隔(毫秒)。 */
+        private const val NETWORK_POLL_INTERVAL_MS = 2_000L
+
+        /** v1.200: 自动路由置信度阈值，低于此值仍走当前助手。 */
+        private const val AUTO_ROUTE_CONFIDENCE_THRESHOLD = 0.55f
+        // v1.80 (L-CV1): 流式/绘图/压缩相关魔法数字提取为常量
+        /**
+         * 自动压缩的兜底触发比例（窗口未知或极小时的退化口径）。
+         *
+         * v2.x: 主口径改为"按窗口比例预留"（见 [shouldAutoCompress]，与
+         * [AUTO_COMPRESS_MIN_RESERVE_TOKENS] / [AUTO_COMPRESS_RESERVE_RATIO] 配套）。
+         * 固定 80% 对 200K 以上窗口的模型触发过晚：等占用到 80% 时，一轮工具循环
+         * 就可能在生成中途把窗口撞爆。
+         */
+        private const val AUTO_COMPRESS_TOKEN_RATIO = 0.8f
+
+        /** 自动压缩预留量的下限：窗口再小也要留出这么多 token 给输出与后续工具结果。 */
+        private const val AUTO_COMPRESS_MIN_RESERVE_TOKENS = 16_384
+
+        /** 自动压缩预留量占窗口的比例（大窗口下按比例留，避免固定值相对窗口太小）。 */
+        private const val AUTO_COMPRESS_RESERVE_RATIO = 0.1
+
+        /**
+         * 是否需要触发自动压缩（纯函数，便于单测锁定口径）。
+         *
+         * 口径 = "占用越过 窗口 − 预留量"，预留量取 `max(16K, 10% 窗口)`：
+         *  - 窗口 ≤ 0（未知）或占用 ≤ 0（还没算出来）→ 不触发；
+         *  - 窗口小到连预留量都装不下（≤ 预留量）→ 退回固定 80% 比例，避免永远触发或永不触发。
+         *
+         * 为什么不用固定 80%：200K 窗口下 80% 意味着已经塞进 160K，留给"本轮输出 + 后续工具结果"
+         * 的空间只剩 40K，一轮工具循环就可能在中途撞爆窗口 —— 而中途没有压缩机会。
+         */
+        internal fun shouldAutoCompress(currentTokens: Int, maxTokens: Int): Boolean {
+            if (maxTokens <= 0 || currentTokens <= 0) return false
+            val reserve = maxOf(AUTO_COMPRESS_MIN_RESERVE_TOKENS, (maxTokens * AUTO_COMPRESS_RESERVE_RATIO).toInt())
+            return if (maxTokens > reserve) {
+                currentTokens > maxTokens - reserve
+            } else {
+                currentTokens.toFloat() / maxTokens > AUTO_COMPRESS_TOKEN_RATIO
+            }
+        }
+        // v1.105 阶段 4: IMAGE_SCALE_TARGET / IMAGE_JPEG_QUALITY / DOC_MAX_CHARS 已下沉到对应 Coordinator
+        /**
+         * v1.0.3: 流式 UI 更新字符阈值(节流)。
+         *
+         * 从 40 降到 12,让内容更平滑地流入,避免"一段一段"的视觉断层。
+         * 首 token 会绕过此阈值立即刷新(见 [launchStream] 内 isFirstToken 分支)。
+         */
+        private const val STREAM_UI_CHAR_THRESHOLD = 12
+
+        /**
+         * v1.0.3: 流式 UI 更新时间阈值(毫秒,节流)。
+         *
+         * 从 80ms 降到 50ms,配合更小的字符阈值让流式更连贯。
+         * 50ms ≈ 20fps,人眼感知为"连续流动"而非"一段一段"。
+         */
+        private const val STREAM_UI_TIME_THRESHOLD_MS = 50L
+        // v1.0.4: 流式 UI 自适应切片(50ms 节流 + 自适应切片)。
+        // 把"字符数 OR 时间"双条件改为"固定 50ms 节流 + 自适应切片大小":
+        // - delta 先累积到 pendingBuilder,50ms 定时器触发时按切片大小取前 N 个字符输出
+        // - 切片大小根据流式速率(最近 10 个 chunk 间隔滑动平均)动态调整:
+        //   慢速流(Reasoning)间隔大 → rate 小 → 切片小(细粒度,2-40)
+        //   快速流(纯文本)间隔小 → rate 大 → 切片大(批量,40-240)
+        /** 固定节流间隔(毫秒),时间到就触发一次切片输出。 */
+        private const val STREAM_THROTTLE_MS = 50L
+
+        /**
+         * v2.0: 长正文流式节拍自适应。
+         *
+         * 文本越长,Markdown 块解析/重排与气泡重组成本越高。短文本保持 50ms 的
+         * "打字机"节拍;超过阈值后放宽刷新间隔,配合更大的切片(见 [computeAdaptiveSlice] 的
+         * flushScale),减少长回复时的重绘次数,同时保持逐字流入的观感。
+         */
+        private fun streamFlushIntervalMs(builderLength: Int): Long = when {
+            builderLength < 2_000 -> STREAM_THROTTLE_MS
+            builderLength < 6_000 -> 90L
+            else -> 130L
+        }
+
+        /** 自适应切片下限:慢速流也至少输出 2 字符,避免空刷新。 */
+        private const val STREAM_SLICE_MIN = 2
+
+        /** 自适应切片基准:rate=1.0 时的切片大小,对应 avgInterval≈50ms 的中速流。 */
+        private const val STREAM_SLICE_BASE = 40
+
+        /** 自适应切片上限:快速流单次最多输出 420 字符(长文本节拍变慢后同步放大)。 */
+        private const val STREAM_SLICE_MAX = 420
+
+        /** chunk 间隔滑动窗口大小(最近 N 个 chunk 的间隔用于计算平均速率)。 */
+        private const val STREAM_SLIDE_WINDOW = 10
+        // v1.117: 删除 6 个孤儿常量(STREAM_NOTIF_*/STREAM_TOKEN_*/STREAM_PERSIST_*),
+        // 实际节流逻辑在 launchStream 内用字面量实现,这些常量从未被引用。
+
+        // v1.116 (C1-2): 工具调用循环内 conversationHistory 的工具链部分最大消息条数。
+        // 超过时丢弃较早的工具调用轮次(保留初始上下文 + 最近工具链)。
+        private const val MAX_TOOL_CHAIN_MESSAGES = 30
+
+        // P0-6: 断点恢复时审批卡展示的工具参数预览最大字符数。
+        private const val MAX_TOOL_APPROVAL_ARGS_CHARS = 20_000 // v2.0.1: 500→20000，审批卡需完整 JSON 生成人话摘要
+
+        // v1.116: 表情包相关工具 ID 集合,用于概率控制时过滤
+        private val STICKER_TOOL_IDS = setOf("list_stickers", "send_sticker")
+
+        /**
+         * v1.104 U7: [favoriteTagFilter] 的特殊值,表示"仅显示未分组"。
+         *
+         * 用一个不会与用户自定义标签冲突的内部字符串。
+         * FavoritesScreen 顶部 FilterChip "未分组" 选中时调 setFavoriteTagFilter(FAVORITE_TAG_UNGROUPED)。
+         */
+        const val FAVORITE_TAG_UNGROUPED = "__ungrouped__"
+
+        // v2.0: 预设收藏分类常量
+        const val FAVORITE_GROUP_INSPIRATION = "__group_inspiration__"
+        const val FAVORITE_GROUP_CODE = "__group_code__"
+        const val FAVORITE_GROUP_LEARNING = "__group_learning__"
+        const val FAVORITE_GROUP_CUSTOM = "__group_custom__"
+    }
+
+    private val stateStore = ChatStateStore()
+    private val _state get() = stateStore.state
+
+    // v1.100: StateFlow 本身已是 conflated(只保留最新值),流式高频更新时
+    // collectAsStateWithLifecycle 只会拿到最新值。实际瓶颈在重组范围(P1-P3 已
+    // 通过 @Immutable + derivedStateOf 收窄),无需额外 sample。
+    val state: StateFlow<ChatUiState> = _state.asStateFlow()
+
+    /** B2-01: 消息列表独立 StateFlow,不再放进 ChatUiState。 */
+    private val _messages get() = stateStore.messages
+    val messages: StateFlow<List<UIMessage>> = _messages.asStateFlow()
+
+    // v1.93+: 会话消息内存 LRU 缓存。
+    // ChatViewModel 改为 Koin single 后会话消息列表永不释放,长时间使用内存累积明显。
+    // 此处以 LRU 策略保留最近 SessionMemoryCache.MAX_CACHE_SIZE 个会话的内存副本,
+    // 超出后自动驱逐最久未访问的会话,切回时从 DB 重新加载。
+    // 注:无外部依赖,直接实例化,不走 Koin(避免改动 single{} 注册的位置参数列表)。
+    // v2.x: 上限热读设置(聊天设置→高级,默认 5)
+    private val sessionMemoryCache = SessionMemoryCache { settings.sessionCacheSizeCache }
+
+    // ── 语音对话模式(录音 → 识别 → 思考 → 播报循环)──────────
+    // 状态机:IDLE → LISTENING → THINKING → SPEAKING → LISTENING(循环)
+    // IDLE:等待用户点击主按钮
+    // LISTENING:ASR 录音中,实时回调写入 transcript
+    // THINKING:用户消息已发送,等待 AI 流式回复完成
+    // SPEAKING:TTS 朗读 AI 回复,朗读完恢复 LISTENING(连续对话)
+    private val voiceState = ChatVoiceState()
+    private val _voiceConversationState get() = voiceState.state
+    val voiceConversationState: StateFlow<VoiceConversationState> = _voiceConversationState.asStateFlow()
+
+    /** 语音对话模式实时识别文本(LISTENING 时 ASR 回调写入,UI 据此显示转写)。 */
+    private val _voiceConversationTranscript get() = voiceState.transcript
+    val voiceConversationTranscript: StateFlow<String> = _voiceConversationTranscript.asStateFlow()
+
+    /** 语音对话模式当前 AI 回复文本(SPEAKING 时填充,UI 据此显示朗读内容)。 */
+    private val _voiceConversationAiReply get() = voiceState.aiReply
+    val voiceConversationAiReply: StateFlow<String> = _voiceConversationAiReply.asStateFlow()
+
+    /** TTS 播放状态(透传 TtsManager.playbackState,供语音对话 UI 显示进度)。 */
+    val ttsPlaybackStateFlow: StateFlow<PlaybackState> get() = ttsManager.playbackState
+
+    /** 语音对话循环观察协程(已迁至 ChatMediaController)。 */
+
+    // 消息分支管理器
+    // P0 对话树: 两级结构(用户提问组 → 助手回复组)的事实源,
+    // _messages 在流式期间保持扁平列表,稳定点(发送/重试/编辑/切会话/流结束)重建树并同步显示。
+    private val _conversationTree get() = stateStore.conversationTree
+    val conversationTree: StateFlow<ConversationTree> = _conversationTree.asStateFlow()
+
+    // P0 对话树: 树重建/分支切换已迁出到 ChatMessageController(treeSessionId),此处 _conversationTree 仍在宿主共享。
+    // P0 对话树: 待编辑的用户消息 id(用户点击编辑后回填输入框,发送时应用为新的用户变体)
+    // v1.0.30: 回话跟踪 — onAppForeground 用
+    @Volatile private var _lastSessionSwitchTimestamp: Long = 0L
+
+    @Volatile private var _lastSessionSwitchId: String? = null
+    // 工具配置存储(审批策略持久化) — 见构造参数 toolConfigStore
+
+    // v1.135: 当前工具调用轮次对应的助手消息 id(收口到 ChatGenerationState)
+    private var toolAssistantId
+        get() = generationState.toolAssistantId
+        set(value) {
+            generationState.toolAssistantId = value
+        }
+
+    // 审计修复 (S-01): toolAssistantId 对应的生成会话 id(收口到 ChatGenerationState)。
+    private var activeToolSessionId
+        get() = generationState.activeToolSessionId
+        set(value) {
+            generationState.activeToolSessionId = value
+        }
+
+    // 审计修复 (A-13): 生成代际令牌 — 每次 runToolLoop 启动/结束自增。
+    // exec* 工具执行(图片生成可达数十秒)期间若用户发送新消息/切会话,全局
+    // toolAssistantId 会被新一轮生成覆盖,旧工具结果会写进错误消息(跨会话媒体污染)。
+    // exec* 入口捕获当前令牌,写媒体前校验令牌未变且目标会话仍是当前显示会话。
+    // 生成/发送共享状态容器(见 ChatGenerationState)
+    private val generationState = ChatGenerationState()
+    private var toolGenerationToken
+        get() = generationState.toolGenerationToken
+        set(value) {
+            generationState.toolGenerationToken = value
+        }
+
+    /** 原子递增代际令牌；并发递增也不会丢更新。 */
+    private fun nextToolGenerationToken(): Long = generationState.nextToolGenerationToken()
+
+    // 审查修复 (2.0 C-17): 本代生成中已附加媒体的工具轮消息 id(并发安全)。
+    // exec* 成功附加媒体后登记;runToolLoop 收尾对全部登记消息做一次兜底落盘,
+    // 缩小"内存已写媒体 → 立即落盘"之间进程被杀/落盘失败的丢失窗口。
+    private val toolMediaMessages: MutableSet<Uuid> get() = generationState.toolMediaMessages
+
+    // B-24: 流式生成序号 — 每次 launchStream 自增并写入 StreamRunState.generationSerial。
+    // 收尾/错误路径清零 isStreaming 前校验"自己仍是最新生成",防止快速连发时
+    // gen-1 收尾把 gen-2 的流式状态清掉(UI 表现为"还在生成却显示已停止")。
+    private var streamGenerationSerial
+        get() = generationState.streamGenerationSerial
+        set(value) {
+            generationState.streamGenerationSerial = value
+        }
+
+    /** 全局默认与会话覆盖分开保存；聊天页切换只改当前 session 的覆盖，不反写全局设置。 */
+    private var globalSelectedModelId
+        get() = generationState.globalSelectedModelId
+        set(value) {
+            generationState.globalSelectedModelId = value
+        }
+    private var globalActiveProviderId
+        get() = generationState.globalActiveProviderId
+        set(value) {
+            generationState.globalActiveProviderId = value
+        }
+    private var sessionModelOverrides
+        get() = generationState.sessionModelOverrides
+        set(value) {
+            generationState.sessionModelOverrides = value
+        }
+    private var sessionProviderOverrides
+        get() = generationState.sessionProviderOverrides
+        set(value) {
+            generationState.sessionProviderOverrides = value
+        }
+
+    private fun displayedSessionId(state: ChatUiState = _state.value): String? = effectiveChatSessionId(state)
+
+    /**
+     * v2.5.3 (P3-2): 会话级配置快照的惰性内存缓存。
+     *
+     * 会话首次加载/生成时从 DB 读出快照放入此 map，供 [selectedModelForSession] /
+     * [activeProviderForSession] 在没有显式 override 时回退到“当时配置”。
+     */
+    private val sessionConfigSnapshots = java.util.concurrent.ConcurrentHashMap<String, io.zer0.muse.data.session.SessionConfigSnapshot>()
+
+    /** v2.5.3 (P3-2): 预加载会话快照入内存（会话切换/首次生成时调用）。 */
+    internal fun cacheSessionConfigSnapshot(sessionId: String, snapshot: io.zer0.muse.data.session.SessionConfigSnapshot?) {
+        if (snapshot == null) sessionConfigSnapshots.remove(sessionId) else sessionConfigSnapshots[sessionId] = snapshot
+    }
+
+    private fun selectedModelForSession(sessionId: String?): String? =
+        sessionId?.let { sessionModelOverrides[it] ?: sessionConfigSnapshots[it]?.modelId } ?: globalSelectedModelId
+
+    private fun activeProviderForSession(sessionId: String?): String? =
+        sessionId?.let { sessionProviderOverrides[it] ?: sessionConfigSnapshots[it]?.providerId } ?: globalActiveProviderId
+
+    /**
+     * A-13: 校验本轮工具生成仍是"当前活跃生成"(代际令牌未变)。
+     *
+     * 审查修复 (2.0 A-04): 原实现把"令牌未变"与"目标会话仍是显示会话"耦合在一起,
+     * 用户切会话(非新生成)时令牌未变但显示焦点已离开,exec* 直接早退导致已完成的
+     * 媒体既不显示也不落库。现拆分为两个方法:
+     * - [isCurrentToolGeneration]: 仅校验代际(新一轮生成才使旧结果失效);
+     * - [isToolSessionDisplayed]: 仅校验显示焦点(决定媒体走 UI 合并还是直接落库)。
+     *
+     * @param capturedToken exec* 入口捕获的 [toolGenerationToken]
+     */
+    private fun isCurrentToolGeneration(capturedToken: Long): Boolean = capturedToken == toolGenerationToken
+
+    /** 审查修复 (2.0 A-04): 当前显示会话是否仍是工具生成的目标会话。 */
+    private fun isToolSessionDisplayed(): Boolean {
+        val active = activeToolSessionId ?: return false
+        val displayed = if (_state.value.isAgentMode) _state.value.agentSessionId else _state.value.currentSessionId
+        return active == displayed
+    }
+
+    /**
+     * B-24: 仅在"自己仍是最新生成"时清零流式状态。
+     *
+     * 快速连发/切会话后,旧生成的收尾(finalizeResponse/错误路径)不得清掉
+     * 新生成的 isStreaming/isWaitingFirstToken — 否则 UI 显示"已停止"但后台仍在生成。
+     *
+     * @return 是否执行了清零
+     */
+    private fun clearStreamingStateIfLatest(
+        state: StreamRunState,
+        // F-10: 结束时的最终阶段(正常完成=FINISHED/出错=FAILED/中断=INTERRUPTED)
+        finalPhase: ChatStreamPhase = ChatStreamPhase.IDLE,
+    ): Boolean = generationController.clearStreamingStateIfLatest(state, finalPhase)
+
+    /** 发送请求落库失败时移除当前页的乐观 user/assistant 消息。 */
+    // v5: 消息发送队列 + outbox 恢复去重集(收口到 ChatGenerationState)
+    private val sendChannel get() = generationState.sendChannel
+    private val outboxRecoveryQueuedIds get() = generationState.outboxRecoveryQueuedIds
+
+    // Phase 8.5: 复用的 Json 实例(避免每次解析都新建)。
+    private val idListJson = kotlinx.serialization.json.Json { ignoreUnknownKeys = true }
+
+    // v5: 乐观更新 — 用户消息立即显示到 UI,不等待 DB 写入(迁至 ChatGenerationController)
+    private fun enqueueSend(text: String, images: List<String>, sessionId: String) =
+        generationController.enqueueSend(text, images, sessionId)
+
+    // v1.105 拆分: ChatStateAccessor 实现 — 供各 Coordinator 读写 state
+    override val snapshot: ChatUiState get() = _state.value
+
+    override fun update(transform: (ChatUiState) -> ChatUiState) = _state.update(transform)
+
+    override val messagesSnapshot: List<UIMessage> get() = _messages.value
+
+    override fun updateMessages(transform: (List<UIMessage>) -> List<UIMessage>) = _messages.update(transform)
+
+    override val coroutineScope: kotlinx.coroutines.CoroutineScope get() = viewModelScope
+
+    // v1.105 阶段 1 拆分: 各职责域 Coordinator(无 state,持有依赖,通过 accessor 读写)
+    private val imageGenCoordinator =
+        ImageGenCoordinator(
+            accessor = this,
+            imageService = imageService,
+            settings = settings,
+            sessionRepository = sessionRepository,
+            ocrManager = ocrManager,
+            chatService = chatService,
+            appContext = appContext,
+        )
+    private val exportCoordinator =
+        ChatExportCoordinator(
+            accessor = this,
+            settings = settings,
+            sessionRepository = sessionRepository,
+            auditLogger = auditLogger,
+        )
+    private val audioCoordinator =
+        ChatAudioCoordinator(
+            accessor = this,
+            ttsManager = ttsManager,
+            settings = settings,
+            context = appContext,
+        )
+
+    // v1.x: 输入/草稿/待发送队列/输入历史 Controller
+    private val inputController =
+        ChatInputController(
+            accessor = this,
+            appContext = appContext,
+            onEnqueueSend = { text, images, sid -> enqueueSend(text, images, sid) },
+        )
+
+    // v1.x: 消息加载 Controller(初始分页/加载更多/计划恢复)
+    private val messageController =
+        ChatMessageController(
+            accessor = this,
+            sessionRepository = sessionRepository,
+            skillExecutor = skillExecutor,
+            treeState = _conversationTree,
+            treeSnapshotStore = treeSnapshotStore,
+            messagePageSize = MESSAGE_PAGE_SIZE,
+        )
+
+    // v1.x: 会话 CRUD Controller(rename/archive/delete/ignore-memory/fork)
+    private val sessionController =
+        ChatSessionController(
+            accessor = this,
+            sessionRepository = sessionRepository,
+            sessionMemoryCache = sessionMemoryCache,
+            browserManagerRegistry = browserManagerRegistry,
+            bridge =
+            object : SessionFlowBridge {
+                override suspend fun refreshContext() = refreshContextInfo()
+
+                override fun detachStreaming() = this@ChatViewModel.detachStreaming()
+
+                override fun onForkError(throwable: Throwable) =
+                    reportError(appContext.getString(R.string.err_chat_fork_failed, throwable.message ?: ""))
+
+                // P0-5: 删除/归档会话时停止在途生成 + 写抑制(委托生成控制器,防"复活")
+                override fun stopGenerationForSession(sessionId: String?) = generationController.stopGenerationForSession(sessionId)
+
+                override fun suppressSessionWrites(sessionId: String?) = generationController.suppressSessionWrites(sessionId)
+            },
+            sessionDeps =
+            SessionDeps(
+                stateStore = stateStore,
+                settings = settings,
+                assistantRepository = assistantRepository,
+                sessionPermissionStore = sessionPermissionStore,
+                sessionManager = sessionManager,
+                appContext = appContext,
+                onStopTts = { stopTts() },
+                onDisposeAsr = { disposeAsr() },
+                onNotifySessionEnd = { notifySessionEndForCurrent() },
+                currentSessionIdForApproval = { currentSessionIdForApproval() },
+                globalActiveProviderId = { globalActiveProviderId },
+                globalSelectedModelId = { globalSelectedModelId },
+                onSend = { send() },
+                messageController = messageController,
+                chatGenerationManager = chatGenerationManager,
+                onClearDelegation = {
+                    delegationChainTracker.clear()
+                    delegationPauseManager.clearAll()
+                },
+                onCancelPendingApprovals = { sid -> cancelPendingApprovalsForSession(sid) },
+                treeSnapshotStore = treeSnapshotStore,
+                restorePendingApprovalsForSession = { sid -> restorePendingApprovalsForSession(sid) },
+                activeProviderForSession = { sid -> activeProviderForSession(sid) },
+                selectedModelForSession = { sid -> selectedModelForSession(sid) },
+                onSessionSwitched = { sid ->
+                    _lastSessionSwitchTimestamp = System.currentTimeMillis()
+                    _lastSessionSwitchId = sid
+                    // v2.5.3 (P3-2): 切换会话时预加载配置快照，使旧会话回退到“当时配置”。
+                    viewModelScope.launch {
+                        val snapshot = sessionRepository.getConfigSnapshot(sid)
+                        cacheSessionConfigSnapshot(sid, snapshot)
+                    }
+                },
+                requeueOutboxForSession = { sid -> generationController.requeueOutboxForSession(sid) },
+            ),
+        )
+
+    // v1.x: 聊天级设置 Controller(侧栏/绘图/工具模型/toast)
+    private val settingsController =
+        ChatSettingsController(
+            accessor = this,
+            settings = settings,
+            appContext = appContext,
+            selectionStore =
+            object : SessionModelSelectionStore {
+                override fun setProviderOverride(sessionId: String, providerId: String?) {
+                    sessionProviderOverrides =
+                        if (providerId == null) {
+                            sessionProviderOverrides - sessionId
+                        } else {
+                            sessionProviderOverrides + (sessionId to providerId)
+                        }
+                }
+
+                override fun setModelOverride(sessionId: String, modelId: String?) {
+                    sessionModelOverrides =
+                        if (modelId == null) {
+                            sessionModelOverrides - sessionId
+                        } else {
+                            sessionModelOverrides + (sessionId to modelId)
+                        }
+                }
+            },
+        )
+
+    // 工具审批回调结果存储(toolCallId → Deferred result),与 toolController/审批生命周期共享
+    private val toolApprovalResults = java.util.concurrent.ConcurrentHashMap<String, kotlinx.coroutines.CompletableDeferred<ToolApprovalState>>()
+
+    // v1.x: 工具审批/权限 Controller(参考图/始终允许/本次运行放行/会话权限模式)
+    private val toolController =
+        ChatToolController(
+            accessor = this,
+            sessionPermissionStore = sessionPermissionStore,
+            approvalResults = toolApprovalResults,
+            toolConfigStore = toolConfigStore,
+        )
+
+    // v1.x: 媒体/产物 Controller(artifact 选中/关闭/观察)
+    // v1.x: system prompt / 上下文 token 缓存容器(buildSystemPromptForStream 迁移前移)
+    private val systemPromptCache = SystemPromptCache()
+    private val mediaController =
+        ChatMediaController(
+            accessor = this,
+            artifactRepository = artifactRepository,
+            voiceState = voiceState,
+            stateStore = stateStore,
+            audioCoordinator = audioCoordinator,
+            ttsManager = ttsManager,
+            appContext = appContext,
+            onError = { type, msg, rec -> addError(type, msg, rec) },
+            onSend = { send() },
+            onStop = { stop() },
+            onUpdateInput = { text -> updateInput(text) },
+            settings = settings,
+        )
+    private val documentCoordinator =
+        ChatDocumentCoordinator(
+            accessor = this,
+            documentParser = documentParser,
+            settings = settings,
+        )
+
+    // v1.105 阶段 2 拆分: 杂项 Coordinator(文件夹 / 搜索 / 收藏 / 管理页 CRUD)
+    private val miscCoordinator =
+        ChatMiscCoordinator(
+            accessor = this,
+            sessionRepository = sessionRepository,
+            folderRepository = folderRepository,
+            lorebookRepository = lorebookRepository,
+            promptInjectionRepository = promptInjectionRepository,
+            quickMessageRepository = quickMessageRepository,
+            assistantRepository = assistantRepository,
+            appContext = appContext,
+        )
+
+    // v0.45: 提取为字段,manualCompress 直接调用 transform 做手动压缩
+    // v1.0.17: 注入 ConversationCompressor,启用分块并行 + 独立便宜模型
+    private val conversationCompressor = io.zer0.muse.transformer.ConversationCompressor(chatService, settings)
+    private val contextCompressTransformer = ContextCompressTransformer(chatService, conversationCompressor)
+
+    private val transformerPipeline: TransformerPipeline by lazy { buildTransformerPipeline() }
+
+    // v1.105 阶段 3 拆分: 流式辅助 Coordinator(detach / updateAssistant / 持久化 / 标签提取)
+    private val streamCoordinator =
+        ChatStreamCoordinator(
+            accessor = this,
+            sessionRepository = sessionRepository,
+            memoryTicker = memoryTicker,
+            settings = settings,
+            appContext = appContext,
+            notificationManager = notificationManager,
+            assistantRepository = assistantRepository,
+            visionBridge = visionBridge,
+            toolRegistry = toolRegistry,
+            skillRepository = skillRepository,
+            idListJson = idListJson,
+            lorebookRepository = lorebookRepository,
+            promptInjectionRepository = promptInjectionRepository,
+            transformerPipeline = transformerPipeline,
+            checkpointReader = checkpointReader,
+            hookRegistry = hookRegistry,
+        )
+
+    // v1.x: 生成控制 Controller(stop/launchStream/send/continue/retry)
+    private val generationController =
+        ChatGenerationController(
+            deps =
+            GenerationDeps(
+                accessor = this,
+                stateStore = stateStore,
+                generationState = generationState,
+                settings = settings,
+                sessionRepository = sessionRepository,
+                appContext = appContext,
+                activityProfile = activityProfile,
+                auditLogger = auditLogger,
+                idListJson = idListJson,
+                messageController = messageController,
+                addError = { type, msg, recoverable -> addError(type, msg, recoverable) },
+                generateImage = { prompt, sid -> generateImage(prompt, sid) },
+                sessionMemoryCache = sessionMemoryCache,
+                systemPromptCache = systemPromptCache,
+                toolRegistry = toolRegistry,
+                systemPromptAssembler = systemPromptAssembler,
+                assistantRepository = assistantRepository,
+                ragService = ragService,
+                conversationService = conversationService,
+                streamCoordinator = streamCoordinator,
+                mcpRegistry = mcpRegistry,
+                milestoneChecker = milestoneChecker,
+                runToolLoop = { state -> runToolLoop(state) },
+                persistInterruptedAssistant = { sid, msg, aid, dur -> persistInterruptedAssistant(sid, msg, aid, dur) },
+                classifyErrorType = { msg, t -> classifyErrorType(msg, t) },
+                transformerPipeline = transformerPipeline,
+                memoryTicker = memoryTicker,
+                refreshContextInfo = { refreshContextInfo() },
+                triggerAutoCompress = { sid -> triggerAutoCompress(sid) },
+                maybeAutoRoute = { text, assistantMessageId, sid ->
+                    maybeAutoRoute(text, assistantMessageId, sid)
+                },
+            ),
+            accessor = this,
+            chatGenerationManager = chatGenerationManager,
+            sessionManager = sessionManager,
+            settings = settings,
+            notificationManager = notificationManager,
+            onCancelAncillaryJobs = {
+                imageJob?.cancel()
+                imageJob = null
+                translateJob?.cancel()
+                translateJob = null
+            },
+            onCancelPendingApprovals = { sid -> cancelPendingApprovalsForSession(sid) },
+            executionRegistry = executionRegistry,
+        )
+
+    // v1.134 P1-5: 任务卡 Coordinator(任务卡阶段/步骤/展开/重试/工具结果判定)
+    private val taskCardCoordinator =
+        ChatTaskCardCoordinator(
+            accessor = this,
+            toolRegistry = toolRegistry,
+        )
+    private val routeGuard = io.zer0.muse.tools.ToolRouteExecutionGuard(toolRegistry)
+
+    /**
+     * Transformer 管道。会话摘要在上下文压缩后加入,不会被二次压缩或写入历史消息。
+     * - TemplateTransformer 接管 Assistant.messageTemplate 的 {{var}} 替换
+     * - Assistant 配置通过 [TransformContext.extras] 注入,各 Transformer 自行读取
+     * - Phase 8.5: LorebookTransformer(关键词触发) + PromptInjectionTransformer(模式开关)
+     */
+    private fun buildTransformerPipeline(): TransformerPipeline {
+        val builder = TransformerPipeline.Builder()
+            .add(MemoryInjectionTransformer(memoryTicker))
+            .add(TimeReminderTransformer())
+            .add(LorebookTransformer(lorebookRepository))
+            .add(PromptInjectionTransformer())
+            .add(TemplateTransformer(appContext))
+            .add(io.zer0.muse.transformer.RegexMessageTransformer())
+            .add(ThinkTagTransformer())
+            .add(io.zer0.muse.transformer.MoodTagTransformer())
+            .add(contextCompressTransformer)
+        conversationSummaryManager?.let { manager ->
+            builder.add(ConversationMemoryInjectionTransformer(manager))
+        }
+        return builder.build()
+    }
+
+    /** Phase 8.5 修复: 首次会话初始化标记,防止 observeSessions 竞态重复创建会话。 */
+    @Volatile
+    private var initializing: Boolean = false
+
+    /** 当前图片生成任务(P5-G)。 */
+    private var imageJob: Job? = null
+
+    /** 当前翻译任务(P5-F)。 */
+    private var translateJob: Job? = null
+
+    init {
+        // B2-04: 子代理遇到需审批工具时,复用主会话的审批卡
+        toolApprovalRouter.delegate = this
+        // 监听配置变化,刷新 isConfigured 标志
+        // v1.22: 本地不再硬编码模型列表,isConfigured 只要有激活 Provider 即为 true。
+        // 若激活 Provider 没有模型,自动触发上游 /models 拉取。
+        // 真正缺凭证时由 chatService 发送抛错,通过 state.error 提示用户。
+        viewModelScope.launch {
+            settings.providerConfigFlow.collect { config ->
+                _state.update {
+                    it.copy(
+                        isConfigured = config != null,
+                    )
+                }
+                // 自动拉取:激活 Provider 已配置 apiKey 但 models 为空
+                if (config != null && config.models.isEmpty() && config.apiKey.isNotBlank()) {
+                    refreshModels(config.id)
+                }
+            }
+        }
+        // 阶段 5: 观察全部 Provider / 激活 Provider / 选中模型(底部切换面板用)
+        viewModelScope.launch {
+            settings.providersFlow.collect { providers ->
+                _state.update { it.copy(providers = providers) }
+            }
+        }
+        viewModelScope.launch {
+            settings.activeProviderIdFlow.collect { id ->
+                globalActiveProviderId = id
+                _state.update { state ->
+                    state.copy(activeProviderId = activeProviderForSession(displayedSessionId(state)))
+                }
+            }
+        }
+        viewModelScope.launch {
+            settings.selectedModelIdFlow.collect { modelId ->
+                globalSelectedModelId = modelId
+                _state.update { state ->
+                    state.copy(selectedModelId = selectedModelForSession(displayedSessionId(state)))
+                }
+            }
+        }
+        viewModelScope.launch {
+            settings.sessionModelOverridesFlow.collect { overrides ->
+                sessionModelOverrides = overrides
+                _state.update { state ->
+                    state.copy(selectedModelId = selectedModelForSession(displayedSessionId(state)))
+                }
+            }
+        }
+        viewModelScope.launch {
+            settings.sessionProviderOverridesFlow.collect { overrides ->
+                sessionProviderOverrides = overrides
+                _state.update { state ->
+                    state.copy(activeProviderId = activeProviderForSession(displayedSessionId(state)))
+                }
+            }
+        }
+        // v1.60-A: 收集工具模型 id(工具调用轮次使用)
+        viewModelScope.launch {
+            settings.toolModelIdFlow.collect { modelId ->
+                _state.update { it.copy(toolModelId = modelId) }
+            }
+        }
+        // v1.0.47: Token 估算开关
+        viewModelScope.launch {
+            settings.tokenEstimateEnabledFlow.collect { enabled ->
+                _state.update { it.copy(tokenEstimateEnabled = enabled) }
+            }
+        }
+        // v1.0.47 P5-2: 长文本粘贴转文件开关 + 阈值
+        viewModelScope.launch {
+            settings.pasteAsFileEnabledFlow.collect { enabled ->
+                _state.update { it.copy(pasteAsFileEnabled = enabled) }
+            }
+        }
+        viewModelScope.launch {
+            settings.pasteAsFileThresholdFlow.collect { threshold ->
+                _state.update { it.copy(pasteAsFileThreshold = threshold) }
+            }
+        }
+        // 观察会话列表(侧栏用)
+        viewModelScope.launch {
+            try {
+                sessionRepository.observeSessions().collect { sessions ->
+                    _state.update { it.copy(sessions = sessions, isSessionsLoading = false, sessionsError = null) }
+                    // 首次加载:无会话则新建,有则切换到最近一个
+                    // Phase 8.5 修复: 用 initializing flag 防止 observeSessions 在 createNewSession
+                    // 异步设置 currentSessionId 前再次发射时重复创建多个会话
+                    if (_state.value.currentSessionId == null && !initializing) {
+                        initializing = true
+                        // R-UI-02: 进程恢复优先还原用户离开时查看的会话,而非最近活跃会话。
+                        val viewedId = resultOf { settings.getViewedSessionId() }.getOrNull()
+                        val target = sessions.firstOrNull { it.id == viewedId } ?: sessions.firstOrNull()
+                        if (target != null) {
+                            switchSession(target.id)
+                        } else {
+                            createNewSession()
+                        }
+                    }
+                }
+            } catch (t: Throwable) {
+                // v1.x: 协程取消必须重抛,不能当成"加载失败"展示(否则显示
+                // "请求失败: Job was cancelled"且协程死亡后错误永远挂着)
+                if (t is kotlinx.coroutines.CancellationException) throw t
+                Logger.e("ChatVM", "observeSessions failed", t)
+                _state.update {
+                    it.copy(
+                        isSessionsLoading = false,
+                        sessionsError =
+                        appContext.getString(
+                            R.string.err_chat_request_failed,
+                            t.message ?: appContext.getString(R.string.err_chat_unknown),
+                        ),
+                    )
+                }
+            }
+        }
+        // v0.45: 观察已归档会话(归档 FilterCard 用)
+        loadArchivedSessions()
+        // Phase 8.2: 观察 Assistant 列表(侧栏选择器用)
+        viewModelScope.launch {
+            assistantRepository.observeAll.collect { list ->
+                _state.update { state ->
+                    val currentId = state.currentAssistant?.id
+                    val refreshedCurrent =
+                        currentId?.let { id ->
+                            list.firstOrNull { assistant -> assistant.id == id }
+                        } ?: state.currentAssistant
+                    state.copy(
+                        assistants = list,
+                        isAssistantsLoading = false,
+                        // 助手详情页直接写 Room 后,同步刷新当前聊天快照;
+                        // 否则 prompt、工具、Skill、KB、模型等改动要切换会话后才生效。
+                        currentAssistant = refreshedCurrent,
+                    )
+                }
+            }
+        }
+        // Phase 8.3: 观察跨会话收藏消息(收藏面板用)
+        loadFavorites()
+        // v1.104 U7: 观察已命名的收藏分组标签(供 FavoritesScreen 顶部 FilterChip 渲染)
+        viewModelScope.launch {
+            sessionRepository.observeAllFavoriteTags().collect { tags ->
+                _state.update { it.copy(favoriteTags = tags) }
+            }
+        }
+        // Phase 8.4: 观察 Web 搜索配置(同步 webSearchEnabled / webSearchConfig)
+        viewModelScope.launch {
+            settings.webSearchConfigFlow.collect { cfg ->
+                _state.update {
+                    it.copy(
+                        webSearchConfig = cfg,
+                        // 本地模式由 web_search 工具处理；原生模式由 Provider 原生工具处理，两者互斥。
+                        webSearchEnabled = cfg.enabled && cfg.mode != io.zer0.muse.web.WebSearchMode.OFF,
+                    )
+                }
+            }
+        }
+        // v0.34: 观察图片生成默认参数配置
+        viewModelScope.launch {
+            settings.imageGenConfigFlow.collect { cfg ->
+                _state.update {
+                    it.copy(
+                        imageGenParams =
+                        io.zer0.ai.image.ImageGenParams(
+                            model = cfg.modelId,
+                            size = cfg.size,
+                            quality = cfg.quality,
+                            style = cfg.style,
+                            responseFormat = cfg.responseFormat,
+                            n = cfg.n,
+                        ),
+                    )
+                }
+            }
+        }
+        // Phase 8.5: 观察当前 Assistant 绑定的快捷消息
+        // 用 flatMapLatest 在 currentAssistant 变化时自动切到新 Assistant 的快捷消息流
+        viewModelScope.launch {
+            _state
+                .map { it.currentAssistant }
+                .distinctUntilChanged()
+                .flatMapLatest { assistant ->
+                    val assistantId = assistant?.id ?: "default"
+                    val boundIds = assistant?.let { parseIdList(it.quickMessageIdsJson) }.orEmpty()
+                    quickMessageRepository.observeForAssistant(assistantId, boundIds)
+                }
+                .collect { list ->
+                    _state.update { it.copy(quickMessages = list) }
+                }
+        }
+        // v1.97 (P1-1): Lorebook / PromptInjection / allQuickMessages 改为懒加载
+        // (refreshLorebooks / refreshPromptInjections / refreshAllQuickMessages),
+        // 由 LorebookScreen / PromptInjectionScreen / QuickMessageScreen 进入时触发。
+        // 这三项只在管理页使用,不在聊天主流程读取,无需常驻 Flow 收集器。
+        // AssistantDetailPages 已用 rememberFlowList 独立收集,不依赖 ChatViewModel state。
+
+        // v1.58: 订阅 Prompt 模板列表
+        viewModelScope.launch {
+            settings.promptTemplatesFlow.collect { templates ->
+                _state.update { it.copy(promptTemplates = templates) }
+            }
+        }
+        // Phase 9.1 (M13): 观察文件夹列表(Drawer 分组渲染用)
+        viewModelScope.launch {
+            folderRepository.observeAll().collect { folders ->
+                _state.update { it.copy(folders = folders) }
+            }
+        }
+        // Phase 9.3 (M2): 观察 ASR 配置(SYSTEM/DashScope/Step)
+        viewModelScope.launch {
+            settings.asrConfigFlow.collect { cfg ->
+                _state.update { it.copy(asrConfig = cfg) }
+            }
+        }
+        // v0.31: 订阅聊天行为偏好(MessageBubble/ChatScreen/InputBar 据此控制渲染与交互)
+        viewModelScope.launch {
+            settings.chatPreferencesFlow.collect { prefs ->
+                _state.update { it.copy(chatPreferences = prefs) }
+            }
+        }
+        // v1.97 (P1-1): shareTemplate 改为 exportSessionAsMarkdown 内 first() 加载,
+        // 不再常驻 Flow 收集器(只在导出时用一次)。
+        // v0.33: 订阅媒体配置(TTS / 录音采样率等)
+        viewModelScope.launch {
+            settings.mediaConfigFlow.collect { cfg ->
+                _state.update { it.copy(mediaConfig = cfg) }
+            }
+        }
+        // v1.25: 订阅多 Agent 协作配置(团队列表与总开关)
+        viewModelScope.launch {
+            settings.multiAgentConfigFlow.collect { cfg ->
+                _state.update { it.copy(multiAgentConfig = cfg) }
+            }
+        }
+        // v1.43: 监听应用级生成状态。切页后新 ViewModel 创建时,若同一会话仍在后台生成,
+        // 自动把 isStreaming 置 true,UI 会显示停止按钮并继续观察消息流。
+        // 使用按 sessionId 的完整快照,避免另一个会话成为“最近任务”后遮蔽当前会话状态。
+        viewModelScope.launch {
+            chatGenerationManager.activeGenerations.collect { generations ->
+                val state = _state.value
+                val currentSessionId = if (state.isAgentMode) state.agentSessionId else state.currentSessionId
+                val streaming = currentSessionId != null && currentSessionId in generations
+                _state.update { current ->
+                    if (current.isStreaming == streaming) {
+                        current
+                    } else {
+                        current.copy(
+                            isStreaming = streaming,
+                            isWaitingFirstToken = if (streaming) current.isWaitingFirstToken else false,
+                        )
+                    }
+                }
+            }
+        }
+        // v1.0.4: 收集视觉辅助分析进度,驱动 UI 显示"正在分析图片 2/4…"
+        viewModelScope.launch {
+            visionBridge.progressFlow.collect { progress ->
+                _state.update {
+                    it.copy(visionProgress = if (progress.isActive) progress else null)
+                }
+            }
+        }
+        // Phase 8.7: 注册 TTS 状态回调,驱动 isSpeaking / speakingMessageId
+        // 回调来自后台线程(UtteranceProgressListener),用 update 保证线程安全
+        ttsManager.onStateChange = { utteranceId, isSpeaking ->
+            _state.update {
+                it.copy(
+                    isSpeaking = isSpeaking,
+                    speakingMessageId =
+                    utteranceId?.let { id ->
+                        runCatching { Uuid.parse(id) }.getOrNull()
+                    },
+                )
+            }
+        }
+        // v2.3: 订阅任务模型路由配置
+        viewModelScope.launch {
+            settings.taskRoutingConfigFlow.collect { config ->
+                _state.update { it.copy(taskRoutingEnabled = config.enabled) }
+            }
+        }
+        // Phase 10.3: 启动时检查 FTS 索引一致性,不一致则后台 rebuild
+        // - v8→v9 迁移后 messages_fts 为空,首次启动会全量索引历史消息
+        // - ngram 转换是 CPU 密集,放 IO 线程;不阻塞 UI(万级消息约数百毫秒)
+        // - 失败静默(只记日志),不影响主流程
+        viewModelScope.launch {
+            withContext(Dispatchers.IO) {
+                // H-01 修复: ensureFtsIndexConsistent 是 suspend,改用 resultOf 避免吞没 CancellationException
+                resultOf { sessionRepository.ensureFtsIndexConsistent() }
+                    .onError { msg, t -> Logger.w("ChatVM", "FTS ensureFtsIndexConsistent failed: $msg") }
+            }
+        }
+        // v5: 消息发送队列消费者 — 串行处理,支持自动重试
+        // v1.136 修复:Agent 模式与任务模式会话完全隔离,消费者按 isAgentMode 取当前会话 id,
+        // 避免 Agent 页面的消息因 currentSessionId 指向任务会话而被跳过(导致只显示输入中动画)。
+        // 审计修复 (用户反馈): 消费者协程必须永不死亡。原实现 for 循环无外层 try/catch,
+        // 任一轮处理抛未捕获异常(非 Exception 类型,或 launchStream/_state.update 抛出)
+        // 都会杀死消费者 → sendChannel 再无消费者 → capacity=8 很快满 →
+        // 所有发送报"队列已满"、消息发不出去(用户以为连不上)、切会话逻辑也卡死。
+        // 修复: 外层 while 包 try/catch,异常时记录并重启消费(协程不退出);
+        // 每轮处理再包 try/catch,单条消息失败不杀循环。
+        viewModelScope.launch {
+            while (isActive) {
+                try {
+                    for (req in sendChannel) {
+                        try {
+                            generationController.consumeSendRequest(req)
+                        } catch (e: kotlin.coroutines.cancellation.CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            // 单条消息处理失败:回滚乐观更新 + 删除 outbox,继续下一轮。
+                            // 不回滚会出现“当前页看得到、重进后消失”的幽灵消息。
+                            Logger.e("ChatVM", "消费发送请求失败(msg=${req.userMessage.content.take(30)}): ${e.message}", e)
+                            generationController.rollbackOptimisticSend(req)
+                            runCatching { sessionRepository.deleteOutbox(req.outboxId) }
+                            _state.update { it.copy(isStreaming = false, isWaitingFirstToken = false) }
+                        }
+                    }
+                } catch (e: kotlin.coroutines.cancellation.CancellationException) {
+                    throw e
+                } catch (e: Throwable) {
+                    // 消费者被非预期异常打断:记录后继续消费(循环重启)
+                    Logger.e("ChatVM", "发送队列消费者异常,重启消费: ${e.message}", e)
+                }
+            }
+        }
+
+        // P2-23: 媒体生成工具(generate_image / generate_video / generate_qr_code)已在 App 启动时
+        // 由 MediaGenToolsRegistrar 注册进 ToolRegistry(定时任务/群聊/子代理同样可调用),
+        // 不再需要在这里注册。此处只安装"结果投递宿主" —— 把生成结果写回当前助手消息,
+        // 等价于原 registerMediaTools() 之后 execGenerateImage/Video/QrCode 里与 UI 耦合的部分。
+        // 每个 provider/回调与旧实现的对应关系见 ChatMediaGenHost 各构造参数注释。
+        mediaGenTools?.installHost(
+            ChatMediaGenHost(
+                accessor = this,
+                sessionRepository = sessionRepository,
+                streamCoordinator = streamCoordinator,
+                appContext = appContext,
+                // 旧 exec* 锚定的 toolAssistantId(生成开始前确定目标助手消息;每轮 streamRound 同步更新)
+                toolAssistantIdProvider = { toolAssistantId },
+                // 旧 exec* 的 activeToolSessionId ?: currentSessionIdForApproval():
+                // 既用于 isToolSessionDisplayed() 判断显示焦点,也用于媒体落库的会话 id
+                toolSessionIdProvider = { activeToolSessionId ?: currentSessionIdForApproval() },
+                // 旧 exec* 入口捕获、写媒体前校验的 toolGenerationToken(A-13 代际令牌)
+                generationTokenProvider = { toolGenerationToken },
+                // 旧 exec* 里的 updateAssistant(assistantId, content, isStreaming = true)
+                updateAssistant = { id, content -> updateAssistant(id, content, isStreaming = true) },
+                // 旧 exec* 的 persistToolMessageMedia(S-01: 含媒体消息立即落盘)
+                persistMediaMessage = { sessionId, id -> persistToolMessageMedia(sessionId, id) },
+                // 旧 exec* 的 toolMediaMessages.add(C-17: 登记本代媒体消息供收尾兜底落盘)
+                registerMediaMessage = { id -> toolMediaMessages.add(id) },
+            ),
+        )
+        // v1.201: 订阅委派链路 + 暂停请求,同步到 UiState
+        viewModelScope.launch {
+            delegationChainTracker.chains.collect { all ->
+                val roots =
+                    all.values
+                        .filter { it.parentRequestId == null }
+                        .sortedBy { it.startedAt }
+                _state.update { it.copy(delegationChain = roots) }
+            }
+        }
+        viewModelScope.launch {
+            delegationPauseManager.activePauses.collect { pauses ->
+                _state.update { it.copy(activePauseRequest = pauses.values.firstOrNull()) }
+            }
+        }
+
+        // v1.202: 订阅非阻塞委派结果回灌 —— 后台子 agent 完成后,把结果作为 interlude
+        // 消息追加到当前会话,让用户看到子 agent 的工作产出。
+        // 注意:consumeCompleted 会消费并清除,所以每次 emit 都要拉取当前会话的待回灌列表。
+        viewModelScope.launch {
+            deferredResultStore.completedTasks.collect { _ ->
+                val sessionId = currentSessionIdForApproval() ?: return@collect
+                val tasks = deferredResultStore.consumeCompleted(sessionId)
+                if (tasks.isEmpty()) return@collect
+                // 把每个完成的子 agent 结果作为一条 ASSISTANT interlude 消息追加到当前会话
+                val interludes =
+                    tasks.map { task ->
+                        val prefix = task.label?.let { "[$it] " } ?: ""
+                        val content =
+                            if (task.status == io.zer0.muse.tools.DeferredResultStore.TaskStatus.RESOLVED) {
+                                "${prefix}子 agent 已完成任务:\n${task.result}"
+                            } else {
+                                "${prefix}子 agent 任务失败: ${task.error}"
+                            }
+                        UIMessage(role = MessageRole.ASSISTANT, content = content)
+                    }
+                _messages.value = _messages.value + interludes
+                // 同步持久化到 DB,确保切页/重启后仍可恢复
+                for (msg in interludes) {
+                    try {
+                        sessionRepository.appendMessage(sessionId, msg)
+                    } catch (e: Exception) {
+                        Logger.w("ChatVM", "interlude appendMessage 失败", e)
+                    }
+                }
+                // A-10: 消费未归属子任务结果并降级注入当前活跃会话。
+                // 业务原因:subagent_task 可由 LLM 省略 parent_session_id,导致结果以空串 key 存入
+                // DeferredResultStore,无法被上方按 session id 的 consumeCompleted 命中而静默丢失。
+                // 此处主动拉取未归属结果,降级注入当前会话保证用户可见结果;
+                // 降级必须记 ERROR 日志说明根因(LLM 未传 parent_session_id),便于后续定位。
+                val unowned = deferredResultStore.consumeUnowned()
+                if (unowned.isNotEmpty()) {
+                    Logger.e(
+                        "ChatVM",
+                        "A-10: 检测到 ${unowned.size} 个未归属子任务结果(parent_session_id 缺失)," +
+                            "降级注入当前会话 sessionId=$sessionId,请排查 subagent_task 调用是否遗漏 parent_session_id 参数",
+                    )
+                    val unownedInterludes =
+                        unowned.map { task ->
+                            val prefix = task.label?.let { "[$it] " } ?: ""
+                            val content =
+                                if (task.status == io.zer0.muse.tools.DeferredResultStore.TaskStatus.RESOLVED) {
+                                    "${prefix}子 agent 已完成任务:\n${task.result}"
+                                } else {
+                                    "${prefix}子 agent 任务失败: ${task.error}"
+                                }
+                            UIMessage(role = MessageRole.ASSISTANT, content = content)
+                        }
+                    _messages.value = _messages.value + unownedInterludes
+                    for (msg in unownedInterludes) {
+                        try {
+                            sessionRepository.appendMessage(sessionId, msg)
+                        } catch (e: Exception) {
+                            Logger.w("ChatVM", "interlude(unowned) appendMessage 失败", e)
+                        }
+                    }
+                }
+            }
+        }
+
+        // v1.202: 订阅活跃子 agent 线程 + 待处理任务,同步到 UiState 供 SubagentTaskListCard 渲染
+        // listActiveThreads 是普通 List(非 Flow),通过 deferredResultStore.tasks 的 StateFlow emit
+        // 间接触发重组(任务状态变化时一并刷新线程列表快照)
+        viewModelScope.launch {
+            deferredResultStore.tasks.collect { tasksMap ->
+                val sid = currentSessionIdForApproval()
+                val activeThreads =
+                    subagentThreadStore.listActiveThreads()
+                        .filter { sid == null || it.parentSessionId == sid }
+                val pendingTasks =
+                    tasksMap.values
+                        .filter { it.status == io.zer0.muse.tools.DeferredResultStore.TaskStatus.PENDING }
+                        .filter { sid == null || it.parentSessionId == sid }
+                _state.update {
+                    it.copy(
+                        activeSubagentThreads = activeThreads,
+                        pendingSubagentTasks = pendingTasks,
+                    )
+                }
+            }
+        }
+
+        // v1.0.15: 恢复未完成的 outbox 消息(进程被杀后重启时)
+        // 扫描 outbox 表,确保用户消息已持久化到 messages 表,然后删除 outbox 记录。
+        // 用户打开对应会话时可看到消息并手动重发。
+        viewModelScope.launch {
+            val pending = resultOf { sessionRepository.getPendingOutbox() }.getOrNull()
+            if (pending.isNullOrEmpty()) return@launch
+            Logger.i("ChatVM", "outbox 恢复: ${pending.size} 条未完成消息")
+            for (req in pending) {
+                // 检查用户消息是否已持久化(消费端可能已 appendMessage 但进程在 launchStream 前被杀)
+                val alreadySaved =
+                    resultOf { sessionRepository.messageExists(req.sessionId, req.userMessageId) }
+                        .getOrNull() ?: false
+                // 若 checkpoint 已存在，说明生成已经真正启动过；不要把残留 outbox 再次投递，
+                // 否则会与 checkpoint 恢复路径并行生成同一条 assistant 回复。
+                val checkpointExists =
+                    resultOf { sessionRepository.hasGenerationCheckpointForUserMessage(req.userMessageId) }
+                        .getOrNull() ?: false
+                if (checkpointExists) {
+                    Logger.i("ChatVM", "outbox ${req.id} 已有 generation checkpoint，跳过重复恢复")
+                    resultOf { sessionRepository.deleteOutbox(req.id) }
+                        .onError { msg, _ -> Logger.w("ChatVM", "清理 checkpoint 对应 outbox 失败: $msg") }
+                    continue
+                }
+                val images =
+                    runCatching {
+                        idListJson.decodeFromString<List<String>>(req.imageBase64Json)
+                    }.getOrDefault(emptyList())
+                val userMsgId =
+                    runCatching { Uuid.parse(req.userMessageId) }.getOrElse {
+                        Logger.w("ChatVM", "outbox userMessageId 非 UUID,回退随机 id: ${req.userMessageId}")
+                        Uuid.random()
+                    }
+                val userMessage =
+                    UIMessage(
+                        id = userMsgId,
+                        role = MessageRole.USER,
+                        content = req.text,
+                        imageBase64List = images,
+                        createdAt = req.createdAt,
+                    )
+                if (!alreadySaved) {
+                    resultOf {
+                        // 复用 outbox 的 userMessageId + createdAt，避免恢复后排序漂移。
+                        sessionRepository.appendMessage(req.sessionId, userMessage)
+                    }.onError { msg, t ->
+                        Logger.w("ChatVM", "outbox 恢复 appendMessage 失败: $msg", t)
+                    }
+                }
+                // 用户消息已存在时不能直接删除：进程可能死在 appendMessage 与 launchStream 之间。
+                // 重新投递同一条请求，由消费端启动生成成功后按原 outboxId 删除。
+                // outbox 不保存路由字段，恢复时按最新任务路由配置重新判定一次。
+                val recoveredFallbackModel = sessionModelOverrides[req.sessionId] ?: globalSelectedModelId
+                val recoveredFallbackProvider = sessionProviderOverrides[req.sessionId] ?: globalActiveProviderId
+                val recoveredRoute =
+                    settings.recommendTaskRoute(
+                        req.text,
+                        recoveredFallbackModel,
+                        recoveredFallbackProvider,
+                    )
+                val retry =
+                    sendChannel.trySend(
+                        SendRequest(
+                            text = req.text,
+                            images = images,
+                            sessionId = req.sessionId,
+                            userMessage = userMessage,
+                            assistantMessageId = runCatching { Uuid.parse(req.assistantMessageId) }.getOrElse { Uuid.random() },
+                            outboxId = req.id,
+                            taskRouteSelection = recoveredRoute,
+                        ),
+                    )
+                if (retry.isFailure) {
+                    Logger.w("ChatVM", "outbox 恢复重新入队失败: ${req.id}")
+                }
+            }
+        }
+    }
+
+    /** v1.201: 用户提交委派暂停决策。 */
+    fun submitPauseDecision(requestId: String, response: io.zer0.muse.tools.DelegationPauseManager.PauseResponse) {
+        delegationPauseManager.submitDecision(requestId, response)
+    }
+
+    /** v1.201: 用户取消进行中的委派。 */
+    fun cancelDelegation(requestId: String) {
+        delegationPauseManager.cancelDelegation(requestId)
+    }
+
+    /**
+     * v1.202: 取消后台子 agent 任务。
+     *
+     * 通过 [DeferredResultStore.abort] 把任务标记为 ABORTED,
+     * 后台 SkillExecutor 检查到状态变化后会停止推进。
+     */
+    fun cancelSubagentTask(taskId: String) {
+        viewModelScope.launch {
+            deferredResultStore.abort(taskId)
+        }
+    }
+
+    /**
+     * 审计修复 (用户反馈): 发送队列单条消息消费逻辑。
+     * 从原消费者循环体内抽出,由外层永不死亡的 while 循环逐条调用。
+     * 逻辑与原实现完全一致:会话切换跳过 + appendMessage 自动重试 + launchStream。
+     */
+    fun updateInput(text: String) = inputController.updateInput(text)
+
+    /**
+     * v1.205 B2: 把当前输入加入待发送队列(生成期间排队,不打断当前生成)。
+     *
+     * 入队后清空输入框与待发图片;队列满([MAX_PENDING_SEND_QUEUE])时静默忽略。
+     */
+    fun enqueuePendingSend() = inputController.enqueuePendingSend()
+
+    /** v1.205 B2: 移除队列中第 [index] 条。 */
+    fun removePendingSend(index: Int) = inputController.removePendingSend(index)
+
+    /**
+     * v1.205 B2: 单独发送队列中第 [index] 条。
+     *
+     * 先出队再入发送管道,避免重入导致重复发送。
+     */
+    fun sendPendingSend(index: Int) = inputController.sendPendingSend(index)
+
+    /** v1.205 B2: 把队列中第 [index] 条回填到输入框(编辑后重新入队/发送),并出队。 */
+    fun editPendingSend(index: Int) = inputController.editPendingSend(index)
+
+    /** v1.205 B2: 清空整个待发送队列。 */
+    fun clearPendingQueue() = inputController.clearPendingQueue()
+
+    /**
+     * v1.0.47 P5: 输入框上/下箭头回调,遍历本会话输入历史。
+     *
+     * 约定:[ChatUiState.inputHistory] 按"新→旧"顺序存储(index 0 = 最近一条)。
+     * - direction < 0(上箭头):向更旧的历史移动
+     *   - 当前未在导航中(index==null):跳到 index 0(最近一条)
+     *   - 当前在 index i:跳到 i+1(更旧);已到末尾则不动
+     * - direction > 0(下箭头):向更新的历史移动
+     *   - 当前在 index 0:退出导航,清空输入
+     *   - 当前在 index i>0:跳到 i-1
+     *   - 未在导航中:不动
+     * - direction == 0:无操作
+     * - 历史为空时直接返回
+     *
+     * 用户手动编辑输入(见 [updateInput])会重置 [ChatUiState.inputHistoryIndex] 为 null,
+     * 再次按上箭头会从最近一条开始。
+     */
+    fun navigateInputHistory(direction: Int) = inputController.navigateInputHistory(direction)
+
+    /**
+     * v1.0.47 P5-3: 打开 Token 计数菜单。
+     *
+     * 仅在 [ChatUiState.tokenEstimateEnabled] 开启时由 UI 调用。
+     * 计算一次性快照(当前输入 + 历史消息 + 模型上下文窗口),存入 state 供菜单展示,
+     * 避免每次按键都做 BPE 编码(性能开销大)。
+     *
+     * BPE 编码是 CPU 密集型操作,在 Dispatchers.Default 上执行;
+     * [settings.getSelectedModel] 是 suspend,需在协程中调用。
+     * 历史消息 token 数复用 [TokenEstimator.estimate] 的 messages 重载,
+     * 已计入 reasoning/mood/reflection/toolCalls.arguments 与每条 4 token 固定开销。
+     */
+    fun showTokenCountMenu() {
+        val input = _state.value.input
+        val messages = _messages.value
+        viewModelScope.launch(Dispatchers.Default) {
+            val inputTokens = TokenEstimator.estimate(input)
+            val historyTokens = TokenEstimator.estimate(messages)
+            val model = resultOf { settings.getSelectedModel() }.getOrNull()
+            val contextWindow = model?.contextWindow?.takeIf { it > 0 }
+            // v2.5.3 (P4-3): 按当前模型定价粗估本会话历史成本（未知单价则 known=false，不展示）。
+            val cost =
+                model?.let { m ->
+                    io.zer0.ai.core.TokenCostCalculator.costFor(
+                        provider = m.providerId,
+                        modelId = m.id,
+                        usage = io.zer0.ai.core.TokenCostCalculator.Usage(promptTokens = historyTokens.toLong()),
+                    )
+                }
+            val snapshot =
+                TokenCountSnapshot(
+                    inputTokens = inputTokens,
+                    historyTokens = historyTokens,
+                    contextWindow = contextWindow,
+                    estimatedCostUsd = cost?.takeIf { it.known }?.usd,
+                )
+            _state.update { it.copy(tokenSnapshot = snapshot, tokenCountVisible = true) }
+        }
+    }
+
+    /** v1.0.47 P5-3: 关闭 Token 计数菜单。 */
+    fun dismissTokenCountMenu() {
+        _state.update { it.copy(tokenCountVisible = false) }
+    }
+
+    /**
+     * v2.x: 委员会 — 从主对话随时召唤一组助手开临时群聊讨论,结论自动回灌本条会话。
+     *
+     * 流程:创建临时群聊 → 以议题触发轮转 → 自动总结 → 通过 DeferredResultStore
+     * 把结论作为 interlude 注入当前会话(用户可在群聊页查看完整讨论过程)。
+     *
+     * @param memberIds 参与讨论的助手 id(≥2)
+     * @param topic 讨论议题
+     */
+    fun launchCommittee(memberIds: List<String>, topic: String) {
+        val scheduler = groupChatScheduler ?: return
+        val repository = groupChatRepository ?: return
+        val sessionId = displayedSessionId(state.value) ?: return
+        if (memberIds.size < 2 || topic.isBlank()) return
+        val taskId = "committee-" + java.util.UUID.randomUUID().toString()
+        val chatName =
+            "委员会 · " +
+                java.text.SimpleDateFormat("MM-dd HH:mm", java.util.Locale.getDefault())
+                    .format(java.util.Date())
+        deferredResultStore.defer(taskId, sessionId, null, "委员会", topic.take(60))
+        viewModelScope.launch {
+            try {
+                val committeeChatId = repository.createChat(chatName, memberIds)
+                // 1. 触发轮转讨论
+                scheduler.launchRoundRobin(committeeChatId, topic, emptyList())
+                var waited = 0
+                while (scheduler.hasActiveGeneration(committeeChatId) && waited < 1800) {
+                    delay(1000)
+                    waited++
+                }
+                // 2. 自动总结
+                scheduler.launchSummary(committeeChatId)
+                waited = 0
+                while (scheduler.hasActiveGeneration(committeeChatId) && waited < 300) {
+                    delay(1000)
+                    waited++
+                }
+                // 3. 取总结并回灌主对话
+                val recent = repository.getRecentMessages(committeeChatId, 10)
+                val summary = recent.lastOrNull { it.messageType == "summary" }?.body
+                if (summary != null) {
+                    deferredResultStore.resolve(taskId, "【委员会结论 · $chatName】\n$summary")
+                } else {
+                    deferredResultStore.resolve(taskId, "【委员会】讨论已完成(群聊「$chatName」),未生成总结。议题:$topic")
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                Logger.e("ChatVM", "委员会执行失败", e)
+                deferredResultStore.fail(taskId, e.message ?: "执行失败")
+            }
+        }
+    }
+
+    /** 清空全部错误(向后兼容入口,UI"关闭"按钮调用)。 */
+    fun clearError() {
+        clearErrors()
+    }
+
+    /** P5-D/E: UI 层报告错误(语音失败、文件解析失败等)。v0.49: 走 addError,支持 5 秒自动消失。 */
+    fun reportError(msg: String) {
+        addError(ChatErrorType.UNKNOWN, msg)
+    }
+
+    // ── v0.49: 多错误管理 ──────────────────────────────────────────────────
+
+    /**
+     * v0.49: 追加一条错误到 [ChatUiState.errors]。
+     *
+     * 可恢复错误([isRecoverable]=true)5 秒后自动移除(避免堆积);
+     * 不可恢复错误(如 API key 无效)需用户手动 dismiss。
+     */
+    fun addError(type: ChatErrorType, message: String, isRecoverable: Boolean = true) {
+        val error = ChatError(type = type, message = message, isRecoverable = isRecoverable)
+        _state.update { it.copy(errors = it.errors + error) }
+        // 5 秒后自动移除(如果是可恢复的)
+        if (isRecoverable) {
+            viewModelScope.launch {
+                delay(5000)
+                dismissError(error.id)
+            }
+        }
+    }
+
+    /** v0.49: 移除指定 id 的错误(用户手动 dismiss)。 */
+    fun dismissError(errorId: String) {
+        _state.update { it.copy(errors = it.errors.filter { er -> er.id != errorId }) }
+    }
+
+    /** v0.49: 清空全部错误。 */
+    fun clearErrors() {
+        _state.update { it.copy(errors = emptyList()) }
+    }
+
+    /**
+     * v0.49: 根据异常消息分类错误类型(用于 launchStream 主要 catch 块)。
+     *
+     * v1.0.1 (P4): 改用 [ProviderError] 类型分类,替代原字符串 contains 匹配。
+     * v1.0.27 Phase 5-B: 优先走类型路径 `(throwable as? ProviderException)?.providerError`,
+     * 兜底才用 [inferFromMessage] 字符串推断 (向后兼容)。
+     *
+     *  - ProviderError.Network → NETWORK(IOException / timeout / 连接断开)
+     *  - ProviderError.RateLimit → RATE_LIMIT(429 / RESOURCE_EXHAUSTED)
+     *  - ProviderError.ServerError → NETWORK(5xx / 529 overloaded,可重试)
+     *  - ProviderError.AuthError → API_KEY(401 / 403)
+     *  - 其余 → UNKNOWN
+     */
+    private fun classifyErrorType(message: String, throwable: Throwable? = null): ChatErrorType {
+        // 优先走类型路径 (Provider 已抛 ProviderException)
+        val providerError =
+            (throwable as? ProviderException)?.providerError
+                ?: inferFromMessage(message, throwable)
+        return when (providerError) {
+            is ProviderError.Network -> ChatErrorType.NETWORK
+            is ProviderError.RateLimit -> ChatErrorType.RATE_LIMIT
+            // v1.0.1 (P4): 5xx 纳入 NETWORK(可重试),原落入 UNKNOWN 不重试
+            is ProviderError.ServerError -> ChatErrorType.NETWORK
+            is ProviderError.AuthError -> ChatErrorType.API_KEY
+            is ProviderError.InvalidRequest -> ChatErrorType.UNKNOWN
+            is ProviderError.Cancelled -> ChatErrorType.UNKNOWN
+            is ProviderError.Unknown -> ChatErrorType.UNKNOWN
+            null -> ChatErrorType.UNKNOWN
+        }
+    }
+
+    /**
+     * v1.0.17: 等待网络恢复(StreamInterrupted 智能续传用)。
+     *
+     * 优先使用 [NetworkMonitor.isOnline] StateFlow(实时反映网络状态);
+     * 若 [NetworkMonitor] 不可用则回退到 [isNetworkAvailable] 同步轮询 ConnectivityManager。
+     *
+     * @param timeoutMs 最大等待时间(毫秒),超时返回 false
+     * @return true 表示网络已恢复;false 表示超时未恢复
+     */
+    private suspend fun waitForNetworkRecovery(timeoutMs: Long): Boolean {
+        // 当前已在线则立即返回(避免无谓等待)
+        if (networkMonitor.isOnline.value) return true
+        // withTimeoutOrNull 超时返回 null → false;轮询期间任一来源显示在线即返回 true
+        return kotlinx.coroutines.withTimeoutOrNull(timeoutMs) {
+            // 轮询网络状态(每 NETWORK_POLL_INTERVAL_MS 检查一次),兼容 NetworkMonitor callback 未触发的场景
+            while (!networkMonitor.isOnline.value && !isNetworkAvailable()) {
+                kotlinx.coroutines.delay(NETWORK_POLL_INTERVAL_MS)
+            }
+            true
+        } ?: false
+    }
+
+    /**
+     * v1.0.17: 同步检查网络是否可用(回退方案,当 [NetworkMonitor] 不可用时使用)。
+     *
+     * 基于 ConnectivityManager.activeNetwork + NET_CAPABILITY_INTERNET 判断,
+     * 与 [NetworkMonitor] 的 checkOnline 逻辑一致(但不要求 VALIDATED,更宽松)。
+     */
+    private fun isNetworkAvailable(): Boolean {
+        return try {
+            val cm =
+                appContext.getSystemService(android.content.Context.CONNECTIVITY_SERVICE)
+                    as? android.net.ConnectivityManager ?: return false
+            val network = cm.activeNetwork ?: return false
+            val caps = cm.getNetworkCapabilities(network) ?: return false
+            caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        } catch (e: Exception) {
+            Logger.w("ChatVM", "isNetworkAvailable check failed: ${e.message}")
+            false
+        }
+    }
+
+    /**
+     * 任务 3: 统一网络错误提示文案。
+     * 按异常消息关键词分类,给用户更友好的中文提示。
+     */
+    private fun classifyNetworkError(e: Throwable): String = ErrorMessages.classifyNetworkError(appContext, e)
+
+    // ── v0.45: 上下文 token 占用估算 ──────────────────────────────────────
+
+    private var cachedSystemPrompt
+        get() = systemPromptCache.cachedSystemPrompt
+        set(value) {
+            systemPromptCache.cachedSystemPrompt = value
+        }
+    private var cachedStaticSystemPrompt
+        get() = systemPromptCache.cachedStaticSystemPrompt
+        set(value) {
+            systemPromptCache.cachedStaticSystemPrompt = value
+        }
+    private var cachedStaticSnapshotKey
+        get() = systemPromptCache.cachedStaticSnapshotKey
+        set(value) {
+            systemPromptCache.cachedStaticSnapshotKey = value
+        }
+
+    /**
+     * v0.45: 刷新上下文信息(切换会话/发送/停止/压缩后调用)。
+     *
+     * 1. 读取当前选中模型的 contextWindow → 写入 contextMaxTokens
+     * 2. 重建 system prompt 并缓存(SystemPromptAssembler.build)
+     * 3. 立即更新 token 计数
+     *
+     * 这是 suspend 方法,在 viewModelScope.launch 中调用。
+     */
+    private suspend fun refreshContextInfo() {
+        // 1. 加载模型的 contextWindow
+        val model = resultOf { settings.getSelectedModel() }.getOrNull()
+        // 模型未声明 contextWindow 时,用 ModelContextWindowRegistry 按 id 前缀兜底;
+        // 仍查不到则用 32768 作为通用 fallback(多数现代模型至少 32K)
+        val maxTokens =
+            model?.contextWindow
+                ?: ModelContextWindowRegistry.lookup(model?.id ?: "")
+                ?: 32768
+        // 2. 重建 system prompt(6 步工作流第 1 步,含人格/记忆/工具等)
+        // 拆分为静态快照 + 动态时间,静态部分在同一会话内复用。
+        val assistant =
+            _state.value.currentAssistant
+                ?: assistantRepository.getById("default")
+        val memoryEnabled = assistant?.memoryEnabled ?: true
+        val useGlobalMemory = assistant?.useGlobalMemory ?: false
+        val timeReminderEnabled = assistant?.enableTimeReminder ?: true
+        val effectiveMemoryEnabled = memoryEnabled && settings.isMemoryEnabled()
+        // v1.0.72: 本会话不参考记忆标志
+        val state = _state.value
+        val effSessionId = if (state.isAgentMode) state.agentSessionId else state.currentSessionId
+        val sessionIgnoreMemory =
+            state.sessions
+                .firstOrNull { it.id == effSessionId }?.ignoreMemory ?: false
+        val memoryScope = assistant?.id?.takeIf { it.isNotBlank() && it != "default" } ?: "main"
+        val memorySpaceId = settings.currentSpaceIdFlow.firstOrNull().orEmpty().ifBlank { "default" }
+        // 2.1 重建并缓存静态快照
+        val staticSnapshot =
+            resultOf {
+                systemPromptAssembler.buildStaticSnapshot(
+                    assistant = assistant,
+                    memoryEnabled = effectiveMemoryEnabled,
+                    ignoreMemory = sessionIgnoreMemory,
+                    useGlobalMemory = useGlobalMemory,
+                    memoryScope = memoryScope,
+                    memorySpaceId = memorySpaceId,
+                )
+            }.getOrNull() ?: ""
+        cachedStaticSystemPrompt = staticSnapshot
+        cachedStaticSnapshotKey = computeStaticSnapshotKey(assistant, effectiveMemoryEnabled) +
+            "|global=$useGlobalMemory|scope=$memoryScope|space=$memorySpaceId"
+        // 2.2 组合完整 system prompt(静态快照 + 当前时间 + 表情包指南)
+        val dynamicSection = if (timeReminderEnabled) systemPromptAssembler.buildDynamicSection() else ""
+        // v2.x: 表情包使用指南(动态读取;库为空/开关关闭时为空串)
+        val stickerGuide = resultOf { systemPromptAssembler.buildStickerGuideSection() }.getOrNull().orEmpty()
+        cachedSystemPrompt =
+            buildString {
+                if (staticSnapshot.isNotBlank()) append(staticSnapshot)
+                if (dynamicSection.isNotBlank()) {
+                    if (isNotEmpty()) append("\n\n---\n\n")
+                    append(dynamicSection)
+                }
+                if (stickerGuide.isNotBlank()) {
+                    if (isNotEmpty()) append("\n\n---\n\n")
+                    append(stickerGuide)
+                }
+            }
+        // 3. 更新 state(contextMaxTokens + contextTokenCount)
+        // v1.97 性能修复: TokenEstimator.estimate 是 CPU 密集操作(jtokkit BPE 编码),
+        // 对长历史消息列表(200 条 × 几百字符)单次可达 50-200ms。
+        // 原先在主线程同步执行,流式期间每秒叠加一次,直接造成卡顿。
+        // 现移到 Dispatchers.Default 后台线程执行,结果回主线程写 state。
+        val msgsSnapshot = _messages.value
+        val sysPromptSnapshot = cachedSystemPrompt
+        val tokenCount =
+            withContext(Dispatchers.Default) {
+                TokenEstimator.estimate(msgsSnapshot, sysPromptSnapshot)
+            }
+        _state.update {
+            it.copy(
+                contextMaxTokens = maxTokens,
+                contextTokenCount = tokenCount,
+            )
+        }
+    }
+
+    /**
+     * 计算静态 system prompt 快照的失效 key。
+     *
+     * 当 assistant 配置、settings、chatPreferences 等发生变化时,key 改变,
+     * 触发 [launchStream] 重建静态快照。
+     */
+    private fun computeStaticSnapshotKey(assistant: AssistantEntity?, memoryEnabled: Boolean): String =
+        generationController.computeStaticSnapshotKey(assistant, memoryEnabled)
+
+    /**
+     * v2.x: 当前会话检查点覆盖的消息 id 缓存。
+     *
+     * 供占用率估算排除"已压缩、不会再发给模型"的消息。用缓存而不是每次查库，是因为
+     * 流式过程中占用率会按节流频繁刷新（见 updateContextTokenCount 的调用点）。
+     */
+    @Volatile
+    private var checkpointCoveredIds: Set<String> = emptySet()
+
+    /** 上面那份缓存属于哪个会话（切会话后立刻失效，避免把 A 会话的覆盖集合用到 B 会话）。 */
+    @Volatile
+    private var checkpointCoveredSessionId: String? = null
+
+    /**
+     * 确保覆盖集合与当前显示的会话一致；不一致就重新读一次检查点。
+     *
+     * 用"惰性自愈"而不是在每个切会话/写检查点的位置都埋一次调用：只要状态对不上，
+     * 下一次算占用率时就会自动纠正，不会出现"改了十个地方漏了一个"的长期漂移。
+     */
+    private suspend fun ensureCheckpointCoveredIds(sessionId: String) {
+        if (checkpointCoveredSessionId == sessionId) return
+        checkpointCoveredSessionId = sessionId
+        refreshCheckpointCoveredIds(sessionId)
+    }
+
+    /** 重新读取当前会话的检查点并刷新覆盖集合（写检查点后 / 切换会话后调用）。 */
+    private suspend fun refreshCheckpointCoveredIds(sessionId: String) {
+        checkpointCoveredIds =
+            try {
+                val checkpoint = checkpointReader.get(sessionId)
+                val covered =
+                    if (checkpoint == null) {
+                        io.zer0.muse.transformer.CompressionSummaryStore.clear(sessionId)
+                        emptySet()
+                    } else {
+                        val ids =
+                            io.zer0.muse.transformer.ContextCheckpointMerge.coveredMessageIds(
+                                _messages.value,
+                                checkpoint,
+                            )
+                        // A paged UI window may not contain the persisted boundary yet. In that
+                        // case keep the checkpoint authoritative and let the full-history path
+                        // hydrate the in-process watermark later.
+                        if (ids.isNotEmpty() && checkpoint.summary.isNotBlank()) {
+                            io.zer0.muse.transformer.CompressionSummaryStore.remember(
+                                sessionId = sessionId,
+                                coveredIds = ids,
+                                summary = checkpoint.summary,
+                            )
+                        }
+                        ids
+                    }
+                // 同步界面锚点：分隔线位置 + 累计条数（无检查点时清空，避免残留上一会话的分隔线）
+                val boundaryId = checkpoint?.lastCoveredMessageId?.takeIf { it.isNotBlank() }
+                _state.update {
+                    it.copy(
+                        contextCheckpointBoundaryId = boundaryId,
+                        contextCheckpointTotalCovered = checkpoint?.totalCoveredCount ?: 0,
+                    )
+                }
+                covered
+            } catch (ce: kotlinx.coroutines.CancellationException) {
+                throw ce
+            } catch (t: Throwable) {
+                Logger.w("ChatVM", io.zer0.muse.transformer.CompressionDiagnostics.refreshCoveredIdsFailed(t.message))
+                emptySet()
+            }
+    }
+
+    /**
+     * v0.45: 快速更新 token 计数(流式过程中每 200 字符或 1000ms 调用)。
+     *
+     * 使用 [cachedSystemPrompt] 避免每次都重建 system prompt(IO 密集)。
+     * 非流式场景应调用 [refreshContextInfo](会重建 system prompt + 加载 contextWindow)。
+     *
+     * v1.97 性能修复: 改为 suspend,TokenEstimator.estimate(jtokkit BPE 编码,CPU 密集)
+     * 移到 Dispatchers.Default 执行。原先在主线程同步,长历史下单次 50-200ms,
+     * 流式期间每秒叠加一次,是卡顿的主要根因。
+     */
+    private suspend fun updateContextTokenCount() {
+        displayedSessionId()?.let { ensureCheckpointCoveredIds(it) }
+        generationController.updateContextTokenCount(checkpointCoveredIds)
+    }
+
+    /**
+     * 退出对话时触发 AI 摘要命名。
+     * 仅当标题仍为默认值"新会话"且有至少一轮完整对话时触发。
+     */
+    fun autoTitleOnExit(sessionId: String) {
+        autoTitleSession(sessionId)
+    }
+
+    /**
+     * 功能2: 对话自动命名。
+     *
+     * 流式完成后,若会话标题为默认值(如"新会话"或空),调用 LLM 用 6 字以内概括对话。
+     * 只在至少有一条 user 消息时触发,避免空对话生成无意义标题。
+     */
+    private fun autoTitleSession(sessionId: String) {
+        val state = _state.value
+        val title = state.sessions.firstOrNull { it.id == sessionId }?.title ?: return
+        val defaultTitle = appContext.getString(R.string.session_repo_default_title)
+        // v2.5.2 fix: 历史遗留的无意义标题（"..." 等字面量）也算未命名，
+        // 允许下次退出时重新自动命名，否则旧会话永远顶着省略号。
+        val titleIsMeaningless = io.zer0.muse.data.session.isMeaninglessSessionTitle(title)
+        if (title.isNotBlank() && title != defaultTitle && !titleIsMeaningless) return
+        val messages = _messages.value.filter { it.role == MessageRole.USER || it.role == MessageRole.ASSISTANT }
+        if (messages.size < 2) return
+        val preview =
+            messages.take(4).joinToString("\n") {
+                io.zer0.muse.transformer.InternalMarkupSanitizer.stripForDisplay(it.content).take(100)
+            }
+        if (preview.isBlank()) return
+        viewModelScope.launch(AppDispatchers.io) {
+            // v1.0.52: 读取用户自定义对话命名 prompt(null/空串表示用默认)
+            val customTitlePrompt =
+                resultOf { settings.customTitlePromptFlow.first() }
+                    .getOrNull()
+                    ?.takeIf { it.isNotBlank() }
+            val prompt =
+                if (customTitlePrompt != null) {
+                    "$customTitlePrompt\n\n$preview"
+                } else {
+                    "请用4到8个字概括以下对话的主题,直接输出标题文字,不要加引号或其他标点:\n\n$preview"
+                }
+            resultOf {
+                val completion =
+                    retryOnNetworkError {
+                        // v2.x: 标题生成优先走辅助模型路由「小工具」档(留空回退主对话模型)
+                        val routed =
+                            runCatching {
+                                io.zer0.muse.data.routing.UtilityModelRouter(settings)
+                                    .resolve(io.zer0.muse.data.routing.UtilityTier.SMALL)
+                            }.getOrNull()
+                        chatService.completeText(
+                            messages = listOf(UIMessage(role = MessageRole.USER, content = prompt)),
+                            model = routed?.second,
+                            providerConfig = routed?.first,
+                        )
+                    }
+                // v1.0.74 fix: 先剥离 <think> 推理标签再清洗。
+                // 此前直接 trim+去引号+take(20),模型带思考输出(如中转站 R1)
+                // 时标题会截进 `<think>...` 内容,用户看到的标题以 think 开头。
+                val cleaned = io.zer0.muse.transformer.stripThinkTags(completion.text)
+                cleaned.removeSurrounding("\"").removeSurrounding("'").take(20)
+            }.onSuccess { newTitle ->
+                // v2.5.2 fix: 拦截无意义标题 —— 中转站/小模型偶尔偷懒输出 "..." / "." /
+                // "。。。" 等字面量（用户实测多个会话标题全变成省略号，导出列表无法辨认），
+                // 此类标题不写入，会话保持默认名，下次退出时重新自动命名。
+                val meaningless = io.zer0.muse.data.session.isMeaninglessSessionTitle(newTitle)
+                if (!meaningless) {
+                    sessionRepository.renameSession(sessionId, newTitle)
+                }
+            }.onError { _, _ -> }
+        }
+    }
+
+    /**
+     * v1.42: 自动上下文压缩触发器。
+     *
+     * 当 token 占用超过 80% 时,在后台 IO 线程压缩历史,不阻塞 UI。
+     * 只压缩内存中的 messages,不持久化到 DB(DB 保留完整历史)。
+     */
+    private fun triggerAutoCompress(sessionId: String) {
+        val maxTokens = _state.value.contextMaxTokens
+        val currentTokens = _state.value.contextTokenCount
+        if (maxTokens <= 0 || currentTokens <= 0) return
+        val ratio = currentTokens.toFloat() / maxTokens
+        if (!shouldAutoCompress(currentTokens, maxTokens)) return
+        val currentMessages = _messages.value
+        if (currentMessages.size < 2) return
+
+        viewModelScope.launch(AppDispatchers.io) {
+            val keepRecent = minOf(COMPRESSION_SAFETY_TAIL_MESSAGES, currentMessages.size - 1).coerceAtLeast(1)
+            // v2.x: 取上一次检查点的边界 —— 既用于"只统计本次新增并入的消息",也用于滚动改写
+            val existingCheckpoint =
+                try {
+                    checkpointReader.get(sessionId)
+                } catch (ce: kotlinx.coroutines.CancellationException) {
+                    throw ce
+                } catch (t: Throwable) {
+                    Logger.w("ChatVM", io.zer0.muse.transformer.CompressionDiagnostics.readCheckpointFailed(t.message))
+                    null
+                }
+            val currentCheckpointBoundaryId = existingCheckpoint?.lastCoveredMessageId
+            val compressContext =
+                TransformContext(
+                    sessionId = sessionId,
+                    modelId = _state.value.currentAssistant?.modelId,
+                    extras =
+                    mapOf(
+                        "compress_enabled" to true,
+                        "compress_threshold" to 1,
+                        "compress_keep_recent" to keepRecent,
+                    ),
+                )
+            // H-01 修复: transform 是 suspend 函数,改用 resultOf 避免吞没 CancellationException
+            val compressed =
+                resultOf {
+                    contextCompressTransformer.transform(currentMessages, compressContext)
+                }.onError { msg, t ->
+                    Logger.w("ChatVM", "Auto-compress transform failed: $msg")
+                }.getOrNull() ?: currentMessages
+            // 本次实际并入摘要的消息(进程内水位线记录);为空说明没压成,不写检查点
+            val compressedEntry = io.zer0.muse.transformer.CompressionSummaryStore.entry(sessionId)
+            val coveredIds: Set<String> = compressedEntry?.coveredIds.orEmpty()
+            val maxCoveredId: String? = coveredIds.maxOrNull()
+            if (compressed.size < currentMessages.size) {
+                // v2.3.2: 会话守卫 — 压缩是耗时 LLM 调用,期间用户可能已切走会话;
+                // 过期结果绝不能写进当前会话(否则 A 会话的摘要会盖到 B 会话的消息列表上,
+                // 界面出现"另一个会话的内容",继续发送还会把 A 的上下文送给模型)。
+                if (displayedSessionId() != sessionId) {
+                    Logger.i("ChatVM", io.zer0.muse.transformer.CompressionDiagnostics.staleAutoCompressResult(sessionId))
+                    return@launch
+                }
+                finishCompressionWithCheckpoint(
+                    sessionId = sessionId,
+                    currentMessages = currentMessages,
+                    compressed = compressed,
+                    coveredIds = coveredIds,
+                    maxCoveredId = maxCoveredId,
+                    previousBoundaryId = currentCheckpointBoundaryId,
+                    previousTotalCovered = existingCheckpoint?.totalCoveredCount ?: 0,
+                    keepRecent = keepRecent,
+                    tokensBefore = currentTokens,
+                    reason = io.zer0.memory.summary.ContextCheckpointEntity.REASON_AUTO,
+                )
+                Logger.i(
+                    "ChatVM",
+                    CompressionDiagnostics.checkpointSaved(
+                        ratio = "%.2f".format(ratio),
+                        covered = coveredIds.size,
+                        before = currentMessages.size,
+                        after = compressed.size,
+                    ),
+                )
+            } else if (displayedSessionId() == sessionId) {
+                // v2.x 降级阶梯最后一级：摘要没产出（网络差 / 摘要模型报错 / 超时 / 无净收益）。
+                // 此时**不空手而归** —— 用零请求的确定性文本摘录做本地重建，仍然写出一条检查点。
+                persistLocalCheckpointFallback(
+                    sessionId = sessionId,
+                    messages = currentMessages,
+                    keepRecent = keepRecent,
+                    previousBoundaryId = currentCheckpointBoundaryId,
+                    previousTotalCovered = existingCheckpoint?.totalCoveredCount ?: 0,
+                    tokensBefore = currentTokens,
+                )
+            }
+        }
+    }
+
+    /**
+     * v2.x: 一次**成功**压缩的收尾 —— 落检查点并刷新"已覆盖/占用率"口径。
+     *
+     * 自动与手动压缩共用：两条路径在"模型看到什么、占用率怎么算"上必须完全一致，
+     * 否则用户主动点"压缩"会得到与自动压缩不同的结果（曾经就是这样的行为分叉）。
+     *
+     * 落检查点而不是改写内存消息列表：界面继续显示完整历史（老消息默认收起），
+     * 只有发给模型的历史按边界过滤；重开应用/切回会话依然生效。
+     *
+     * @param previousBoundaryId 上一次检查点的边界（`newlyCoveredCount` 的起点）
+     * @param previousTotalCovered 上一次检查点的累计条数（界面展示用，滚动累加）
+     * @param maxCoveredId 本次覆盖的边界 id 兜底值（正常应取 [ContextCompressTransformer.lastCoveredBoundaryId]）
+     */
+    private suspend fun finishCompressionWithCheckpoint(
+        sessionId: String,
+        currentMessages: List<UIMessage>,
+        compressed: List<UIMessage>,
+        coveredIds: Set<String>,
+        maxCoveredId: String?,
+        previousBoundaryId: String?,
+        previousTotalCovered: Int,
+        keepRecent: Int,
+        tokensBefore: Int,
+        reason: String,
+    ) {
+        if (maxCoveredId == null) {
+            Logger.w("ChatVM", CompressionDiagnostics.NO_COVERAGE_RECORD)
+            return
+        }
+        persistContextCheckpoint(
+            sessionId = sessionId,
+            previousBoundaryId = previousBoundaryId,
+            previousTotalCovered = previousTotalCovered,
+            generatedBoundaryId = maxCoveredId,
+            tokensBefore = tokensBefore,
+            tokensAfter = TokenEstimator.estimate(compressed),
+            reason = reason,
+            // 边界与条数都取自"有序的压缩集合"，不用消息 id 排序推断：
+            // 消息 id 是随机 UUID，集合无序，靠排序会选错边界并丢掉未覆盖的消息。
+            boundaryMessageId = contextCompressTransformer.lastCoveredBoundaryId,
+            newlyCoveredCount = newlyCoveredCount(
+                messages = currentMessages,
+                coveredIds = coveredIds,
+                previousBoundaryId = previousBoundaryId,
+            ),
+        )
+        // 覆盖集合先刷新再算占用率 —— 刷新后 checkpointCoveredIds 才是本次压缩的结果
+        checkpointCoveredSessionId = sessionId
+        refreshCheckpointCoveredIds(sessionId)
+        updateContextTokenCount()
+        // keepRecent 目前不参与落库，但保留在签名里以免调用方以为"保留策略只由压缩器决定"
+        Logger.d("ChatVM", "checkpoint finished (keepRecent=$keepRecent)")
+    }
+
+    /**
+     * v2.x: 数出"本次新并入摘要"的消息条数。
+     *
+     * 用**有序的消息列表**来数（而不是对覆盖 id 集合排序）：消息 id 是随机 UUID，
+     * 集合本身无序，任何基于 id 比较的推断都会在真实数据上算错。
+     * 上次边界之后、且落在覆盖集合内的消息才算"本次新增"。
+     */
+    private fun newlyCoveredCount(messages: List<UIMessage>, coveredIds: Set<String>, previousBoundaryId: String?): Int {
+        if (coveredIds.isEmpty()) return 0
+        val startIndex =
+            if (previousBoundaryId == null) {
+                0
+            } else {
+                messages.indexOfFirst { it.id.toString() == previousBoundaryId }
+                    .let { if (it < 0) 0 else it + 1 }
+            }
+        return messages.drop(startIndex).count { it.id.toString() in coveredIds }
+    }
+
+    /**
+     * v2.x: 摘要不可用时的**本地重建**检查点（零模型请求）。
+     *
+     * 覆盖范围与正常压缩一致：保留最近 [keepRecent] 条，其余做确定性文本摘录。
+     * 摘录只截取每条的自然语言片段，不做提炼 —— 它的价值不在于"摘要得多好"，
+     * 而在于**边界立刻生效**：被覆盖的消息不再进模型，且这一状态是持久的。
+     */
+    private suspend fun persistLocalCheckpointFallback(
+        sessionId: String,
+        messages: List<UIMessage>,
+        keepRecent: Int,
+        previousBoundaryId: String?,
+        previousTotalCovered: Int,
+        tokensBefore: Int,
+    ) {
+        val compressibleEnd = messages.size - keepRecent
+        val covered = if (compressibleEnd <= 0) {
+            emptyList()
+        } else {
+            messages.subList(0, compressibleEnd).filterNot {
+                it.role == MessageRole.SYSTEM && it.content.startsWith(io.zer0.muse.transformer.ContextCheckpointMerge.MARKER)
+            }
+        }
+        if (covered.isEmpty()) return
+        try {
+            val boundary = covered.last().id.toString()
+            val coveredSeq = runCatching { sessionRepository.getMessageById(boundary)?.seq ?: 0L }.getOrDefault(0L)
+            val checkpoint = contextCompressTransformer.buildLocalCheckpoint(
+                io.zer0.muse.transformer.ContextCompressTransformer.LocalCheckpointRequest(
+                    sessionId = sessionId,
+                    covered = covered,
+                    previousBoundaryId = previousBoundaryId,
+                    coveredSeq = coveredSeq,
+                    tokensBefore = tokensBefore,
+                    // 本地摘录的收益是"不再带原文"，按摘录正文长度估算即可（不精确，但方向正确）
+                    tokensAfter = TokenEstimator.estimate(covered.last().content) + covered.size * 20,
+                    reason = io.zer0.memory.summary.ContextCheckpointEntity.REASON_AUTO,
+                ),
+            ) ?: return
+            checkpointReader.put(
+                checkpoint.copy(totalCoveredCount = previousTotalCovered + covered.size),
+            )
+            checkpointCoveredSessionId = sessionId
+            refreshCheckpointCoveredIds(sessionId)
+            updateContextTokenCount()
+            Logger.i(
+                "ChatVM",
+                CompressionDiagnostics.localRebuildSaved(covered = covered.size, before = messages.size),
+            )
+        } catch (ce: kotlinx.coroutines.CancellationException) {
+            throw ce
+        } catch (t: Throwable) {
+            Logger.w("ChatVM", CompressionDiagnostics.writeCheckpointFailed(t.message))
+        }
+    }
+
+    /**
+     * v2.x: 把一次压缩的结果写成会话检查点。
+     *
+     * 边界与前一次的差值才是"本次并入摘要"的消息集合 —— 检查点是滚动覆盖的，
+     * 新检查点已经包含旧检查点的内容，若把旧边界之前也计入，会让 `coveredCount`/`tokensBefore`
+     * 逐次虚增（表现为"压缩收益"越报越大，实际并没有省那么多）。
+     *
+     * 失败只记录日志：检查点写不进去最多是下一次还要重新摘要，绝不能影响本轮对话。
+     */
+    private suspend fun persistContextCheckpoint(
+        sessionId: String,
+        previousBoundaryId: String?,
+        previousTotalCovered: Int,
+        generatedBoundaryId: String,
+        tokensBefore: Int,
+        tokensAfter: Int,
+        reason: String,
+        /** 本次"已并入摘要"的边界消息 id（按时间顺序的最后一条，由 transform 给出）。 */
+        boundaryMessageId: String? = null,
+        /** 本次新并入摘要的条数（按有序列表求出，不用消息 id 排序推断）。 */
+        newlyCoveredCount: Int = 0,
+    ) {
+        try {
+            // 边界消息在消息表里的真实 seq（查不到就传 0：组装侧以消息 id 为准，seq 只作上界）
+            val boundaryForSeq = boundaryMessageId ?: generatedBoundaryId
+            val coveredSeq =
+                runCatching { sessionRepository.getMessageById(boundaryForSeq)?.seq ?: 0L }
+                    .getOrDefault(0L)
+            val checkpoint = contextCompressTransformer.buildCheckpoint(
+                io.zer0.muse.transformer.ContextCompressTransformer.CheckpointRequest(
+                    sessionId = sessionId,
+                    previousBoundaryId = previousBoundaryId,
+                    generatedBoundaryId = generatedBoundaryId,
+                    coveredSeq = coveredSeq,
+                    tokensBefore = tokensBefore,
+                    tokensAfter = tokensAfter,
+                    reason = reason,
+                    boundaryMessageId = boundaryMessageId,
+                    previousTotalCovered = previousTotalCovered,
+                    newlyCoveredCount = newlyCoveredCount,
+                ),
+            ) ?: return
+            checkpointReader.put(checkpoint)
+        } catch (ce: kotlinx.coroutines.CancellationException) {
+            throw ce
+        } catch (t: Throwable) {
+            Logger.w("ChatVM", io.zer0.muse.transformer.CompressionDiagnostics.writeCheckpointFailed(t.message))
+        }
+    }
+
+    /**
+     * v0.45: 手动触发上下文压缩(记忆压缩常态化)。
+     *
+     * @param updateMemoryFirst true = 先调 [MemoryTicker.forceCompileNow] 更新记忆(fact/摘要),
+     *                          再压缩历史;false = 只压缩历史(纯压缩)
+     *
+     * UI 入口是一键后台压缩：系统自动选择安全尾部，不向用户暴露保留条数或压缩指令。
+     * 纯压缩模式仍供斜杠命令内部使用。
+     *
+     * 压缩结果只替换内存中的 messages(_messages.value),不持久化到 DB
+     * (DB 保留完整历史用于搜索/导出,内存版本用于 LLM 上下文)。
+     * 切换会话后从 DB 重新加载,下次发送时自动压缩器会再次处理。
+     */
+    fun manualCompress(updateMemoryFirst: Boolean = true) {
+        val sessionId = displayedSessionId()
+        val currentMessages = _messages.value
+        // 前置校验统一收敛为单出口:无会话/消息过少/流式中/压缩中均直接返回。
+        // 保持原语义:仅"消息过少"提示用户,其余前置状态静默跳过。
+        if (sessionId == null || currentMessages.size < 2 || _state.value.isStreaming || _state.value.isCompressing) {
+            if (sessionId != null && currentMessages.size < 2) {
+                reportError(appContext.getString(R.string.err_chat_compress_too_few))
+            }
+            return
+        }
+
+        _state.update {
+            it.copy(
+                toolsState = it.toolsState.copy(
+                    isCompressing = true,
+                    compressionPhase = if (updateMemoryFirst) {
+                        ManualCompressionPhase.UPDATING_MEMORY
+                    } else {
+                        ManualCompressionPhase.COMPRESSING_CONTEXT
+                    },
+                ),
+            )
+        }
+        viewModelScope.launch(AppDispatchers.io) {
+            runManualCompress(
+                sessionId = sessionId,
+                currentMessages = currentMessages,
+                updateMemoryFirst = updateMemoryFirst,
+            )
+        }
+    }
+
+    /**
+     * 手动压缩用的 transform 上下文。
+     *
+     * 与自动压缩的区别只在"强制触发 + 强制兜底"：用户主动点了压缩，就不该因为
+     * 收益不明显而什么都不做；字符预算仍按当前窗口推导，避免切出超窗的巨块。
+     */
+    private fun manualCompressContext(sessionId: String, keepRecent: Int): TransformContext = TransformContext(
+        sessionId = sessionId,
+        modelId = _state.value.currentAssistant?.modelId,
+        extras =
+        mapOf(
+            "compress_enabled" to true,
+            // 强制触发：用户主动点了压缩，不该因为收益不明显而什么都不做
+            "compress_threshold" to 1,
+            "compress_keep_recent" to keepRecent,
+            "compress_force_fallback" to true,
+            "compress_char_budget" to
+                WarmupHistory.compressTokenBudgetFor(_state.value.contextMaxTokens),
+        ),
+    )
+
+    /**
+     * 手动压缩成功后的对外反馈。
+     *
+     * v2.x: 不再报"已压缩: N → M 条" —— 条数变化对用户没有意义，还会让人以为会话被砍掉了。
+     * 压缩在界面上的表达是对话流里的常驻分隔线（见 refreshContextInfo），这里只给一句状态。
+     */
+    private fun announceManualCompressDone(beforeCount: Int, afterCount: Int, keepRecent: Int) {
+        // 日志为内部诊断,不使用中文字面量(避免 CJK 门禁误判)
+        Logger.i(
+            "ChatVM",
+            "manualCompress: $beforeCount -> $afterCount msgs (keepRecent=$keepRecent)",
+        )
+        MuseToast.show(appContext.getString(R.string.err_chat_compress_done))
+    }
+
+    /** 手动压缩的实际执行体（从 [manualCompress] 抽出，便于阅读与测试）。 */
+    private suspend fun runManualCompress(sessionId: String, currentMessages: List<UIMessage>, updateMemoryFirst: Boolean) {
+        try {
+            val effectiveKeepRecent =
+                minOf(COMPRESSION_SAFETY_TAIL_MESSAGES, currentMessages.size - 1).coerceAtLeast(1)
+            // v2.x: 手动压缩也走检查点，因此先取一次现有检查点（边界 + 累计条数）
+            val manualExisting =
+                runCatching { checkpointReader.get(sessionId) }.getOrNull()
+            val manualPreviousBoundaryId = manualExisting?.lastCoveredMessageId
+            val manualPreviousTotalCovered = manualExisting?.totalCoveredCount ?: 0
+            val manualTokensBefore = _state.value.contextTokenCount
+            val context = manualCompressContext(sessionId, effectiveKeepRecent)
+
+            val compressed = runManualCompressionStages(
+                updateMemoryFirst = updateMemoryFirst,
+                onPhase = { phase ->
+                    _state.update { state ->
+                        state.copy(
+                            toolsState = state.toolsState.copy(compressionPhase = phase),
+                        )
+                    }
+                },
+                updateMemory = {
+                    // 强制提炼 fact + deep memory + 刷新 today;失败不阻断后续压缩。
+                    val model = resultOf { settings.getSelectedModel() }.getOrNull()
+                    resultOf {
+                        memoryTicker.forceCompileNow(model = model)
+                    }.onError { msg, _ ->
+                        Logger.w("ChatVM", "forceCompileNow failed: $msg")
+                        MuseToast.show(appContext.getString(R.string.err_chat_compress_memory_failed))
+                    }
+                },
+                compress = {
+                    // H-01 修复: transform 是 suspend 函数,改用 resultOf 避免吞没 CancellationException
+                    resultOf {
+                        contextCompressTransformer.transform(currentMessages, context)
+                    }.onError { msg, _ ->
+                        Logger.w("ChatVM", "manualCompress transform failed: $msg")
+                    }.getOrNull() ?: currentMessages
+                },
+            )
+            // 3. 替换内存中的 messages(不持久化,DB 保留完整历史)
+            if (compressed.size < currentMessages.size) {
+                // v2.3.2: 会话守卫 — 同 triggerAutoCompress,压缩期间切走会话则丢弃过期结果
+                // (isCompressing 由外层 finally 复位,这里直接返回即可)
+                if (displayedSessionId() != sessionId) {
+                    Logger.i("ChatVM", "manualCompress 结果已过期(会话已切换),丢弃: $sessionId")
+                    return
+                }
+                // v1.117: 修复消息丢失竞态 — 压缩是 suspend LLM 调用,耗时数秒,
+                // 期间用户可能继续发送新消息(已 append 到 _messages.value)。
+                // 直接用旧快照的 compressed 覆盖会丢弃这些新消息。
+                // v2.x: 与自动压缩统一 —— 压缩结果落成**会话检查点**，不再改写内存消息列表。
+                // 两层含义：① 界面保留完整历史（老消息默认收起，见 ChatScreen 的分隔线），
+                // 只有发给模型的历史按边界过滤；② 手动与自动路径的行为完全一致，不会因为
+                // 用户主动点"压缩"而回到旧行为。收尾逻辑与自动路径共用同一个 helper。
+                val manualCoveredIds =
+                    io.zer0.muse.transformer.CompressionSummaryStore.entry(sessionId)?.coveredIds.orEmpty()
+                finishCompressionWithCheckpoint(
+                    sessionId = sessionId,
+                    currentMessages = currentMessages,
+                    compressed = compressed,
+                    coveredIds = manualCoveredIds,
+                    maxCoveredId = manualCoveredIds.maxOrNull(),
+                    previousBoundaryId = manualPreviousBoundaryId,
+                    previousTotalCovered = manualPreviousTotalCovered,
+                    keepRecent = effectiveKeepRecent,
+                    tokensBefore = manualTokensBefore,
+                    reason = io.zer0.memory.summary.ContextCheckpointEntity.REASON_MANUAL,
+                )
+                announceManualCompressDone(currentMessages.size, compressed.size, effectiveKeepRecent)
+            } else if (updateMemoryFirst) {
+                // 压缩未生效(可能消息太少或 LLM 返回空摘要),但记忆已更新
+                MuseToast.show(appContext.getString(R.string.err_chat_compress_no_need))
+            }
+            // 4. 刷新 token 计数(重建 system prompt 因为记忆可能已更新)
+            refreshContextInfo()
+        } catch (e: Exception) {
+            Logger.w("ChatVM", "manualCompress failed: ${e.message}")
+            reportError(appContext.getString(R.string.err_chat_compress_failed, e.message ?: ""))
+        } finally {
+            _state.update {
+                it.copy(
+                    toolsState = it.toolsState.copy(
+                        isCompressing = false,
+                        compressionPhase = ManualCompressionPhase.IDLE,
+                    ),
+                )
+            }
+        }
+    }
+
+    /**
+     * v1.97: 执行斜杠命令。
+     *
+     * 解析输入文本,若为斜杠命令则执行对应操作并返回 true(表示已处理,不应发送给 LLM)。
+     * 非 / 开头或未知命令返回 false。
+     *
+     * @return true 表示已作为斜杠命令执行(不应发送),false 表示不是斜杠命令
+     */
+    fun executeSlashCommand(text: String): Boolean {
+        val cmd = SlashCommand.parse(text) ?: return false
+        val sessionId = displayedSessionId()
+        when (cmd) {
+            SlashCommand.NEW -> {
+                // 新建会话 — 复用现有 createNewSession(内部会创建 DB 会话并切换状态)
+                MuseToast.show(appContext.getString(R.string.slash_command_new_done))
+                createNewSession()
+            }
+            SlashCommand.COMPACT -> {
+                // 压缩会话历史 — 纯压缩,不先更新记忆
+                // F-5: 两段式过程态反馈 — 开始前提示"正在压缩…",manualCompress 完成时再提示结果
+                MuseToast.show(appContext.getString(R.string.slash_command_compact_starting))
+                manualCompress(updateMemoryFirst = false)
+            }
+            SlashCommand.RESET -> {
+                // 审计修复 (2.5): 流式中禁止 reset — 清空后 updateAssistant 全跳过,
+                // 流式内容不落盘,已持久化用户消息与丢失回复造成对话断裂。
+                if (_state.value.isStreaming) {
+                    // B-31: 拒绝时提示独立文案,不再误报"已重置"
+                    MuseToast.show(appContext.getString(R.string.slash_command_reset_busy))
+                    return true
+                }
+                val sid =
+                    sessionId ?: run {
+                        MuseToast.show(appContext.getString(R.string.slash_command_unknown, text))
+                        return true
+                    }
+                // F-5: 重置是异步删库,开始时给过程态反馈
+                MuseToast.show(appContext.getString(R.string.slash_command_reset_starting))
+                viewModelScope.launch(AppDispatchers.io) {
+                    // F-4: /reset 真正重置对话 — 删除当前会话全部消息
+                    // (truncateFrom(fromCreatedAt=0) 删除 createdAt>=0 的全部消息,含 FTS 索引同步);
+                    // 旧实现只清内存不删 DB,刷新后从 DB 重载导致"重置无效"。
+                    resultOf { sessionRepository.truncateFrom(sid, 0) }.onError { msg, t ->
+                        Logger.w("ChatVM", "reset session messages failed: $msg", t)
+                    }
+                    // 清空内存 + 失效缓存(避免切回命中旧快照)
+                    _messages.value = emptyList()
+                    sessionMemoryCache.remove(sid)
+                    // 重置后刷新上下文统计(token 归零)
+                    refreshContextInfo()
+                    MuseToast.show(appContext.getString(R.string.slash_command_reset_cleared))
+                }
+            }
+            SlashCommand.PIN -> {
+                // F-4: /pin 改为置顶"当前(最后一条)用户消息",而非置顶会话。
+                // 会话级置顶保留 togglePinned(setSessionPinned),由 UI 会话列表长按触发;
+                // /pin 命令语义对齐文档:置顶消息,消息级文本存内存态 pinnedMessageContent,
+                // 由 ChatScreen 渲染为消息列表顶部置顶横幅。
+                val latestUser = _messages.value.lastOrNull { it.role == MessageRole.USER }
+                if (latestUser == null) {
+                    MuseToast.show(appContext.getString(R.string.slash_command_unknown, text))
+                    return true
+                }
+                // 再次 /pin 同一条消息 = 取消置顶
+                val currentlyPinned = _state.value.pinnedMessageContent == latestUser.content
+                _state.update {
+                    it.copy(pinnedMessageContent = if (currentlyPinned) null else latestUser.content)
+                }
+                MuseToast.show(appContext.getString(R.string.slash_command_pin_message_done))
+            }
+            SlashCommand.ARCHIVE -> {
+                // 归档当前会话 — 复用现有 setSessionArchived(内部会切换到剩余会话)
+                val id =
+                    sessionId ?: run {
+                        MuseToast.show(appContext.getString(R.string.slash_command_unknown, text))
+                        return true
+                    }
+                setSessionArchived(id, true)
+                MuseToast.show(appContext.getString(R.string.slash_command_archive_done))
+            }
+        }
+        // 清空输入框
+        _state.update { it.copy(input = "") }
+        return true
+    }
+
+    /**
+     * F-4: 取消(/pin 置顶的消息横幅)。消息级置顶为内存态,切换会话时已由 switchSession 清空。
+     */
+    fun clearPinnedMessage() {
+        _state.update { it.copy(pinnedMessageContent = null) }
+    }
+
+    /**
+     * F-2: 把一段文本作为用户消息转发追加到指定会话。
+     *
+     * 由消息长按菜单"转发到会话"调用:选目标会话后,将该消息文本(用户消息原文 / 助手消息
+     * 转纯文本)作为一条新的 USER 消息追加到目标会话。[sessionRepository.appendMessage] 会同步
+     * 更新目标会话的 updatedAt / 预览 / FTS 索引。
+     *
+     * @return true 表示追加成功,false 表示目标会话不存在或写入失败。
+     */
+    suspend fun forwardMessageToSession(targetSessionId: String, text: String): Boolean {
+        val target = resultOf { sessionRepository.getSessionById(targetSessionId) }.getOrNull()
+        if (target == null || target.deletedAt != null) return false
+        val msg =
+            UIMessage(
+                id = Uuid.random(),
+                role = MessageRole.USER,
+                content = text,
+                createdAt = System.currentTimeMillis(),
+            )
+        return resultOf { sessionRepository.appendMessage(targetSessionId, msg) }
+            .onError { m, t -> Logger.w("ChatVM", "forwardMessageToSession: append failed: $m", t) }
+            .isSuccess
+    }
+
+    /** 切换侧栏开合。 */
+    fun toggleDrawer(open: Boolean) = settingsController.toggleDrawer(open)
+
+    /** P5-G: 切换绘图模式。开启后输入栏 placeholder 变化,send 走 ImageService。 */
+    fun toggleDrawMode() = settingsController.toggleDrawMode()
+
+    /** v0.34: 更新当前绘图参数(可临时覆盖设置默认值)。 */
+    fun updateImageGenParams(params: io.zer0.ai.image.ImageGenParams) = settingsController.updateImageGenParams(params)
+
+    /**
+     * 阶段 5: 切换激活 Provider(底部模型切换面板调用)。
+     *
+     * v1.0.28 修复: 之前注释说"内部会清空 selectedModelId"但实际未清空,
+     * 导致用户从 A Provider 切到 B Provider 后,旧 selectedModelId 仍指向 A 的模型,
+     * resolveToolsAndModel 跨 Provider 查找命中 A 的模型 → 请求误发到 A。
+     * 现显式调用 saveSelectedModel(null) 清空,对齐注释承诺。
+     *
+     * v1.22: 若目标 Provider 尚未拉取到模型,自动触发 /models 拉取。
+     */
+    fun setActiveProvider(providerId: String) = settingsController.setActiveProvider(providerId)
+
+    /**
+     * v1.22: 手动/自动拉取指定 Provider 的上游模型列表。
+     * 拉取成功后更新 ProviderConfig.models 并持久化,失败则写入 fetchModelsError。
+     *
+     * v1.132: 拉取成功后同步写入 [ModelListCache],让 ProviderSection 编辑页能复用结果(5 分钟内)。
+     */
+    fun refreshModels(providerId: String) = settingsController.refreshModels(providerId)
+
+    /**
+     * 阶段 5: 选择当前 Provider 下的具体模型(底部模型切换面板调用)。
+     * 传 null 清空选择,回退到 Provider 的首个模型。
+     *
+     * v0.51: 切换非空模型后,弹 Toast 提示"已切换模型,新消息将使用新模型生成(历史消息不变)"。
+     * 走独立 toast 字段(非 Snackbar),避免被错误消息挤掉。
+     */
+    fun setSelectedModel(modelId: String?) = settingsController.setSelectedModel(modelId)
+
+    /** v1.60-A: 设置工具模型(null 清除,沿用主对话模型)。 */
+    fun setToolModel(modelId: String?) = settingsController.setToolModel(modelId)
+
+    /**
+     * v0.51: 清空一次性 toast(Toast 弹出后由 UI 立即调用,避免重组时重复弹)。
+     */
+    fun clearToast() = settingsController.clearToast()
+
+    /**
+     * v1.0.72: 设置当前会话"不参考记忆"标志(空白对话页选项)。
+     * 持久化到会话,切换会话/重启保持;开启后 system prompt 跳过记忆注入。
+     */
+    fun setSessionIgnoreMemory(ignore: Boolean) = sessionController.setSessionIgnoreMemory(ignore)
+
+    /** 设置/取消引用回复目标。 */
+    fun setReplyingTo(message: UIMessage?) {
+        // v1.0.72: 加日志排查"叉不掉引用"问题(点击 X 后引用块是否收到清除事件)
+        Logger.i("ChatVM", "setReplyingTo: ${if (message == null) "null(清除引用)" else message.id}")
+        _state.update { it.copy(replyingTo = message, replyQuoteOverride = null) }
+    }
+
+    /** v1.57: 设置自定义引用文本(用于引用卡片编辑裁剪,精准引用部分内容)。 */
+    fun setReplyQuoteOverride(text: String?) {
+        _state.update { it.copy(replyQuoteOverride = text?.takeIf { it.isNotBlank() }) }
+    }
+
+    /**
+     * v1.58: 从指定消息处分叉对话 — 创建新会话并复制到该消息为止的历史,然后切换过去。
+     * 用户可在新会话中探索不同方向,不影响原对话。
+     */
+    fun forkSessionFromMessage(messageId: kotlin.uuid.Uuid) = sessionController.forkSessionFromMessage(messageId)
+
+    /** 新建会话。[assistantIdOverride] 非空时以指定助手创建(伙伴横排快捷开聊)。 */
+    fun createNewSession(onReady: (() -> Unit)? = null, assistantIdOverride: String? = null) =
+        sessionController.createNewSession(onReady, assistantIdOverride)
+
+    /**
+     * v1.97 gap8: 将文本发送到新会话。
+     *
+     * 原子地创建新会话、填充输入并触发发送,避免调用方在异步 createNewSession
+     * 完成前调用 send() 导致消息丢失。
+     */
+    fun sendToNewChat(text: String, onReady: (() -> Unit)? = null) = sessionController.sendToNewChat(text, onReady)
+
+    /**
+     * v1.24: Agent 重启上下文 — 保留当前助手,新建一个空会话,
+     * 让长期陪伴的 Agent 从零开始继续对话,同时 Toast 提示用户。
+     */
+    fun restartContext() = sessionController.restartContext()
+
+    /** 切换到指定会话。 */
+    fun switchSession(sessionId: String) = sessionController.switchSession(sessionId)
+
+    /** 切回会话时重新投递仍未启动生成的 outbox 请求。 */
+    private suspend fun requeueOutboxForSession(sessionId: String) = generationController.requeueOutboxForSession(sessionId)
+
+    /**
+     * v1.28: 设置 Agent Tab 模式。
+     *
+     * Agent Tab 进入时调用:恢复或创建独立的 Agent 会话,不依赖任务的 currentSessionId。
+     * 退出 Agent Tab 时(isAgentMode=false)恢复任务会话的消息。
+     */
+    @Suppress("LongMethod")
+    fun setAgentMode(enabled: Boolean, requestedSessionId: String? = null) = sessionController.setAgentMode(enabled, requestedSessionId)
+
+    /**
+     * 打开通知指定的会话。
+     *
+     * 普通会话属于任务 Tab;Agent 会话不在任务列表中,必须切换到 Agent Tab
+     * 并使用通知携带的精确会话 id,不能按默认助手重新猜测。
+     */
+    fun openSessionFromNotification(sessionId: String) {
+        viewModelScope.launch {
+            val target = sessionRepository.getSessionById(sessionId)
+            if (target?.isAgentSession == true) {
+                setAgentMode(true, requestedSessionId = sessionId)
+                return@launch
+            }
+            val ready =
+                withTimeoutOrNull(5_000L) {
+                    state.first { state ->
+                        state.currentSessionId != null &&
+                            state.sessions.any { it.id == sessionId }
+                    }
+                }
+            if (ready == null) {
+                Logger.w("ChatVM", "等待通知目标会话初始化超时,仍尝试打开: $sessionId")
+            }
+            switchSession(sessionId)
+        }
+    }
+
+    /**
+     * v1.0.47 P6-4: 关闭 Agent Mode 提示卡片(用户点击"知道了"后调用)。
+     */
+    fun dismissAgentModeHint() {
+        _state.update { it.copy(agentModeHint = null) }
+    }
+
+    /**
+     * v1.0.47 P6-2: 关闭弱工具模型提示(用户点击关闭后调用)。
+     */
+    fun dismissWeakToolHint() {
+        _state.update { it.copy(weakToolHint = null) }
+    }
+
+    /**
+     * v1.53-A1: 上滑加载更多历史消息。
+     *
+     * 取当前 messages 列表最早一条消息的 createdAt 作为锚点,从 DB 取早于该时间点的
+     * MESSAGE_PAGE_SIZE 条消息,前置插入到 messages。
+     *
+     * - 流式期间禁用(isStreaming=true 时不加载,避免列表抖动干扰流式输出)
+     * - isLoadingMore=true 时跳过(防止重复触发)
+     * - hasMoreHistory=false 时跳过(已加载完)
+     * - 加载完成后设置 [ChatUiState.lastHistoryLoadCount],UI 监听后调整滚动位置保持视觉位置
+     */
+    fun loadMoreHistory() = messageController.loadMoreHistory()
+
+    /**
+     * v1.53-A1: 清空 [ChatUiState.lastHistoryLoadCount]。
+     *
+     * UI 在 [ChatScreen] 监听 lastHistoryLoadCount 变化(>0)后,调
+     * [androidx.compose.foundation.lazy.LazyListState.scrollToItem] 跳过新插入的条数,
+     * 保持视觉位置不跳动,然后调本方法清空(避免重组时重复跳转)。
+     */
+    fun clearHistoryLoadCount() = messageController.clearHistoryLoadCount()
+
+    /** v1.28: 获取当前助手 id(用于创建 Agent 会话)。 */
+    private fun currentAssistantId(): String = _state.value.currentAssistant?.id ?: "default"
+
+    /** 软删除会话。删除当前会话时自动切换到剩余的第一个;无剩余会话时清空状态,不创建新会话。 */
+    fun deleteSession(sessionId: String) = sessionController.deleteSession(sessionId)
+
+    /** 重命名会话。 */
+    fun renameSession(sessionId: String, title: String) = sessionController.renameSession(sessionId, title)
+
+    /** v0.45: 切换会话归档状态。归档当前会话时切换到剩余首个会话;无剩余会话时清空状态,不创建新会话。 */
+    fun setSessionArchived(sessionId: String, archived: Boolean) = sessionController.setSessionArchived(sessionId, archived)
+
+    /** 重新加载会话列表(会话列表错误态重试)。 */
+    fun retryLoadSessions() {
+        viewModelScope.launch {
+            _state.update { it.copy(isSessionsLoading = true, sessionsError = null) }
+            try {
+                val sessions = sessionRepository.observeSessions().first()
+                _state.update { it.copy(sessions = sessions, isSessionsLoading = false, sessionsError = null) }
+                if (_state.value.currentSessionId == null && !initializing) {
+                    initializing = true
+                    val target = sessions.firstOrNull()
+                    if (target != null) {
+                        switchSession(target.id)
+                    } else {
+                        createNewSession()
+                    }
+                }
+            } catch (t: Throwable) {
+                Logger.e("ChatVM", "retryLoadSessions failed", t)
+                // v1.x: 协程取消必须重抛,不能显示为"请求失败: Job was cancelled"
+                if (t is kotlinx.coroutines.CancellationException) throw t
+                _state.update {
+                    it.copy(
+                        isSessionsLoading = false,
+                        sessionsError =
+                        appContext.getString(
+                            R.string.err_chat_request_failed,
+                            t.message ?: appContext.getString(R.string.err_chat_unknown),
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    /** 更新搜索框文本。空文本时清空结果。 */
+    fun updateSearchQuery(query: String) = miscCoordinator.updateSearchQuery(query)
+
+    /** 执行搜索。空查询忽略。 */
+    fun search() = miscCoordinator.search()
+
+    /** 清空搜索(返回会话列表)。 */
+    fun clearSearch() = miscCoordinator.clearSearch()
+
+    // ── v2.x: 消息内容搜索(Tab=1)+ 跳转滚动高亮 ──
+
+    /** v2.x: 切换搜索页 Tab(0=会话, 1=消息内容)。 */
+    fun switchSearchTab(tab: Int) = miscCoordinator.switchSearchTab(tab)
+
+    /** v2.x: 执行消息内容搜索(FTS4 + snippet,失败回退 LIKE)。 */
+    fun searchMessageContent() = miscCoordinator.searchMessageContent()
+
+    /**
+     * v2.x: 设置目标消息(从搜索结果点击跳转用)。
+     *
+     * 由 SearchScreen 点击消息项时调用,MainActivity 注入的跳转逻辑会先 switchSession,
+     * 再调用本方法设置 targetMessageId / highlightedMessageId / searchHighlightQuery。
+     */
+    fun setTargetMessage(messageId: String?, query: String?) = miscCoordinator.setTargetMessage(messageId, query)
+
+    /**
+     * v2.x: 从搜索结果打开消息 — 先切换会话,等切换落地后再设置定位目标。
+     *
+     * 修复竞态: 此前 switchSession(异步) + setTargetMessage(立即) 并行,
+     * ChatScreen 在旧会话里等目标消息 5 秒超时后清空 targetMessageId,
+     * 等会话真正切过去时定位目标已丢,表现为"点击结果只回首页不定位"。
+     */
+    fun openMessageFromSearch(sessionId: String, messageId: String, query: String) {
+        switchSession(sessionId)
+        viewModelScope.launch {
+            // 等待 switchSession 落地(currentSessionId 变为目标会话),超时 5s 放弃定位
+            val switched =
+                withTimeoutOrNull(5000L) {
+                    _state.filter { it.currentSessionId == sessionId }.first()
+                    true
+                } ?: false
+            if (switched) {
+                setTargetMessage(messageId, query)
+            } else {
+                Logger.w("ChatVM", "openMessageFromSearch 等待会话切换超时: $sessionId")
+            }
+        }
+    }
+
+    /** v2.x: 消费目标消息 id(滚动定位完成后调用,避免重复触发)。 */
+    fun consumeTargetMessage() = miscCoordinator.consumeTargetMessage()
+
+    /** v2.x: 清空高亮消息 id(高亮窗口期结束后调用,停止高亮)。 */
+    fun clearHighlightedMessage() = miscCoordinator.clearHighlightedMessage()
+
+    /**
+     * 发送当前输入。空文本(且无图片)或正在流式时忽略。
+     * P5-G: 若 isDrawMode,走 [generateImage] 而非流式聊天。
+     * Phase 8.6: 支持多模态 — 若 pendingImages 非空,把 base64 列表附在 USER 消息上。
+     * v1.28: Agent 模式用 agentSessionId,无会话时自动创建(Agent 日常聊天不依赖任务)。
+     */
+
+    /** v1.0.92: 卡片回传 — 卡片脚本请求的文本作为用户消息发送。 */
+    fun sendFromCard(text: String) {
+        val trimmed = text.trim()
+        if (trimmed.isEmpty()) return
+        val sid = displayedSessionId(snapshot) ?: return
+        enqueueSend(trimmed, emptyList(), sid)
+    }
+
+    /** v1.0.92: 卡片回传 — 富内容卡片保存为工件(保存后按消息关联展示在消息下方)。 */
+    fun saveCardAsArtifact(messageId: String, language: String, content: String) {
+        val sid = displayedSessionId(snapshot) ?: return
+        viewModelScope.launch {
+            resultOf {
+                artifactRepository.upsert(
+                    ArtifactEntity(
+                        id = "card_${System.currentTimeMillis()}",
+                        sessionId = sid,
+                        messageId = messageId,
+                        title = language.uppercase(),
+                        type = "rich_card",
+                        content = content,
+                        language = language,
+                    ),
+                )
+            }.onError { msg, _ -> Logger.w("ChatVM", "卡片保存工件失败: $msg") }
+        }
+    }
+
+    fun send() = generationController.send()
+
+    /** v1.28: send 的内部实现(发消息 + 启动流式)。 */
+
+    /**
+     * v1.200: 尝试根据用户消息自动路由到更合适 Agent/团队。
+     * 返回 true 表示已路由并填充 assistant 占位消息，调用方应跳过 launchStream。
+     */
+    private suspend fun maybeAutoRoute(text: String, assistantMessageId: Uuid, sessionId: String): Boolean {
+        if (!settings.multiAgentConfigCache.autoRoutingEnabled) return false
+        val currentId = currentAssistantId()
+        // v2.x: LLM 语义路由开关开启时走 routeWithLlm,否则走规则路由。
+        // routeWithLlm 内部会在 chatService 未注入或异常时自动降级到规则路由。
+        val config = settings.multiAgentConfigCache
+        val route =
+            if (config.llmRoutingEnabled) {
+                agentRouter.routeWithLlm(text, excludeAssistantId = currentId)
+            } else {
+                agentRouter.route(text, excludeAssistantId = currentId)
+            }
+        if (route.confidence < AUTO_ROUTE_CONFIDENCE_THRESHOLD || route.targetId.isNullOrBlank()) return false
+        if (route.targetId == currentId) return false
+
+        val targetType =
+            when (route.targetType) {
+                "team" -> DelegationContract.DelegationRequest.TargetType.TEAM
+                else -> DelegationContract.DelegationRequest.TargetType.ASSISTANT
+            }
+
+        val request =
+            DelegationContract.DelegationRequest(
+                requestId = "auto-${System.currentTimeMillis()}",
+                task = text,
+                targetType = targetType,
+                targetId = route.targetId,
+                contextMessages =
+                DelegationContextBuilder.build(
+                    sessionMessages = _messages.value,
+                    maxMessages = DelegationContextBuilder.DEFAULT_MAX_MESSAGES,
+                    includeImages = false,
+                ),
+                timeoutSec = 120,
+            )
+
+        // v1.202: 流式呈现 — 先显示"正在委派给 ${name}..."让用户感知中间过程,
+        // 而非阻塞调用结束后一次性出现结果。isStreaming=true 让 MessageBubble 显示流式光标。
+        val routeTargetName = route.targetName ?: route.targetId
+        val pendingText =
+            appContext.getString(R.string.chat_auto_route_prefix, routeTargetName) +
+                "\n\n正在委派给 $routeTargetName ..."
+        updateAssistant(assistantMessageId, pendingText, "", null, null, null, true)
+
+        val result = skillExecutor.delegateAgent(request)
+        val output =
+            buildString {
+                appendLine(appContext.getString(R.string.chat_auto_route_prefix, route.targetName ?: route.targetId))
+                appendLine()
+                if (result.success) {
+                    append(result.resultText)
+                } else {
+                    append(result.error ?: appContext.getString(R.string.skill_unknown_error))
+                }
+            }
+
+        updateAssistant(assistantMessageId, output, "", null, null, null, false)
+        _state.update { it.copy(isStreaming = false) }
+        // B-1: 会话已删除则跳过落盘,防止删后"复活"。
+        if (!generationController.isSessionWritesSuppressed(sessionId)) {
+            persistCurrentAssistant(sessionId, assistantMessageId)
+        }
+        return true
+    }
+
+    /**
+     * Phase 8.6: 添加待发送图片(从 URI 读取,转 base64)。
+     * @param uri 图片 URI(相册/相机/SAF)
+     * @param context 用于 ContentResolver
+     * @param asOcr 是否走 OCR 识别(若为 true,识别结果追加到输入框;否则作为视觉输入)
+     *
+     * v1.105: 委托至 [ImageGenCoordinator.pickImage]。
+     */
+    fun pickImage(uri: Uri, context: Context, asOcr: Boolean) {
+        imageGenCoordinator.pickImage(uri, context, asOcr, ::reportError, ::addError)
+    }
+
+    /**
+     * v1.135: 选取视频并提取关键帧加入待发送图片。
+     * 当前降级为图片发送,视觉模型可通过关键帧理解视频内容。
+     */
+    fun pickVideo(uri: Uri, context: Context) {
+        imageGenCoordinator.pickVideo(uri, context, ::reportError)
+    }
+
+    /** Phase 8.6: 移除指定索引的待发送图片。v1.105: 委托至 [ImageGenCoordinator]。 */
+    fun removePendingImage(index: Int) {
+        imageGenCoordinator.removePendingImage(index)
+    }
+
+    /**
+     * P5-G + Phase 10.2: 生成图片。
+     *
+     * 按 Provider 类型分支:
+     *  - OpenAI 兼容: 走 ImageService(独立 /images/generations 端点,返回 URL)
+     *  - Gemini:      走 streamChat 多模态路径(responseModalities 含 image,收集 ImageDelta base64)
+     *  - Anthropic:   不支持(Claude 无原生图像生成能力)
+     *
+     * Gemini 绘图结果以 data URI 存入 imageUrls(便于 MessageBubble 用 AsyncImage 渲染),
+     * 同时存入 imageBase64List(多模态输入回传)。
+     */
+    private fun generateImage(prompt: String, sessionId: String) {
+        imageGenCoordinator.generateImage(
+            prompt,
+            sessionId,
+            ::addError,
+        ) { id, content, reasoning, b64, urls, streaming ->
+            updateAssistant(id, content, reasoning, b64, urls, null, streaming)
+        }
+    }
+
+    /**
+     * P5-E: 选取文档后解析文本,追加到输入框(以分隔符隔开)。
+     * 支持 TXT / Markdown / PDF(原生 PdfRenderer)。
+     *
+     * v1.105: 委托至 [ChatDocumentCoordinator.pickDocument]。
+     */
+    fun pickDocument(uri: Uri, context: Context) {
+        documentCoordinator.pickDocument(uri, context, ::reportError)
+    }
+
+    /** v1.136 T10: 移除待发送文档(用户在 InputBar 芯片上点击移除)。 */
+    fun removePendingDocument(index: Int) {
+        val docs = _state.value.pendingDocuments.toMutableList()
+        if (index in docs.indices) {
+            docs.removeAt(index)
+            _state.update { it.copy(pendingDocuments = docs) }
+        }
+    }
+
+    /**
+     * v1.0.47 P5-2: 把大段粘贴文本作为 txt 附件加入 [ChatUiState.pendingDocuments]。
+     *
+     * 用户在输入框粘贴超阈值文本并选择"作为文件附加"时调用。
+     * 命名带时间戳避免重名;内容截断到 [io.zer0.muse.ui.chat.ChatDocumentCoordinator.DOC_MAX_CHARS]。
+     * 不清空输入框(保留用户已输入的其他内容)。
+     */
+    fun addPastedTextAsDocument(text: String) {
+        if (text.isBlank()) return
+        val maxChars = io.zer0.muse.ui.chat.ChatDocumentCoordinator.DOC_MAX_CHARS
+        val safeContent = if (text.length > maxChars) text.take(maxChars) else text
+        val stamp =
+            java.text.SimpleDateFormat("MMdd_HHmm", java.util.Locale.getDefault())
+                .format(java.util.Date())
+        val doc =
+            io.zer0.muse.ui.chat.PendingDocument(
+                name = "粘贴文本_$stamp.txt",
+                content = safeContent,
+                charCount = text.length,
+            )
+        _state.update { it.copy(pendingDocuments = it.pendingDocuments + doc) }
+    }
+
+    /**
+     * P5-F / P6-B3: 翻译指定消息到目标语言。
+     *
+     * v1.0.30 gap4.9: prompt 构建策略与 [TranslateViewModel.buildTranslationPrompt] 统一,
+     * 支持可选 style 参数(默认"通用"),并对结果统一调用 stripThinkTags 处理。
+     *
+     * @param targetLanguage 目标语言中文名(如"中文"/"English"/"日本語"),默认"中文"兼容旧调用
+     * @param style 翻译风格(默认"通用",与 TranslateViewModel.TRANSLATION_STYLES 对齐)
+     * 翻译结果作为新的 ASSISTANT 消息追加("翻译(目标语言):\n\n...")。
+     */
+    fun translateMessage(messageId: Uuid, targetLanguage: String = "中文", style: String = "通用") {
+        if (_state.value.isStreaming || _state.value.isTranslating) return
+        val target =
+            _messages.value.firstOrNull { it.id == messageId }
+                ?: return
+        val sourceText = buildTranslationSourceText(target)
+        if (sourceText.isBlank()) return
+
+        _state.update {
+            it.copy(
+                isTranslating = true,
+                translatingMessageId = messageId,
+                errors = emptyList(),
+            )
+        }
+        translateJob =
+            viewModelScope.launch(AppDispatchers.io) {
+                try {
+                    // v1.0.30 gap4.9: 统一使用 TranslateViewModel.buildTranslationPrompt,与独立翻译页保持一致
+                    val prompt =
+                        io.zer0.muse.ui.translate.TranslateViewModel.buildTranslationPrompt(
+                            text = sourceText,
+                            targetLanguage = targetLanguage,
+                            sourceLanguage = io.zer0.muse.ui.translate.TranslateViewModel.SOURCE_AUTO,
+                            style = style,
+                        )
+                    val messages = listOf(UIMessage(role = MessageRole.USER, content = prompt))
+                    val sessionId = displayedSessionId() ?: return@launch
+
+                    // v2.4.6: 译文不再另开一条助手消息,而是挂到源消息的 translations 上。
+                    // 用空串占位表示"翻译中",流式增量直接更新源消息(UI 以可展开块展示)。
+                    fun applyTranslation(text: String) {
+                        _messages.value = _messages.value.map { m ->
+                            if (m.id == target.id) {
+                                m.copy(translations = m.translations + (targetLanguage to text))
+                            } else {
+                                m
+                            }
+                        }
+                    }
+                    applyTranslation("")
+
+                    val sb = StringBuilder()
+                    var streamFailure: Pair<String, ChatErrorType>? = null
+                    var streamCompleted = false
+                    try {
+                        chatService.streamChat(messages = messages).collect { ev ->
+                            if (ev is ChatStreamEvent.ContentDelta) {
+                                if (streamFailure != null) return@collect
+                                sb.append(ev.delta)
+                                applyTranslation(sb.toString())
+                            } else if (ev is ChatStreamEvent.Error) {
+                                streamFailure = ev.message to classifyErrorType(ev.message, ev.throwable)
+                            } else if (ev is ChatStreamEvent.StreamInterrupted) {
+                                streamFailure = ev.message to ChatErrorType.NETWORK
+                            } else if (ev is ChatStreamEvent.Done) {
+                                streamCompleted = true
+                            }
+                        }
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        // 取消时保留已收集的部分结果
+                        throw e
+                    }
+
+                    val failure = streamFailure
+                        ?: if (!streamCompleted) {
+                            appContext.getString(R.string.err_chat_stream_broken) to ChatErrorType.NETWORK
+                        } else {
+                            null
+                        }
+                    if (failure != null) {
+                        // v2.4.6: 中断/失败时保留已显示的非空部分译文(用户已看到的内容不丢),
+                        // 仅清掉"翻译中"的空占位。
+                        val partial = sb.toString().trim()
+                        _messages.value = _messages.value.map { m ->
+                            if (m.id != target.id) {
+                                m
+                            } else if (partial.isEmpty()) {
+                                m.copy(translations = m.translations - targetLanguage)
+                            } else {
+                                m.copy(translations = m.translations + (targetLanguage to partial))
+                            }
+                        }
+                        _state.update {
+                            it.copy(
+                                errors = listOf(
+                                    ChatError(
+                                        type = failure.second,
+                                        message = ErrorMessages.resolve(appContext, failure.first),
+                                    ),
+                                ),
+                                isTranslating = false,
+                                translatingMessageId = null,
+                            )
+                        }
+                        return@launch
+                    }
+
+                    val translated = io.zer0.muse.transformer.stripThinkTags(sb.toString()).trim()
+                    if (translated.isEmpty()) {
+                        // 清掉空占位,改为错误提示
+                        _messages.value = _messages.value.map { m ->
+                            if (m.id == target.id) m.copy(translations = m.translations - targetLanguage) else m
+                        }
+                        _state.update {
+                            it.copy(
+                                errors = listOf(ChatError(type = ChatErrorType.UNKNOWN, message = appContext.getString(R.string.err_chat_translate_empty))),
+                                isTranslating = false,
+                                translatingMessageId = null,
+                            )
+                        }
+                        return@launch
+                    }
+                    // v2.4.6: 落到源消息的 translations(清洗后的最终文本)并持久化源消息
+                    applyTranslation(translated)
+                    _state.update {
+                        it.copy(
+                            isTranslating = false,
+                            translatingMessageId = null,
+                        )
+                    }
+                    val persistedSource = _messages.value.firstOrNull { it.id == target.id }
+                    if (persistedSource != null) {
+                        sessionRepository.upsertMessage(sessionId, persistedSource)
+                    }
+                    // v1.0.88 (S-4): 译文落盘后失效缓存 — 否则切走再切回命中旧快照
+                    sessionMemoryCache.remove(sessionId)
+                } catch (e: kotlinx.coroutines.CancellationException) {
+                    // v1.80 (H-CVM1): 协程取消必须重抛,避免破坏 stop()/switchSession() 语义
+                    throw e
+                } catch (t: Exception) {
+                    // v1.80 (L-CVM3): catch Throwable 改为 catch Exception,避免捕获 OOM/StackOverflow 等 Error
+                    Logger.e("ChatVM", "translate failed", t)
+                    _state.update {
+                        it.copy(
+                            errors = listOf(ChatError(type = ChatErrorType.UNKNOWN, message = appContext.getString(R.string.err_chat_translate_failed, t.message ?: ""))),
+                            isTranslating = false,
+                            translatingMessageId = null,
+                        )
+                    }
+                }
+            }
+    }
+
+    /**
+     * 应用用户编辑（P0 对话树）：把修改后的文本保存为新用户变体，
+     * 保留旧提问/旧助手回复，新建用户版本并启动新回复流。
+     */
+    fun applyUserEdit(messageId: String, newContent: String) {
+        if (_state.value.isStreaming) return
+        val sessionId = displayedSessionId() ?: return
+        val tree = _conversationTree.value
+        val target =
+            tree.userNodes.asSequence()
+                .flatMap { it.variants.asSequence() }
+                .map { it.message }
+                .firstOrNull { it.id.toString() == messageId && it.role == MessageRole.USER }
+                ?: return
+        val edit = tree.editUserMessage(target.id, newContent) ?: return
+        _conversationTree.value = edit.tree
+        _messages.value = edit.tree.displayMessages
+        _state.update {
+            it.copy(
+                input = "",
+                hasDraft = false,
+                errors = emptyList(),
+                isStreaming = true,
+                isWaitingFirstToken = true,
+            )
+        }
+        sessionMemoryCache.remove(sessionId)
+        edit.newAssistantPlaceholder?.let { placeholder ->
+            // 分支消息必须先落库成功，再启动流，避免 turn commit 先于 parent/user variant 写入。
+            viewModelScope.launch {
+                val persisted =
+                    withContext(Dispatchers.IO) {
+                        runCatching {
+                            edit.newUserMessage?.let { sessionRepository.upsertMessage(sessionId, it) }
+                            sessionRepository.upsertMessage(sessionId, placeholder)
+                            edit.newUserMessage?.variantGroupId?.let { groupId ->
+                                edit.newUserMessage?.variantCount?.let { count ->
+                                    sessionRepository.updateVariantCount(groupId, count)
+                                }
+                            }
+                        }.onFailure { e -> Logger.e("ChatVM", "applyUserEdit persist failed", e) }.isSuccess
+                    }
+                if (persisted) {
+                    launchStream(placeholder.id, sessionId, isNewBranch = true)
+                } else {
+                    _state.update { it.copy(isStreaming = false, isWaitingFirstToken = false) }
+                }
+            }
+        }
+    }
+
+    fun editAssistantMessage(messageId: Uuid, newContent: String) = messageController.editAssistantMessage(messageId, newContent)
+
+    /**
+     * B7-04: 流式打断后继续生成。
+     *
+     * 复用最后一条带 [已中断] 标记的 assistant 消息,去掉标记后以
+     * resumeFromText 方式从断点续写,不新增消息。
+     */
+    fun continueGeneration() = generationController.continueGeneration()
+    /**
+     * 重生成最后一条 assistant 回复: 保留旧回复作为分支,创建新分支并重新请求。
+     * 仅当最后一条是 assistant 且非流式时可用。
+     */
+
+    /**
+     * 重生成当前用户变体下的最后一条 assistant 回复（P0 对话树）。
+     * 保留旧回复为助手变体,在当前用户变体下新建助手变体并重新请求。
+     */
+    fun regenerateLastAssistant() = generationController.regenerateLastAssistant()
+
+    /**
+     * 切换消息分支:用户通过 BranchSelector 左右箭头切换同一位置的多版本 assistant 回复。
+     */
+
+    /**
+     * 切换用户提问变体（P0 对话树）。
+     */
+    fun selectUserVariant(userGroupId: String, variantIndex: Int) = messageController.selectUserVariant(userGroupId, variantIndex)
+
+    /**
+     * 切换助手回复变体（P0 对话树）：作用域仅限当前用户变体下的指定助手组。
+     */
+    fun selectAssistantVariant(userGroupId: String, assistantGroupId: String, index: Int) =
+        messageController.selectAssistantVariant(userGroupId, assistantGroupId, index)
+
+    /**
+     * 审批工具调用:用户批准待审批的工具调用。
+     */
+    fun approveToolCall(toolCallId: String) = toolController.approveToolCall(toolCallId)
+
+    /**
+     * F-37: 批准工具调用并注入由调用方(如 Host 网关)提供的任意参数覆盖映射。
+     * 用于 web 审批 answered:用户在网页填写参数后,覆盖值透传于此并经
+     * [io.zer0.muse.tools.ToolApprovalState.Approved.argOverrides] 合并进工具参数。
+     */
+    fun approveToolCallWithOverrides(toolCallId: String, argOverrides: Map<String, String>) =
+        toolController.approveToolCallWithOverrides(toolCallId, argOverrides)
+
+    /**
+     * v1.x: 设置待审批工具调用的参考图覆盖值。
+     *
+     * 由 ToolApprovalCard 中的"选择图片"按钮触发:用户从相册选择图片后,
+     * UI 把图片转为 data URI 传到这里存入 [PendingToolApproval.referenceImageOverride],
+     * 批准时由 [approveToolCall] 注入 argOverrides。
+     *
+     * @param dataUri 形如 "data:image/jpeg;base64,...";传 null 清除已选图片
+     */
+    fun setToolApprovalReferenceImage(toolCallId: String, dataUri: String?) =
+        toolController.setToolApprovalReferenceImage(toolCallId, dataUri)
+
+    /**
+     * 更新待审批工具调用的"始终允许"勾选状态。
+     */
+    fun setToolApprovalAlwaysAllow(toolCallId: String, alwaysAllow: Boolean) =
+        toolController.setToolApprovalAlwaysAllow(toolCallId, alwaysAllow)
+
+    /**
+     * v1.0.16: 更新待审批工具调用的"本次开启期间批准全部"勾选状态。
+     * F-AUDIT: 此前只写 PendingToolApproval.appRunAllowAll(无人读取),按钮形同虚设;
+     * 现在同时写 appRunAllowAllTools,让 resolve() 真正读到"本次运行全部放行"。
+     */
+    fun setToolApprovalAppRunAllowAll(toolCallId: String, allowAll: Boolean) =
+        toolController.setToolApprovalAppRunAllowAll(toolCallId, allowAll)
+
+    /**
+     * 拒绝工具调用:用户拒绝待审批的工具调用。
+     */
+    fun denyToolCall(toolCallId: String, reason: String) = toolController.denyToolCall(toolCallId, reason)
+
+    /**
+     * P3: 设置当前会话的工具权限模式。
+     */
+    fun setSessionPermissionMode(mode: SessionPermissionMode) = toolController.setSessionPermissionMode(mode)
+
+    /**
+     * v1.x: 获取当前用于工具审批的会话 id(Agent 模式取 agentSessionId,否则取 currentSessionId)。
+     *
+     * 用于会话级临时允许缓存的键,与 [setSessionPermissionMode] 的会话判定逻辑保持一致。
+     */
+    private fun currentSessionIdForApproval(): String? {
+        return if (_state.value.isAgentMode) _state.value.agentSessionId else _state.value.currentSessionId
+    }
+
+    /**
+     * v1.x: 持久化单工具策略(由审批卡片"始终允许"按钮触发)。
+     *
+     * 与本次批准解耦:按钮点击时先持久化策略,再走 onApprove 处理本次调用。
+     */
+    fun persistToolPolicy(toolCallId: String, policy: ToolApprovalPolicy) = toolController.persistToolPolicy(toolCallId, policy)
+
+    /**
+     * v1.x: 把工具加入当前会话的临时允许集合(本会话不再问)。
+     *
+     * 由 ToolApprovalCard 中的"本会话允许"按钮触发:
+     *  1. 把工具名加入 [SessionPermissionStore] 的会话级缓存(仅内存,不持久化)
+     *  2. 后续本会话内该工具调用直接 Auto 执行,不再弹审批卡片
+     *  3. 切换会话/新建会话时由 [switchSession] / [createNewSession] 清理旧会话缓存
+     *
+     * 注意:本方法仅更新缓存,不处理当前待审批项 —— 当前调用仍由 [approveToolCall]
+     * 通过 onApprove 回调处理(与"始终允许"按钮的模式一致:onPersistPolicy + onApprove)。
+     *
+     * @param toolCallId 待审批工具调用 id
+     */
+    fun allowToolForSession(toolCallId: String) = toolController.allowToolForSession(toolCallId)
+
+    /** 待审批调用所属会话,避免切换会话后审批结果串到当前会话。 */
+    private val toolApprovalSessions = java.util.concurrent.ConcurrentHashMap<String, String>()
+
+    /** 后台等待中的审批记录,回到对应会话时恢复 UI 卡片。 */
+    private val pendingToolApprovalRecords = java.util.concurrent.ConcurrentHashMap<String, PendingToolApproval>()
+
+    /**
+     * CHAT-08: 审批超时是否暂停(用户折叠阅读「N 项待审批」期间为 true)。
+     * 暂停时 [requestToolApprovalForSession] 的 30s 倒计时冻结,避免审批在用户阅读时被自动拒绝。
+     */
+    @Volatile
+    private var approvalTimeoutPaused = false
+
+    /**
+     * CHAT-08: 由 UI 调用 — 折叠审批卡阅读期间暂停/恢复审批超时。
+     */
+    fun setApprovalTimeoutPaused(paused: Boolean) {
+        approvalTimeoutPaused = paused
+    }
+
+    /** 取消所有待审批的工具调用(应用级停止或测试清理使用)。 */
+    private fun cancelAllPendingApprovals() {
+        _state.update { it.copy(pendingToolApprovals = emptyList()) }
+        for ((toolCallId, deferred) in toolApprovalResults) {
+            deferred.complete(ToolApprovalState.Denied("Generation stopped"))
+            viewModelScope.launch {
+                resultOf { PendingToolCallStore.updateState(toolCallId, "ABORTED", "generation_stopped") }
+                    .onError { msg, _ -> Logger.w("ChatVM", "审批取消状态落盘失败: $msg") }
+            }
+            toolApprovalSessions.remove(toolCallId)
+            pendingToolApprovalRecords.remove(toolCallId)
+        }
+        toolApprovalResults.clear()
+    }
+
+    private fun cancelPendingApprovalsForSession(sessionId: String?) {
+        if (sessionId.isNullOrBlank()) {
+            cancelAllPendingApprovals()
+            return
+        }
+        val ids =
+            toolApprovalSessions
+                .filterValues { it == sessionId }
+                .keys
+                .toList()
+        _state.update { state ->
+            state.copy(
+                pendingToolApprovals = state.pendingToolApprovals.filterNot { it.toolCallId in ids },
+            )
+        }
+        ids.forEach { toolCallId ->
+            toolApprovalResults.remove(toolCallId)?.complete(ToolApprovalState.Denied("Generation stopped"))
+            viewModelScope.launch {
+                resultOf { PendingToolCallStore.updateState(toolCallId, "ABORTED", "generation_stopped") }
+                    .onError { msg, _ -> Logger.w("ChatVM", "审批取消状态落盘失败: $msg") }
+            }
+            toolApprovalSessions.remove(toolCallId)
+            pendingToolApprovalRecords.remove(toolCallId)
+        }
+    }
+
+    private fun restorePendingApprovalsForSession(sessionId: String) {
+        val records =
+            pendingToolApprovalRecords
+                .filter { (toolCallId, _) -> toolApprovalSessions[toolCallId] == sessionId }
+                .values
+                .toList()
+        _state.update { it.copy(pendingToolApprovals = records) }
+    }
+
+    /**
+     * 请求用户审批工具调用,挂起直到用户做出决定。
+     *
+     * P3: 综合三要素决定审批状态:
+     *  - 单工具持久化策略([ToolConfigStore])
+     *  - 当前会话权限模式([SessionPermissionMode])
+     *  - 工具自身风险等级([ToolRiskLevel])
+     * 最终由 [ToolPermissionResolver] 统一解析。
+     */
+    override suspend fun requestToolApproval(
+        toolName: String,
+        toolCallId: String,
+        argsPreview: String,
+        args: Map<String, Any?>,
+    ): ToolApprovalState {
+        val sessionId =
+            currentSessionIdForApproval()
+                ?: return ToolApprovalState.Denied("No active chat session")
+        return requestToolApprovalForSession(sessionId, toolName, toolCallId, argsPreview, args)
+    }
+
+    private suspend fun requestToolApprovalForSession(
+        sessionId: String,
+        toolName: String,
+        toolCallId: String,
+        argsPreview: String,
+        args: Map<String, Any?>,
+    ): ToolApprovalState {
+        // 本会话临时允许只应跳过确认，仍需经过统一解析器的参数硬拒绝。
+        // 显式持久化策略优先，避免临时 allow 绕过用户的 ALWAYS_DENY。
+        val allowedThisSession = sessionPermissionStore.isAllowedThisSession(sessionId, toolName)
+        // toolConfigStore 可能未注入(声明为可空,默认 null);未注入时退化为
+        // 会话模式+风险等级的默认判定(ASK 下 NORMAL/HIGH 仍会审批),避免首条
+        // 需审批工具调用直接 NPE 崩溃。
+        // 只取**用户显式配置**的策略:未配置必须是 null,否则会被判定器当成
+        // "用户已放行",ASK/STRICT 模式下按风险等级应有的审批会被整段跳过。
+        val configuredPolicy = toolConfigStore?.getConfiguredPolicy(toolName)
+        val perToolPolicy = io.zer0.muse.tools.effectivePerToolPolicy(configuredPolicy, allowedThisSession)
+        val displayedSessionId = currentSessionIdForApproval()
+        val mode =
+            if (_state.value.appRunAllowAllTools) {
+                // “本次运行全部放行”只跳过逐次审批；仍走统一解析器，保留参数硬拒绝
+                // (如 file:// URL / 危险 JS)以及显式 ALWAYS_DENY。
+                SessionPermissionMode.TRUSTED
+            } else if (displayedSessionId == sessionId) {
+                _state.value.sessionPermissionMode
+            } else {
+                sessionPermissionStore.getMode(
+                    sessionId,
+                    settings.defaultSessionPermissionModeFlow.first(),
+                )
+            }
+        val risk = toolRegistry.getToolRiskLevel(toolName)
+        // v1.x: 审批决策调试日志 — 排查"完全放权不生效/始终允许无效"类问题
+        Logger.d(
+            "ToolApproval",
+            "resolve | tool=$toolName | mode=$mode | risk=$risk | policy=$perToolPolicy" +
+                " | allowAllRun=${_state.value.appRunAllowAllTools}",
+        )
+        // v1.0.53: 传完整 args,参数化策略(open_url/execute_javascript)生效
+        val resolved = ToolPermissionResolver.resolve(toolName, risk, mode, perToolPolicy, args)
+        Logger.d(
+            "ToolApproval",
+            "resolved | tool=$toolName | state=$resolved",
+        )
+        // 状态机闭环:显式列出所有终态分支,确保 ToolApprovalState.Answered 有处理路径
+        when (resolved) {
+            is ToolApprovalState.Pending -> { /* 待审批,继续走下方用户审批流程 */ }
+            is ToolApprovalState.Answered -> {
+                // 用户已提供自定义答案(替代工具执行),直接返回该答案
+                return resolved
+            }
+            is ToolApprovalState.Approved, is ToolApprovalState.Auto,
+            is ToolApprovalState.Denied,
+            -> return resolved
+        }
+
+        // 需要用户审批:添加到待审批列表并等待结果
+        val deferred = kotlinx.coroutines.CompletableDeferred<ToolApprovalState>()
+        toolApprovalResults[toolCallId] = deferred
+        toolApprovalSessions[toolCallId] = sessionId
+        val pending =
+            PendingToolApproval(
+                toolCallId = toolCallId,
+                toolName = toolName,
+                argumentsPreview = argsPreview,
+            )
+        pendingToolApprovalRecords[toolCallId] = pending
+        // v2.0.1: 后台时提醒"等待批准"（前台静默，见 notifyChatPendingApproval 内部判断）
+        runCatching {
+            notificationManager.notifyChatPendingApproval(
+                io.zer0.muse.ui.chat.ToolCallVisuals.labelFor(toolName, appContext.resources),
+            )
+        }
+        if (displayedSessionId == sessionId) {
+            _state.update {
+                it.copy(pendingToolApprovals = it.pendingToolApprovals + pending)
+            }
+        }
+        // M1.7: 挂起等待用户审批 -> WAITING_APPROVAL 检查点;恢复/失败后回 GENERATING
+        sessionManager.runtime(sessionId)?.markWaitingApproval()
+        return try {
+            // CHAT-08: 审批超时可暂停 — 用户折叠阅读「N 项待审批」期间(approvalTimeoutPaused)
+            // 倒计时冻结,恢复后继续;任何时刻用户批准/拒绝都立即返回,语义与原 30s 一致。
+            var remainingMs = TOOL_APPROVAL_TIMEOUT_MS
+            var approvalResult: ToolApprovalState? = null
+            while (approvalResult == null) {
+                val stepMs = if (approvalTimeoutPaused) 200L else minOf(200L, remainingMs)
+                val finished = withTimeoutOrNull(stepMs) { deferred.await() }
+                if (finished != null) {
+                    approvalResult = finished
+                } else if (!approvalTimeoutPaused) {
+                    remainingMs -= stepMs
+                    if (remainingMs <= 0) {
+                        approvalResult = ToolApprovalState.Denied("Approval timed out")
+                        // P2-1: 超时后清掉残留审批卡,避免「点了允许也没反应」;并提示用户
+                        _state.update {
+                            it.copy(
+                                pendingToolApprovals = it.pendingToolApprovals.filter { p -> p.toolCallId != toolCallId },
+                            )
+                        }
+                        MuseToast.show(
+                            appContext.getString(R.string.tool_approval_timeout_hint, toolName),
+                        )
+                    }
+                }
+            }
+            approvalResult
+        } finally {
+            sessionManager.runtime(sessionId)?.markResumed()
+            toolApprovalResults.remove(toolCallId)
+            toolApprovalSessions.remove(toolCallId)
+            pendingToolApprovalRecords.remove(toolCallId)
+        }
+    }
+
+    /**
+     * v0.29 P0-3: 导出当前会话为 Markdown 文本(用于分享/导出)。
+     *
+     * v1.105: 委托至 [ChatExportCoordinator.exportSessionAsMarkdown]。
+     */
+    suspend fun exportSessionAsMarkdown(): String {
+        return exportCoordinator.exportSessionAsMarkdown()
+    }
+
+    /** 功能4: 导出当前会话为 JSON。 */
+    suspend fun exportSessionAsJson(): String {
+        return exportCoordinator.exportSessionAsJson()
+    }
+
+    /** 功能4: 导出当前会话为纯文本。 */
+    suspend fun exportSessionAsPlainText(): String {
+        return exportCoordinator.exportSessionAsPlainText()
+    }
+
+    /** 功能4: 统一导出入口。 */
+    suspend fun exportSession(format: io.zer0.muse.ui.chat.ExportFormat): Pair<String, String> {
+        return exportCoordinator.exportSession(format)
+    }
+
+    /**
+     * 导出当前会话为单文件 HTML(内联 CSS + base64 图片 + highlight.js CDN)。
+     *
+     * 委托至 [ChatExportCoordinator.exportSessionAsHtml]。
+     */
+    suspend fun exportSessionAsHtml(): String {
+        return exportCoordinator.exportSessionAsHtml()
+    }
+
+    /**
+     * 导出当前会话为 PDF 文件(Android 原生 PdfDocument,A4 分页)。
+     *
+     * 委托至 [ChatExportCoordinator.exportSessionAsPdf]。
+     * 返回的文件位于 cacheDir/export/,通过 FileProvider 暴露给分享 Intent。
+     *
+     * @param context Android Context(用于读取 cacheDir)
+     */
+    suspend fun exportSessionAsPdf(context: android.content.Context): java.io.File {
+        return exportCoordinator.exportSessionAsPdf(context)
+    }
+
+    /**
+     * 启动流式请求。history 取当前 messages 去掉占位 assistant。
+     * memory 注入 + ticker 通知在此统一处理,供 send / regenerate 复用。
+     *
+     * Phase 7: 接入 function calling tool-call 循环 —
+     *  1. 发送 messages + tools 给 LLM
+     *  2. 收集 ContentDelta / ReasoningDelta / ToolCallDelta
+     *  3. 流结束时若累积了 toolCalls,执行工具 → 回填 TOOL 消息 → 再次请求(最多 25 轮防死循环,v1.52 由 5 提升)
+     *  4. 无 toolCalls 则正常结束
+     *
+     * Phase 8.2: 接入 Assistant 配置 —
+     *  - 注入 systemPrompt 作为 SYSTEM 消息(放最前)
+     *  - 注入 presetMessages(预设对话,放 SYSTEM 之后、用户消息之前)
+     *  - 按 [AssistantEntity.contextMessageSize] 截断历史(取最近 N 条)
+     *  - 用 Assistant.temperature / maxTokens / reasoningLevel 透传给 ChatService
+     *  - 按 Assistant.memoryEnabled / enableTimeReminder 控制 Transformer 管道开关
+     *  - 通过 TemplateTransformer 处理 Assistant.messageTemplate 的 {{var}} 变量
+     */
+    private fun launchStream(assistantId: Uuid, sessionId: String, isNewBranch: Boolean = false, continueFrom: UIMessage? = null) =
+        generationController.launchStream(assistantId, sessionId, isNewBranch, continueFrom)
+
+    // v1.0.27 Phase 4-A.1: StreamRunState 抽到 chat/StreamRunState.kt (internal class)
+    // 由 ChatStreamCoordinator 与本类共享,catch 块仍可访问 state.builder / state.unmaskPii
+
+    // ===== Phase A: 历史准备 =====
+    // v1.0.27 Phase 4-A.2: prepareHistory 抽到 ChatStreamCoordinator
+
+    // ===== Phase B: system prompt 组装 + prefix 消息(含 RAG 注入)=====
+    private suspend fun buildSystemPromptForStream(state: StreamRunState) = generationController.buildSystemPromptForStream(state)
+
+    // ===== Phase C+D: Transformer 管道 =====
+    // v1.0.27 Phase 4-A.2: applyTransformers 抽到 ChatStreamCoordinator
+
+    // ===== Phase E: 工具定义 + 模型解析 =====
+    // v1.0.27 Phase 4-A.2: resolveToolsAndModel 抽到 ChatStreamCoordinator
+
+    // ===== Phase F: PII Guard 遮蔽 =====
+    // v1.0.27 Phase 4-A.2: applyPiiGuard 抽到 ChatStreamCoordinator
+
+    // ===== Phase G: 视觉辅助 =====
+    // v1.0.27 Phase 4-A.2: prepareVisionContext 抽到 ChatStreamCoordinator
+
+    /**
+     * v2.x 工具瘦身阶段1:从会话历史收集"用过的工具"粘性集合。
+     *
+     * ASSISTANT 消息的 [UIMessage.toolCalls] 即本会话真实(或曾尝试)调用的工具;
+     * 只扫最近 [STICKY_HISTORY_SCAN_MESSAGES] 条,长会话不做全量扫描。
+     */
+    private fun collectStickyToolNames(history: List<UIMessage>): Set<String> {
+        val names = mutableSetOf<String>()
+        history.asReversed().take(STICKY_HISTORY_SCAN_MESSAGES).forEach { message ->
+            message.toolCalls?.forEach { call -> names += call.name }
+        }
+        return names
+    }
+
+    // ===== Phase H: 工具调用循环(含流式 streamRound)=====
+    // 返回 true 表示成功完成(可继续 finalizeResponse),false 表示已处理错误并应跳过 finalize。
+    private suspend fun runToolLoop(state: StreamRunState): Boolean {
+        val experiments = state.experiments
+        val sessionId = state.sessionId
+        val sessionTitle = state.sessionTitle
+        val streamStartedAt = state.streamStartedAt
+        // B5-01: 生成检查点 — 记录本轮用户消息与生成起始时间,供进程被杀后恢复
+        val checkpointUserMessageId = state.conversationHistory.lastOrNull { it.role == MessageRole.USER }?.id?.toString() ?: ""
+        val checkpointCreatedAt = streamStartedAt
+        val pendingRagCitations = state.pendingRagCitations
+        val assistant = state.assistant
+        val effectiveModel = state.effectiveModel
+        val effectiveProviderConfig = state.effectiveProviderConfig
+        // C-12: 工具模型配置(可为 null)—— 仅"工具轮"(上一轮结果含 toolCalls 的续接轮)使用,
+        // 最终回复轮切回主模型 effectiveModel,避免主模型视觉被 toolModel 降级为文本路由。
+        val toolModel = state.toolModel
+        val toolProviderConfig = state.toolProviderConfig
+        val tools = state.tools
+        val effectiveTemperature = state.effectiveTemperature
+        val topP = assistant?.topP
+        val reasoningLevel = state.reasoningLevel
+        val searchConfig = _state.value.webSearchConfig
+        val nativeWebSearchEnabled =
+            searchConfig.enabled &&
+                searchConfig.mode in
+                setOf(
+                    io.zer0.muse.web.WebSearchMode.AUTO,
+                    io.zer0.muse.web.WebSearchMode.NATIVE,
+                ) && effectiveProviderConfig?.type in
+                setOf(
+                    ProviderType.GEMINI,
+                    ProviderType.OPENAI_RESPONSES,
+                )
+        val localWebSearchEnabled =
+            searchConfig.enabled &&
+                searchConfig.mode != io.zer0.muse.web.WebSearchMode.OFF &&
+                !nativeWebSearchEnabled
+        val conversationHistory = state.conversationHistory
+        val unmaskPii: (String) -> String = state::unmaskPii
+        // 工具执行上下文由宿主捕获，模型不能通过参数切换记忆 scope/space。
+        val toolExecutionContext =
+            io.zer0.muse.tools.ToolExecutionContext(
+                scope = assistant?.id?.takeIf { it.isNotBlank() && it != "default" } ?: "main",
+                spaceId = settings.currentSpaceIdFlow.firstOrNull().orEmpty().ifBlank { "default" },
+                assistantId = assistant?.id,
+                // v2.x 阶段3:宿主会话 id — find_tools 装载等按会话生效
+                sessionId = state.sessionId,
+            )
+
+        // v1.42: 流式过程中 UI/通知/token 更新采用字符+时间双阈值节流,降低重组频率。
+        // 这些变量仅在 streamRound 内使用,跨轮共享、重试时重置(与原实现一致)。
+        var firstTokenTime = 0L // v2.3: 首 token 到达时间
+        var lastLoggedCharCount = 0
+        var lastUiUpdateChars = 0
+        var lastUiUpdateAt = streamStartedAt
+        var lastReasoningUiUpdateChars = 0
+        var lastNotifChars = 0
+        var lastNotifAt = streamStartedAt
+        var lastTokenUpdateChars = 0
+        var lastTokenUpdateAt = streamStartedAt
+        // v1.43: 流式中周期性落盘,避免切页/后台后丢失进度。
+        var lastPersistChars = 0
+        var lastPersistAt = streamStartedAt
+        // v1.0.4: 自适应切片状态 — 仅对 ContentDelta(文本流)生效,不影响 Reasoning/ToolCall。
+        // pendingBuilder 累积未输出到 UI 的 delta,50ms 节流触发时按 computeAdaptiveSlice() 取切片。
+        val pendingBuilder = StringBuilder()
+        val chunkIntervals = ArrayDeque<Long>(STREAM_SLIDE_WINDOW)
+        var lastChunkAt = 0L
+
+        /**
+         * v1.0.4: 根据流式速率(滑动平均)计算本次 50ms 节流应输出的字符数。
+         *
+         * - 间隔越大(慢速流,如 Reasoning)→ rate 越小 → 切片越小(细粒度,最小 2)
+         * - 间隔越小(快速流,如纯文本)→ rate 越大 → 切片越大(批量,最大 240)
+         * - 无样本时返回基准值 STREAM_SLICE_BASE
+         */
+        fun computeAdaptiveSlice(currentLength: Int): Int {
+            // v2.0: 长文本阶段刷新节拍变慢,切片同步放大,保证屏幕上的流入速度不降。
+            val flushScale = streamFlushIntervalMs(currentLength).toDouble() / STREAM_THROTTLE_MS.toDouble()
+            if (chunkIntervals.isEmpty()) {
+                return (STREAM_SLICE_BASE * flushScale).toInt().coerceIn(STREAM_SLICE_MIN, STREAM_SLICE_MAX)
+            }
+            val avgInterval = chunkIntervals.average().toLong()
+            // rate = 50ms / avgInterval:间隔 50ms → rate=1;间隔 500ms → rate=0.1;间隔 5ms → rate=10
+            val rate = (50.0 / maxOf(1L, avgInterval)).coerceIn(0.1, 10.0)
+            return (STREAM_SLICE_BASE * rate * flushScale).toInt().coerceIn(STREAM_SLICE_MIN, STREAM_SLICE_MAX)
+        }
+
+        // Phase 2: 工具调用循环下沉到 ToolOrchestrator
+        // v1.135: 记录当前助手消息 id,供媒体生成类工具更新消息 UI。
+        // A-13: 启动新一轮生成时递增代际令牌,使上一轮在途工具执行的媒体写入失效。
+        toolAssistantId = state.currentAssistantId
+        activeToolSessionId = state.sessionId
+        nextToolGenerationToken()
+        // C-17: 本代媒体登记表清零(上一代遗留 id 不参与本代收尾兜底)
+        toolMediaMessages.clear()
+        val baseHistorySize = conversationHistory.size
+        // B10: 流式 ThinkTag 实时剥离已接入 — 挂点在 flushPendingToUi(节流触发的 UI 更新),
+        // 由 updateAssistantWithVisualTransform 完成: 先 O(n) contains("<think>") 短路,
+        // 命中时才调用 transformer 层纯函数 splitThinkTagsForStreaming(见 ThinkTagTransformer.kt),
+        // 把剥离后的 content / reasoning 喂回 updateAssistant。不含标签的普通流式路径
+        // 零行为变化,50ms / 自适应切片节流机制本身未改动。
+        val toolLoopHost =
+            object : ToolLoopHost {
+                /**
+                 * v2.x: 本轮可用的上下文预算 = 窗口 − 预留量，口径与自动压缩触发一致
+                 * （见 [shouldAutoCompress]）。宿主在这里只提供"还剩多少可用"，
+                 * 编排器据此做零请求的本地重建，避免生成中途把窗口撞爆。
+                 */
+                override fun contextBudgetTokens(): Int {
+                    val window = _state.value.contextMaxTokens
+                    if (window <= 0) return 0
+                    val reserve = maxOf(AUTO_COMPRESS_MIN_RESERVE_TOKENS, (window * AUTO_COMPRESS_RESERVE_RATIO).toInt())
+                    return (window - reserve).coerceAtLeast(0)
+                }
+
+                override suspend fun streamRound(params: StreamRoundParams): StreamRoundResult {
+                    val round = params.round
+                    // Client-side tools necessarily use follow-up provider requests so the model can
+                    // incorporate tool results. Keep reasoning visible for every round when the
+                    // user enabled it; providers that do not support reasoning still legitimately
+                    // produce no reasoning delta.
+                    val exposeRoundThinking = ToolRoundPresentationPolicy.exposeReasoning(round)
+                    // A-14: 每轮开始把当前轮占位消息 id 同步回 state — 中断恢复(catch 块)依赖
+                    // state.currentAssistantId 定位"本轮生成消息",此前只在 runToolLoop 收尾更新,
+                    // 多轮工具循环中段被取消时指向旧轮次,导致 [已中断] 落错消息。
+                    state.currentAssistantId = params.currentAssistantId
+                    if (!state.shadowTurnStarted && ConversationRebuildFlagStore.current.shadowEventsEnabled) {
+                        state.shadowTurnStarted = true
+                        val now = System.currentTimeMillis()
+                        conversationService.startTurn(
+                            ConversationTurnEntity(
+                                turnId = state.turnId,
+                                sessionId = sessionId,
+                                inputUserMessageId = checkpointUserMessageId,
+                                assistantMessageId = params.currentAssistantId.toString(),
+                                phase = "STREAMING",
+                                streamId = state.streamId,
+                                generationSerial = state.generationSerial,
+                                startedAt = state.streamStartedAt,
+                                updatedAt = now,
+                            ),
+                        )
+                        recordConversationShadow(
+                            ConversationEventDraft(
+                                sessionId = sessionId,
+                                turnId = state.turnId,
+                                type = ConversationEventType.ASSISTANT_STARTED,
+                                streamId = state.streamId,
+                                generationSerial = state.generationSerial,
+                                payloadJson = "{\"assistantMessageId\":\"${params.currentAssistantId}\",\"userMessageId\":\"$checkpointUserMessageId\"}",
+                            ),
+                        )
+                    }
+                    // 审查修复 (2.0 A-02): 同步工具媒体写入目标 — toolAssistantId 原本只在
+                    // runToolLoop 起点赋值一次,第 2 轮起的 exec* 媒体全部落回首轮占位 A0,
+                    // 而正文/工具卡片在 A1/A2;这里每轮入口同步,使本轮工具执行(awaitAll
+                    // 于下一轮 streamRound 之前完成)的媒体写入本轮占位消息。
+                    toolAssistantId = params.currentAssistantId
+                    // B5-03: 多轮 thinking 签名/加密内容累积,最终写入 assistant 消息
+                    var thinkingSignature: String? = null
+                    var thinkingEncryptedContent: String? = null
+                    // B3-03: 断线续传去重 — 跳过与已显示内容重复的前缀 delta,避免用户看到重复文本
+                    var duplicateRemaining: String? = if (params.preservePartialContent) params.builder.toString() else null
+                    var firstContentDeltaSeen = false
+                    // v2.0: 续传重写检测 — 本轮尝试累积的完整文本(含被去重跳过的前缀) + 原文长度。
+                    // 当 provider 在续传/重试时从头重写、且与原内容大面积重叠时,
+                    // 用新一轮全文替换旧内容,而不是把新内容追加到旧文后面(那也是“重复回复”的主要来源)。
+                    var resumeAttemptText: StringBuilder? = if (params.preservePartialContent) StringBuilder() else null
+                    val resumeDuplicateTotal = duplicateRemaining?.length ?: 0
+                    // v2.0: 续传前的原文快照(Done 阶段“新文包含原文开头”兑底判定用)
+                    val resumeOriginalText = duplicateRemaining?.takeIf { it.isNotEmpty() }
+                    // v1.0.17: preservePartialContent=true 时跳过 clear,保留 StreamInterrupted 已收的部分内容
+                    if (!params.preservePartialContent) {
+                        params.builder.clear()
+                        params.reasoningBuilder.clear()
+                    } else {
+                        Logger.i("ChatVM", "streamRound retry with preservePartialContent, keep ${params.builder.length} chars")
+                    }
+
+                    // B5-01: 每轮开始写入生成检查点,确保流式产出有持久化兜底
+                    persistCheckpointAndReleaseOutbox(
+                        state = state,
+                        sessionId = sessionId,
+                        userMessageId = checkpointUserMessageId,
+                        assistantMessageId = params.currentAssistantId.toString(),
+                        content = unmaskPii(params.builder.toString()),
+                        createdAt = checkpointCreatedAt,
+                        // 删除 outbox 只发生在 helper 确认 checkpoint 成功之后。
+                    )
+
+                    // C-12: 本轮模型选择 — 仅"工具轮"(上一轮结果含 toolCalls → round>1)用 toolModel,
+                    // 首轮(可能直接出最终回复、需视觉读图)与后续最终回复一律使用主模型,
+                    // 避免工具启用并配置 toolModel 后所有轮次被降级成纯文本路由。
+                    // 未配置 toolModel(state.toolModel==null)时此分支恒走主模型,默认行为完全不变;
+                    // 工具轮若历史含图而 toolModel 无视觉,也回退主模型避免给不支持视觉的模型带图 400。
+                    // 审查修复 (2.0 A-01): forceMainModel 置位(主模型补轮递归)时短路 isToolRound,
+                    // 防止二次补轮递归;工具轮最终答复检测在本轮流结束处进行。
+                    val isToolRound = !params.forceMainModel && params.round > 1
+                    val usesToolModel =
+                        isToolRound && toolModel != null &&
+                            params.history.let { canUseToolModelForRound(it, toolModel) }
+                    val roundModel = if (usesToolModel) toolModel else effectiveModel
+                    val roundProviderConfig = if (usesToolModel) toolProviderConfig else effectiveProviderConfig
+                    val latestUserText =
+                        params.history
+                            .lastOrNull { it.role == MessageRole.USER }
+                            ?.content
+                            .orEmpty()
+                    // 工具请求的第一轮只需完成意图判断;工具结果回填后的续接轮只需读取结果并收尾。
+                    // 关闭这两类请求的重复深度思考,把用户主动开启的深度思考保留给普通复杂问答。
+                    val roundReasoningLevel =
+                        when {
+                            params.forceMainModel -> reasoningLevel
+                            params.round > 1 ->
+                                ToolRoundPresentationPolicy.reasoningLevelForRound(
+                                    configured = reasoningLevel,
+                                    round = params.round,
+                                )
+                            // v2.0: 只有用户明确要求动作(工具意图)时才压缩本轮思考/输出预算;
+                            // 普通短句(如“你好”)不再被误降级,用户开启的深度思考保持生效。
+                            tools.isNotEmpty() && ToolExposurePolicy.isDirectToolRequest(latestUserText, tools) ->
+                                ToolRoundPresentationPolicy.reasoningLevelForDirectTool(
+                                    configured = reasoningLevel,
+                                    supportsReasoning = roundModel?.supportsReasoning() == true,
+                                )
+                            else -> reasoningLevel
+                        }
+                    val configuredMaxTokens = assistant?.maxTokens?.takeIf { it > 0 }
+                    val roundMaxTokens =
+                        when {
+                            params.forceMainModel -> configuredMaxTokens
+                            params.round > 1 -> {
+                                // v2.x: 续接轮预算修复 — 原 1024 上限在两类场景必被截断:
+                                //   ① 工具结果回填后模型需输出长内容(写文件/长回复);
+                                //   ② 推理模型单是思考就消耗 2-4K token, 1024 下正文几乎无空间。
+                                // 二轮上调至 16384: 长工具结果回填后的收尾输出(如读完文件写分析)需要充足空间。
+                                val base = (configuredMaxTokens ?: 16_384).coerceAtMost(16_384)
+                                io.zer0.memory.budget.LlmBudget.withReasoningHeadroom(base, roundModel)
+                            }
+                            tools.isNotEmpty() && ToolExposurePolicy.isDirectToolRequest(latestUserText, tools) ->
+                                if (roundModel?.supportsReasoning() == true) {
+                                    // v2.x: 工具轮要生成完整工具参数(可能很长, 如写文件), 原 1536 会切参数;
+                                    // 二轮上调 16384 — 推理模型思考+长参数, 空间要充足
+                                    configuredMaxTokens?.coerceAtMost(16_384) ?: 16_384
+                                } else {
+                                    // v2.x: 原 512 同样会切长参数, 上调 8192
+                                    configuredMaxTokens?.coerceAtMost(8_192) ?: 8_192
+                                }
+                            else ->
+                                configuredMaxTokens?.let {
+                                    io.zer0.memory.budget.LlmBudget.withReasoningHeadroom(it, roundModel)
+                                }
+                        }
+                    val disableTools = ToolExposurePolicy.shouldDisableTools(latestUserText)
+                    val toolChoice =
+                        when {
+                            params.forceFinalResponse || disableTools -> "none"
+                            params.round == 1 &&
+                                !params.forceMainModel &&
+                                ToolExposurePolicy.shouldRequireTool(latestUserText, tools) -> "required"
+                            else -> null
+                        }
+                    // ToolOrchestrator 原生请求失败后会把这一字段降为 false，
+                    // 下一次同轮请求才会真正切到用户 API / Bing HTTP / 百度 HTTP。
+                    val nativeSearchForRound =
+                        params.nativeWebSearch && params.round == 1 && !params.forceFinalResponse
+                    val streamToUi =
+                        _state.value.chatPreferences.streamResponse &&
+                            (assistant?.streamOutput ?: true)
+                    val defaultRoundMode =
+                        if (roundReasoningLevel == ReasoningLevel.OFF) {
+                            ChatRequestMode.UTILITY
+                        } else {
+                            ChatRequestMode.CHAT
+                        }
+
+                    suspend fun requestRoundFlow(
+                        requestedToolChoice: String?,
+                        requestedReasoningLevel: ReasoningLevel,
+                        requestedMode: ChatRequestMode,
+                    ): Flow<ChatStreamEvent> {
+                        // v2.0 简单请求关键词收窄 → v2.x 阶段1 升级为默认分层:
+                        //   CORE/STANDARD 恒发;OPTIONAL/GLOBAL 按族命中 + 会话粘性(用过的工具)
+                        //   + 会话授权("本会话允许") + find_tools 动态装载放行;GLOBAL 未命中/未授权不发。
+                        val stickyToolNames = collectStickyToolNames(params.history)
+                        val authorizedToolNames = sessionPermissionStore.allowedToolsThisSession(state.sessionId)
+                        val loadedToolNames = SessionToolLoadRegistry.loadedFor(state.sessionId)
+                        val requestTools =
+                            ToolExposurePolicy
+                                .filterToolsForRequest(
+                                    latestUserText,
+                                    tools,
+                                    stickyToolNames,
+                                    authorizedToolNames,
+                                    loadedToolNames,
+                                )
+                                .takeUnless { disableTools || nativeSearchForRound || params.forceFinalResponse }
+                                ?: emptyList()
+                        val resumeText =
+                            params.builder.toString()
+                                .takeIf { params.preservePartialContent && it.isNotBlank() }
+
+                        @Suppress("TooGenericExceptionCaught")
+                        suspend fun completeTextEvents(): List<ChatStreamEvent> = try {
+                            val completion =
+                                chatService.completeText(
+                                    messages =
+                                    if (resumeText != null) {
+                                        params.history + UIMessage(role = MessageRole.ASSISTANT, content = resumeText)
+                                    } else {
+                                        params.history
+                                    },
+                                    model = roundModel,
+                                    providerConfig = roundProviderConfig,
+                                    tools = requestTools,
+                                    toolChoice = requestedToolChoice,
+                                    nativeWebSearch = nativeSearchForRound,
+                                    temperature = effectiveTemperature,
+                                    topP = topP,
+                                    maxTokens = roundMaxTokens,
+                                    reasoningLevel = requestedReasoningLevel,
+                                    mode = requestedMode,
+                                )
+                            completionToStreamEvents(completion)
+                        } catch (ce: kotlinx.coroutines.CancellationException) {
+                            throw ce
+                        } catch (error: Exception) {
+                            listOf(
+                                ChatStreamEvent.Error(
+                                    message = error.message ?: "非流式请求失败",
+                                    throwable = error,
+                                ),
+                            )
+                        }
+                        val currentTimeIncluded =
+                            params.history.any { message ->
+                                message.role == MessageRole.SYSTEM &&
+                                    message.content.contains(InternalPromptMarkers.TIME_SECTION_PREFIX)
+                            }
+                        Logger.d(
+                            "ChatVM",
+                            "provider round request | round=${params.round}" +
+                                " | systemMessages=${params.history.count { it.role == MessageRole.SYSTEM }}" +
+                                " | currentTime=$currentTimeIncluded" +
+                                " | tools=${requestTools.size} | toolChoice=${requestedToolChoice ?: "auto"}",
+                        )
+                        return if (streamToUi) {
+                            chatService.streamChat(
+                                messages = params.history,
+                                model = roundModel,
+                                providerConfig = roundProviderConfig,
+                                // “不要调用工具”由请求层硬关闭；不依赖模型遵守提示词。
+                                tools = requestTools,
+                                toolChoice = requestedToolChoice,
+                                nativeWebSearch = nativeSearchForRound,
+                                temperature = effectiveTemperature,
+                                topP = topP,
+                                maxTokens = roundMaxTokens,
+                                reasoningLevel = requestedReasoningLevel,
+                                mode = requestedMode,
+                                resumeFromText = resumeText,
+                            )
+                        } else {
+                            // 关闭流式输出时仍走同一请求参数，但通过 completeText 真正执行一次性请求。
+                            // 中断续传场景补回已显示的 assistant 文本，保持与 streamChat 一致的上下文。
+                            flow {
+                                completeTextEvents().forEach { emit(it) }
+                            }
+                        }
+                    }
+                    val imageAccumulator = mutableListOf<String>()
+                    val citationUrls = linkedSetOf<String>()
+                    val toolCallAccumulator = mutableMapOf<Int, Triple<String?, String?, StringBuilder>>()
+                    var streamError: String? = null
+                    var doneFinishReason: String? = null
+                    // v1.0.15: StreamInterrupted 标志 — 已收部分内容后网络中断,
+                    //   等待 NetworkMonitor 网络恢复事件后重试(非固定 delay),避免盲重试立即失败
+                    var streamInterrupted = false
+                    // v1.0.17: StreamInterrupted 的原始 throwable,用于判断是否网络错误(IOException)
+                    var streamInterruptedThrowable: Throwable? = null
+                    val pendingFlushMutex = Mutex()
+
+                    suspend fun flushPendingToUi(force: Boolean = false) {
+                        if (!streamToUi) return
+                        pendingFlushMutex.withLock {
+                            if (pendingBuilder.isEmpty()) return@withLock
+                            val now = System.currentTimeMillis()
+                            if (!force && now - lastUiUpdateAt < streamFlushIntervalMs(params.builder.length)) return@withLock
+                            val sliceLength =
+                                if (force) {
+                                    pendingBuilder.length
+                                } else {
+                                    minOf(computeAdaptiveSlice(params.builder.length), pendingBuilder.length)
+                                }
+                            params.builder.append(pendingBuilder.substring(0, sliceLength))
+                            pendingBuilder.delete(0, sliceLength)
+                            updateAssistantWithVisualTransform(
+                                params.currentAssistantId,
+                                unmaskPii(params.builder.toString()),
+                                isStreaming = true,
+                            )
+                            state.uiFlushCount++
+                            lastUiUpdateChars = params.builder.length
+                            lastUiUpdateAt = now
+                        }
+                    }
+
+                    // P2-2: reasoning-only 流(无 ContentDelta)也必须周期性落盘。
+                    // 统一增量入口 — ContentDelta 与 ReasoningDelta 都经此节流持久化,
+                    // 避免"只有思考内容"的流被强杀后仅剩空 checkpoint。
+                    suspend fun throttledPersist() {
+                        val now = System.currentTimeMillis()
+                        if (params.builder.length - lastPersistChars < PERSIST_CHAR_THRESHOLD &&
+                            now - lastPersistAt < PERSIST_TIME_THRESHOLD_MS
+                        ) {
+                            return
+                        }
+                        lastPersistChars = params.builder.length
+                        lastPersistAt = now
+                        chatGenerationManager.touch(sessionId)
+                        val persistMsg =
+                            _messages.value
+                                .firstOrNull { it.id == params.currentAssistantId }
+                                ?.copy(
+                                    content = unmaskPii(params.builder.toString()),
+                                    reasoning = unmaskPii(params.reasoningBuilder.toString()).ifBlank { null },
+                                    thinkingSignature = thinkingSignature,
+                                    thinkingEncryptedContent = thinkingEncryptedContent,
+                                )
+                                ?: UIMessage(
+                                    id = params.currentAssistantId,
+                                    role = MessageRole.ASSISTANT,
+                                    content = unmaskPii(params.builder.toString()),
+                                    reasoning = unmaskPii(params.reasoningBuilder.toString()).ifBlank { null },
+                                    thinkingSignature = thinkingSignature,
+                                    thinkingEncryptedContent = thinkingEncryptedContent,
+                                )
+                        // B-1: 会话已删除则跳过周期性落盘与检查点,防止删后"复活"。
+                        if (!generationController.isSessionWritesSuppressed(sessionId)) {
+                            persistCurrentAssistant(sessionId, params.currentAssistantId, persistMsg)
+                            persistCheckpointAndReleaseOutbox(
+                                state = state,
+                                sessionId = sessionId,
+                                userMessageId = checkpointUserMessageId,
+                                assistantMessageId = params.currentAssistantId.toString(),
+                                content = unmaskPii(params.builder.toString()),
+                                createdAt = checkpointCreatedAt,
+                            )
+                        }
+                    }
+
+                    var compatibilityRetryUsed = false
+                    var retryWithoutToolChoice = false
+                    coroutineScope {
+                        // 旧逻辑只有收到下一个 token 时才检查 50ms 节流;
+                        // 如果上游短暂停顿,尾部 pendingBuilder 会一直留到 Done 才一次性刷出。
+                        // 独立刷新协程让 UI 按时间稳定更新,不改变网络流和工具执行顺序。
+                        val pendingFlushJob =
+                            launch {
+                                while (isActive) {
+                                    delay(streamFlushIntervalMs(params.builder.length))
+                                    flushPendingToUi()
+                                }
+                            }
+                        try {
+                            do {
+                                retryWithoutToolChoice = false
+                                val requestToolChoice = if (compatibilityRetryUsed) null else toolChoice
+                                val requestReasoningLevel =
+                                    if (compatibilityRetryUsed) {
+                                        ReasoningLevel.OFF
+                                    } else {
+                                        roundReasoningLevel
+                                    }
+                                val requestMode =
+                                    if (compatibilityRetryUsed) {
+                                        ChatRequestMode.UTILITY
+                                    } else {
+                                        defaultRoundMode
+                                    }
+                                val flow =
+                                    requestRoundFlow(
+                                        requestedToolChoice = requestToolChoice,
+                                        requestedReasoningLevel = requestReasoningLevel,
+                                        requestedMode = requestMode,
+                                    )
+                                flow.takeWhile { event ->
+                                    val hasMeaningfulOutput =
+                                        params.builder.isNotEmpty() ||
+                                            params.reasoningBuilder.isNotEmpty() ||
+                                            pendingBuilder.isNotEmpty() ||
+                                            imageAccumulator.isNotEmpty() ||
+                                            toolCallAccumulator.isNotEmpty()
+                                    val shouldRetry =
+                                        event is ChatStreamEvent.Error &&
+                                            shouldRetryToolChoiceCompatibility(
+                                                message = event.message,
+                                                toolChoice = requestToolChoice,
+                                                retryUsed = compatibilityRetryUsed,
+                                                hasMeaningfulOutput = hasMeaningfulOutput,
+                                            )
+                                    if (shouldRetry) {
+                                        compatibilityRetryUsed = true
+                                        retryWithoutToolChoice = true
+                                        Logger.w(
+                                            "ChatVM",
+                                            "thinking mode 不支持 tool_choice=required,关闭本轮思考后重试一次",
+                                        )
+                                    }
+                                    !shouldRetry
+                                }.collect { event ->
+                                    when (event) {
+                                        is ChatStreamEvent.ContentDelta -> {
+                                            // C-11: 续传去重采用保守裁剪。只有完整重放的 delta 才丢弃；
+                                            // 一个 delta 若在旧前缀中途分叉，公共前缀可能只是新内容的巧合开头，
+                                            // 必须保留整段，避免用户真正的首字被吞掉。
+                                            var effectiveDelta = event.delta
+                                            if (experiments.debugMode && !firstContentDeltaSeen && event.delta.isNotEmpty()) {
+                                                firstContentDeltaSeen = true
+                                                Logger.d(
+                                                    "ChatVM-Debug",
+                                                    "first content delta | sessionId=$sessionId | round=$round | " +
+                                                        "preservePartial=${params.preservePartialContent} | " +
+                                                        "deltaChars=${event.delta.length} | " +
+                                                        "firstCodeUnit=${event.delta[0].code} | " +
+                                                        "builderBefore=${params.builder.length} | " +
+                                                        "duplicateRemaining=${duplicateRemaining?.length ?: 0}",
+                                                )
+                                            }
+                                            // v2.0: 续传尝试的全文累积(包含被判为重复而跳过的前缀);
+                                            // delta 阶段命中“从头重写”或 Done 阶段命中“新文包含原文开头”时用它替换旧内容。
+                                            resumeAttemptText?.append(event.delta)
+                                            val duplicate = duplicateRemaining
+                                            if (duplicate != null) {
+                                                val drop = resumeOverlapToDrop(duplicate, event.delta)
+                                                if (drop == 0) {
+                                                    val consumedChars = resumeDuplicateTotal - duplicate.length
+                                                    val restartedWithOverlap =
+                                                        shouldReplaceOnResumeRewrite(
+                                                            duplicateTotal = resumeDuplicateTotal,
+                                                            consumedChars = consumedChars,
+                                                        )
+                                                    if (restartedWithOverlap) {
+                                                        val rewritten = resumeAttemptText?.toString().orEmpty()
+                                                        if (rewritten.isNotEmpty()) {
+                                                            params.builder.setLength(0)
+                                                            params.builder.append(rewritten)
+                                                            lastUiUpdateChars = params.builder.length
+                                                            lastNotifChars = params.builder.length
+                                                            lastPersistChars = params.builder.length
+                                                            Logger.i(
+                                                                "ChatVM",
+                                                                "resume rewrite detected, replace content | " +
+                                                                    "consumed=$consumedChars/$resumeDuplicateTotal | new=${rewritten.length} chars",
+                                                            )
+                                                        }
+                                                        effectiveDelta = ""
+                                                    }
+                                                    // 无法证明整段 delta 是重放内容，本轮起停止去重。
+                                                    duplicateRemaining = null
+                                                } else {
+                                                    val remaining = duplicate.substring(drop).takeIf { it.isNotEmpty() }
+                                                    duplicateRemaining = remaining
+                                                    if (drop < event.delta.length) {
+                                                        // 整个旧前缀在本 delta 开头被重放，后半段才是新内容。
+                                                        effectiveDelta = event.delta.substring(drop)
+                                                    } else {
+                                                        // 整个 delta 都落在已显示内容内 → 本次忽略,等待后续 delta
+                                                        return@collect
+                                                    }
+                                                }
+                                            }
+                                            // v1.0.3: 首 token 立即刷新 UI,消除"loading → 大量文字"的视觉断层
+                                            val isFirstToken = firstTokenTime == 0L
+                                            if (isFirstToken) {
+                                                firstTokenTime = System.currentTimeMillis()
+                                                // P3-9: 首字耗时埋点 — 从本轮生成启动到首个正文 token 的间隔
+                                                Perf.log("chat-first-token", firstTokenTime - streamStartedAt)
+                                                // 立即清除"等待首 token"状态,ShimmerBubble 消失,StreamingCursor 接管
+                                                // F-10: 首 token 到达 → STREAMING
+                                                _state.update {
+                                                    it.copy(
+                                                        isWaitingFirstToken = false,
+                                                        streamState = it.streamState.copy(phase = ChatStreamPhase.STREAMING),
+                                                    )
+                                                }
+                                            }
+                                            val now = System.currentTimeMillis()
+                                            if (streamToUi) {
+                                                // v1.0.4: 自适应切片路径 — delta 先累积到 pendingBuilder,
+                                                // 50ms 节流触发时按 computeAdaptiveSlice() 取前 N 字符输出,实现平滑流入。
+                                                // chunkIntervals 的读写必须与 computeAdaptiveSlice 同锁：
+                                                // pendingFlushJob 协程在 mutex 内遍历它算平均间隔，
+                                                // 若这里在锁外 addLast/removeFirst，会触发 ConcurrentModificationException。
+                                                pendingFlushMutex.withLock {
+                                                    if (lastChunkAt != 0L) {
+                                                        chunkIntervals.addLast(now - lastChunkAt)
+                                                        if (chunkIntervals.size > STREAM_SLIDE_WINDOW) chunkIntervals.removeFirst()
+                                                    }
+                                                    lastChunkAt = now
+                                                    pendingBuilder.append(effectiveDelta)
+                                                }
+                                                if (isFirstToken) {
+                                                    // 首 token 立即输出,后续由独立刷新协程按 50ms 节奏更新。
+                                                    flushPendingToUi(force = true)
+                                                } else {
+                                                    flushPendingToUi()
+                                                }
+                                            } else {
+                                                // 非流式 UI:直接累积到 builder(保持原行为,通知/持久化仍按 builder.length 节流)
+                                                params.builder.append(effectiveDelta)
+                                            }
+                                            if (params.builder.length - lastNotifChars >= 100 || now - lastNotifAt >= 500) {
+                                                lastNotifChars = params.builder.length
+                                                lastNotifAt = now
+                                                runCatching {
+                                                    // v2.5.0 fix: 同步字数到 manager,前台服务通知才能显示真实进度
+                                                    chatGenerationManager.updateChars(sessionId, params.builder.length)
+                                                    notificationManager.updateLiveProgress(
+                                                        sessionTitle,
+                                                        params.builder.length,
+                                                        true,
+                                                        MuseNotificationTarget.Session(sessionId),
+                                                    )
+                                                }.onFailure { Logger.w("ChatVM", "更新进度通知失败: ${it.message}") }
+                                            }
+                                            if (experiments.debugMode && params.builder.length - lastLoggedCharCount >= 100) {
+                                                lastLoggedCharCount = params.builder.length
+                                                val elapsedMs = System.currentTimeMillis() - streamStartedAt
+                                                Logger.d(
+                                                    "ChatVM-Debug",
+                                                    "streaming | sessionId=$sessionId | round=$round | chars=${params.builder.length} | elapsed=${elapsedMs}ms",
+                                                )
+                                            }
+                                            if (params.builder.length - lastTokenUpdateChars >= 400 || now - lastTokenUpdateAt >= 1500) {
+                                                lastTokenUpdateChars = params.builder.length
+                                                lastTokenUpdateAt = now
+                                                updateContextTokenCount()
+                                            }
+                                            // P2-2: reasoning-only 也走统一节流落盘(见 throttledPersist)
+                                            throttledPersist()
+                                        }
+                                        is ChatStreamEvent.ReasoningDelta -> {
+                                            // v1.0.3: 首 token 立即刷新 UI(ReasoningDelta 也算首 token)
+                                            val isFirstToken = firstTokenTime == 0L
+                                            if (isFirstToken) {
+                                                firstTokenTime = System.currentTimeMillis()
+                                                // P3-9: 首字耗时埋点(reasoning 首 token 同样计入)
+                                                Perf.log("chat-first-token", firstTokenTime - streamStartedAt)
+                                                _state.update { it.copy(isWaitingFirstToken = false) }
+                                            }
+                                            if (exposeRoundThinking) params.reasoningBuilder.append(event.delta)
+                                            if (!event.signature.isNullOrBlank()) thinkingSignature = event.signature
+                                            if (!event.encryptedContent.isNullOrBlank()) thinkingEncryptedContent = event.encryptedContent
+                                            val now = System.currentTimeMillis()
+                                            val timeSinceUi = now - lastUiUpdateAt
+                                            // v1.0.3: 首 token 立即刷新;后续按 12 字符或 50ms 节流
+                                            // reasoning-only 流(content 为 0)必须按 reasoning 长度节流,
+                                            // 否则首 token 后 UI 永远不更新,用户只看到第一个字符。
+                                            val reasoningCharsSinceUi = params.reasoningBuilder.length - lastReasoningUiUpdateChars
+                                            if (streamToUi && (isFirstToken || reasoningCharsSinceUi >= STREAM_UI_CHAR_THRESHOLD || (timeSinceUi >= STREAM_UI_TIME_THRESHOLD_MS && reasoningCharsSinceUi > 0))) {
+                                                updateAssistant(
+                                                    params.currentAssistantId,
+                                                    unmaskPii(params.builder.toString()),
+                                                    unmaskPii(params.reasoningBuilder.toString()),
+                                                    isStreaming = true,
+                                                )
+                                                state.uiFlushCount++
+                                                lastUiUpdateChars = params.builder.length
+                                                lastUiUpdateAt = now
+                                                lastReasoningUiUpdateChars = params.reasoningBuilder.length
+                                            }
+                                            // P2-2: reasoning-only 流(无 ContentDelta)也按节流周期落盘
+                                            throttledPersist()
+                                        }
+                                        is ChatStreamEvent.ImageDelta -> {
+                                            imageAccumulator.add(event.imageBase64)
+                                            val now = System.currentTimeMillis()
+                                            if (now - lastUiUpdateAt >= STREAM_UI_TIME_THRESHOLD_MS) {
+                                                updateAssistant(
+                                                    params.currentAssistantId,
+                                                    unmaskPii(params.builder.toString()),
+                                                    unmaskPii(params.reasoningBuilder.toString()),
+                                                    imageAccumulator.toList(),
+                                                )
+                                                state.uiFlushCount++
+                                                lastUiUpdateAt = now
+                                            }
+                                        }
+                                        is ChatStreamEvent.ToolCallDelta -> {
+                                            // F-10: 工具调用阶段开始
+                                            _state.update {
+                                                it.copy(streamState = it.streamState.copy(phase = ChatStreamPhase.TOOLING))
+                                            }
+                                            val acc =
+                                                toolCallAccumulator.getOrPut(event.index) {
+                                                    Triple(null, null, StringBuilder())
+                                                }
+                                            val newId = event.id ?: acc.first
+                                            // v2.5.0 fix: 空白 name 不能覆盖已累积的工具名(与上游修复双保险)
+                                            val newName = event.name?.takeIf { it.isNotBlank() } ?: acc.second
+                                            // v1.0.81: isSnapshot=true 时参数是完整快照(源头已合并多 JSON 分片),替换而非追加
+                                            if (event.isSnapshot) {
+                                                acc.third.setLength(0)
+                                                acc.third.append(event.argumentsDelta ?: "")
+                                            } else {
+                                                event.argumentsDelta?.let { acc.third.append(it) }
+                                            }
+                                            toolCallAccumulator[event.index] = Triple(newId, newName, acc.third)
+                                            if (experiments.debugMode && event.name != null) {
+                                                Logger.d(
+                                                    "ChatVM-Debug",
+                                                    "toolCallDelta | sessionId=$sessionId | round=$round | index=${event.index} | tool=${event.name}",
+                                                )
+                                            }
+                                        }
+                                        // A5: provider 实测 token 用量 — 每轮可能多次(Anthropic 输入/输出分开发),
+                                        // 直接覆盖 state.usageTokens,保证留存最后一次(总量);provider 未返回则保持 null
+                                        is ChatStreamEvent.UsageDelta -> {
+                                            state.usageTokens = event.usage
+                                        }
+                                        is ChatStreamEvent.CitationDelta -> {
+                                            citationUrls.addAll(event.urls)
+                                        }
+                                        is ChatStreamEvent.Done -> {
+                                            // v1.0.30: 某些模型（如 GLM-4-9B）全流程只发空名 tool_call，
+                                            // 无 ContentDelta/ReasoningDelta，isWaitingFirstToken 全程未清。
+                                            // 在 Done 事件强制清除"等待首 token"状态。
+                                            if (_state.value.isWaitingFirstToken) {
+                                                _state.update { it.copy(isWaitingFirstToken = false) }
+                                            }
+                                            // The flush coroutine may still own pendingBuilder until collect returns.
+                                            // Defer all content mutations until it is cancelled/joined and drained below.
+                                            doneFinishReason = event.finishReason
+                                        }
+                                        is ChatStreamEvent.Error -> {
+                                            streamError = event.message
+                                            Logger.e("ChatVM", "stream error", event.throwable)
+                                            if (experiments.debugMode) {
+                                                Logger.d(
+                                                    "ChatVM-Debug",
+                                                    "stream Error | sessionId=$sessionId | round=$round | msg=${event.message}",
+                                                )
+                                            }
+                                        }
+                                        is ChatStreamEvent.FallbackNotice -> {
+                                            MuseToast.show(event.message)
+                                        }
+                                        is ChatStreamEvent.StreamInterrupted -> {
+                                            // v1.0.15: 已收部分内容后连接中断,保留内容并等待网络恢复后重试(非固定 delay)
+                                            streamError = event.message
+                                            streamInterrupted = true
+                                            streamInterruptedThrowable = event.throwable
+                                            Logger.w("ChatVM", "stream interrupted (partial content kept)", event.throwable)
+                                            if (experiments.debugMode) {
+                                                Logger.d(
+                                                    "ChatVM-Debug",
+                                                    "stream Interrupted | sessionId=$sessionId | round=$round | msg=${event.message}",
+                                                )
+                                            }
+                                        }
+                                    }
+                                }
+                                if (retryWithoutToolChoice) {
+                                    Logger.i("ChatVM", "tool_choice 兼容重试已切换为 utility 模式")
+                                }
+                            } while (retryWithoutToolChoice)
+                        } finally {
+                            pendingFlushJob.cancelAndJoin()
+                        }
+                    }
+
+                    // v1.0.4: 流结束 flush pendingBuilder 剩余内容(覆盖 Done/Error/StreamInterrupted)。
+                    // 自适应切片下 params.builder 可能滞后于 pendingBuilder,这里把未输出部分一次性写入,
+                    // 确保最终 updateAssistant / persist 拿到完整内容。
+                    if (pendingBuilder.isNotEmpty()) {
+                        params.builder.append(pendingBuilder)
+                        pendingBuilder.clear()
+                        if (streamToUi) {
+                            updateAssistant(params.currentAssistantId, unmaskPii(params.builder.toString()), isStreaming = true)
+                            lastUiUpdateChars = params.builder.length
+                            lastUiUpdateAt = System.currentTimeMillis()
+                        }
+                    }
+
+                    // v2.0: 续传重写兑底 — 本轮尝试的文本把原文开头片段写回来了,
+                    // 说明 provider 是"从头生成"而不是"续写",用新文替换旧文,
+                    // 消除旧文+新文的重复拼接(流式中未能命中替换的情况在这里收口)。
+                    if (streamError == null) {
+                        resumeOriginalText?.let { original ->
+                            val attempt = resumeAttemptText?.toString()
+                            if (shouldReplaceOnResumeSupersede(original, attempt, params.builder.toString())) {
+                                params.builder.setLength(0)
+                                params.builder.append(attempt)
+                                lastUiUpdateChars = 0
+                                Logger.i(
+                                    "ChatVM",
+                                    "resume attempt supersedes partial content | old=${original.length} new=${attempt?.length ?: 0}",
+                                )
+                            }
+                        }
+                    }
+
+                    // Final content mutations happen only after pending deltas are fully drained.
+                    // Reasoning-only fallback must observe the complete body, not just the pre-flush builder.
+                    if (streamError == null &&
+                        params.builder.isEmpty() &&
+                        params.reasoningBuilder.isNotEmpty() &&
+                        toolCallAccumulator.isEmpty()
+                    ) {
+                        params.builder.append(params.reasoningBuilder.toString())
+                        params.reasoningBuilder.setLength(0)
+                    }
+                    if (streamError == null && ChatStopReason.isLengthLimited(doneFinishReason)) {
+                        params.builder.append("\n\n").append(appContext.getString(R.string.err_reply_truncated))
+                    }
+                    if (experiments.debugMode && doneFinishReason != null) {
+                        val elapsedMs = System.currentTimeMillis() - streamStartedAt
+                        Logger.d(
+                            "ChatVM-Debug",
+                            "stream Done | sessionId=$sessionId | round=$round | chars=${params.builder.length} | " +
+                                "reasoningChars=${params.reasoningBuilder.length} | elapsed=${elapsedMs}ms",
+                        )
+                    }
+
+                    if (streamError != null) {
+                        val retryType = classifyErrorType(streamError)
+                        // v1.0.1 (P4): 用 params.retryCount 替代外层 streamRetryCount,每轮独立
+                        // v1.0.17: StreamInterrupted 智能续传 — 已收部分内容 + 网络错误时,
+                        //   等待网络恢复(最多 30s)后用 preservePartialContent=true 重试,
+                        //   保留已显示内容,UI 仅追加新内容(不闪回到首字)。
+                        //   超时未恢复网络则降级为手动重试(保留部分内容 + isRecoverable)。
+                        val isNetworkError =
+                            streamInterruptedThrowable is java.io.IOException ||
+                                (streamInterrupted && retryType == ChatErrorType.NETWORK)
+                        if (streamInterrupted &&
+                            isNetworkError &&
+                            params.builder.isNotEmpty() &&
+                            params.retryCount < MAX_STREAM_RETRIES
+                        ) {
+                            val newRetryCount = params.retryCount + 1
+                            Logger.w(
+                                "ChatVM",
+                                "StreamInterrupted 网络中断,等待网络恢复(最多 ${NETWORK_RECOVERY_TIMEOUT_MS}ms)" +
+                                    "(第 $newRetryCount/$MAX_STREAM_RETRIES 次,round=${params.round}): $streamError",
+                            )
+                            val recovered = waitForNetworkRecovery(NETWORK_RECOVERY_TIMEOUT_MS)
+                            if (recovered) {
+                                Logger.i("ChatVM", "网络已恢复,preservePartialContent=true 重试")
+                                // 重置自适应切片状态(上一轮的速率样本不适用于续传)
+                                pendingBuilder.clear()
+                                chunkIntervals.clear()
+                                lastChunkAt = 0L
+                                // 重置 token 计数与首 token 时间,让续传重新计时
+                                // (但不重置 builder — preservePartialContent=true 保留已显示内容)
+                                lastNotifChars = params.builder.length
+                                lastNotifAt = System.currentTimeMillis()
+                                lastTokenUpdateChars = params.builder.length
+                                lastTokenUpdateAt = System.currentTimeMillis()
+                                lastPersistChars = params.builder.length
+                                lastPersistAt = System.currentTimeMillis()
+                                // B3-03: UI 层续传去重已生效(duplicateRemaining 跳过重复前缀)。
+                                // Provider 层 resumeFromText 已接入:已显示内容作为末尾 assistant 消息注入,模型从中断处续写。
+                                return streamRound(
+                                    params.copy(
+                                        retryCount = newRetryCount,
+                                        preservePartialContent = true,
+                                    ),
+                                )
+                            } else {
+                                Logger.w("ChatVM", "网络未恢复,降级为手动重试")
+                            }
+                        }
+                        if (!streamInterrupted &&
+                            (retryType == ChatErrorType.NETWORK || retryType == ChatErrorType.RATE_LIMIT) &&
+                            params.retryCount < MAX_STREAM_RETRIES
+                        ) {
+                            val newRetryCount = params.retryCount + 1
+                            // v1.0.16: 退避 3s/10s/30s,覆盖典型切后台时长(5-15s)
+                            val delayMs =
+                                when (newRetryCount) {
+                                    1 -> 3_000L
+                                    2 -> 10_000L
+                                    else -> 30_000L
+                                }
+                            Logger.w(
+                                "ChatVM",
+                                "stream 错误($retryType),${delayMs}ms 后重试 " +
+                                    "(第 $newRetryCount/$MAX_STREAM_RETRIES 次,round=${params.round}): $streamError",
+                            )
+                            kotlinx.coroutines.delay(delayMs)
+                            lastUiUpdateChars = 0
+                            lastUiUpdateAt = streamStartedAt
+                            lastNotifChars = 0
+                            lastNotifAt = streamStartedAt
+                            lastTokenUpdateChars = 0
+                            lastTokenUpdateAt = streamStartedAt
+                            lastPersistChars = 0
+                            lastPersistAt = streamStartedAt
+                            firstTokenTime = 0L
+                            // v1.0.4: 重置自适应切片状态,避免上一轮的速率样本污染新一轮
+                            pendingBuilder.clear()
+                            chunkIntervals.clear()
+                            lastChunkAt = 0L
+                            // v1.0.3: retry 时重新进入"等待首 token"阶段,
+                            // 因为 builder 已被 streamRound 开头的 clear() 清空,
+                            // UI 会重新显示 ShimmerBubble 直到首个 token 到达
+                            _state.update { it.copy(isWaitingFirstToken = true) }
+                            return streamRound(params.copy(retryCount = newRetryCount))
+                        }
+                    }
+
+                    streamError?.let {
+                        val type = classifyErrorType(it)
+                        val displayMsg = ErrorMessages.resolve(appContext, it)
+                        // 工具循环出口统一负责向 UI 上报错误，避免同一错误出现两张卡片。
+                        updateAssistant(
+                            params.currentAssistantId,
+                            unmaskPii(params.builder.toString()),
+                            unmaskPii(params.reasoningBuilder.toString()),
+                            imageAccumulator.toList(),
+                            isStreaming = false,
+                        )
+                        val partialAssistant = _messages.value.firstOrNull { it.id == params.currentAssistantId }
+                        // B-1: 会话已删除则跳过错误落盘,防止删后"复活"。
+                        if (partialAssistant != null && !generationController.isSessionWritesSuppressed(sessionId)) {
+                            try {
+                                sessionRepository.upsertMessage(sessionId, partialAssistant)
+                            } catch (e: Exception) {
+                                Logger.e("ChatVM", "streamError upsertMessage failed", e)
+                                addError(
+                                    ChatErrorType.UNKNOWN,
+                                    appContext.getString(
+                                        R.string.err_chat_reply_save_failed,
+                                        e.message ?: appContext.getString(R.string.err_chat_unknown),
+                                    ),
+                                )
+                            }
+                        }
+                        // B-24: 仅自己仍是最新生成时才清零(旧生成错误不得清掉新生成的流式状态)
+                        // F-10: 流式错误 → FAILED
+                        clearStreamingStateIfLatest(state, ChatStreamPhase.FAILED)
+                        // B-02: 出口同步最后已知流式内容 — 中断 catch 块只读 state.builder,
+                        // 逐轮 params.builder 是局部对象,不同步则停止时部分回复无法构造
+                        state.builder.setLength(0)
+                        state.builder.append(params.builder)
+                        state.reasoningBuilder.setLength(0)
+                        state.reasoningBuilder.append(params.reasoningBuilder)
+                        return StreamRoundResult.Error(type, displayMsg, params.builder.toString(), params.reasoningBuilder.toString())
+                    }
+
+                    // 审查修复 (2.0 A-01): 工具轮若直接产出最终答复(无 toolCalls),说明本轮
+                    // 实为"最终回复轮" — 用主模型补一轮,保证最终答复由主模型输出(与上方
+                    // 4840 注释意图一致)。仅在 toolModel != 主模型时重跑;补轮失败(网络/限流)
+                    // 时保留 toolModel 已产出的答复作为兜底,不让用户面对空回复。
+                    val hasToolCalls = toolCallAccumulator.isNotEmpty()
+                    if (usesToolModel && !hasToolCalls && roundModel != effectiveModel) {
+                        Logger.i("ChatVM", "工具轮产出最终答复(round=$round), 用主模型补一轮 | model=${effectiveModel?.id}")
+                        val toolModelContent = params.builder.toString()
+                        val toolModelReasoning = params.reasoningBuilder.toString()
+                        // 清空本轮累积,补轮从零开始;自适应切片/节流/去重/首 token 状态一并复位
+                        params.builder.setLength(0)
+                        params.reasoningBuilder.setLength(0)
+                        imageAccumulator.clear()
+                        toolCallAccumulator.clear()
+                        pendingBuilder.clear()
+                        chunkIntervals.clear()
+                        lastChunkAt = 0L
+                        duplicateRemaining = null
+                        thinkingSignature = null
+                        thinkingEncryptedContent = null
+                        firstTokenTime = 0L
+                        lastUiUpdateChars = 0
+                        lastUiUpdateAt = streamStartedAt
+                        lastNotifChars = 0
+                        lastNotifAt = streamStartedAt
+                        lastTokenUpdateChars = 0
+                        lastTokenUpdateAt = streamStartedAt
+                        lastPersistChars = 0
+                        lastPersistAt = streamStartedAt
+                        // 立即置空 UI 内容 + 恢复"等待首 token",补轮流式到达后替换
+                        updateAssistant(params.currentAssistantId, content = "", isStreaming = true)
+                        _state.update { it.copy(isWaitingFirstToken = true) }
+                        val replayed = streamRound(params.copy(forceMainModel = true))
+                        // 补轮失败:整体回填 toolModel 答复(整段替换,避免与补轮的部分内容拼接)
+                        if (replayed is StreamRoundResult.Error) {
+                            Logger.w("ChatVM", "主模型补轮失败, 保留 toolModel 答复: ${replayed.message}")
+                            params.builder.setLength(0)
+                            params.builder.append(toolModelContent)
+                            params.reasoningBuilder.setLength(0)
+                            params.reasoningBuilder.append(toolModelReasoning)
+                            // B-02: 回填后同步 state.builder,保持中断 catch 可读到已恢复的内容
+                            state.builder.setLength(0)
+                            state.builder.append(params.builder)
+                            state.reasoningBuilder.setLength(0)
+                            state.reasoningBuilder.append(params.reasoningBuilder)
+                            updateAssistant(
+                                params.currentAssistantId,
+                                unmaskPii(toolModelContent),
+                                unmaskPii(toolModelReasoning).ifBlank { null },
+                                isStreaming = false,
+                            )
+                            _state.update { it.copy(isWaitingFirstToken = false) }
+                        }
+                        return replayed
+                    }
+
+                    // v1.0.54: 先判断本轮是否为工具轮,再推 UI —
+                    //   工具轮(有 toolCalls)的思考过程不显示(出戏),最终回复轮正常显示。
+                    updateAssistant(
+                        params.currentAssistantId,
+                        unmaskPii(params.builder.toString()),
+                        if (exposeRoundThinking) unmaskPii(params.reasoningBuilder.toString()).ifBlank { null } else null,
+                        imageAccumulator.toList(),
+                        isStreaming = false,
+                    )
+                    if (!streamToUi) {
+                        _messages.value = _messages.value
+                    }
+
+                    val finalizedAssistant = _messages.value.firstOrNull { it.id == params.currentAssistantId }
+                    val assistantMessage =
+                        if (hasToolCalls) {
+                            UIMessage(
+                                id = params.currentAssistantId,
+                                role = MessageRole.ASSISTANT,
+                                content = finalizedAssistant?.content ?: unmaskPii(params.builder.toString()),
+                                reasoning = if (exposeRoundThinking) {
+                                    finalizedAssistant?.reasoning ?: unmaskPii(params.reasoningBuilder.toString()).ifBlank { null }
+                                } else {
+                                    null
+                                },
+                                mood = finalizedAssistant?.mood.takeIf { exposeRoundThinking },
+                                reflection = finalizedAssistant?.reflection.takeIf { exposeRoundThinking },
+                                thinkingSignature = finalizedAssistant?.thinkingSignature ?: thinkingSignature,
+                                thinkingEncryptedContent = finalizedAssistant?.thinkingEncryptedContent ?: thinkingEncryptedContent,
+                                imageBase64List = finalizedAssistant?.imageBase64List ?: emptyList(),
+                                citationUrls = citationUrls.toList(),
+                                // v1.0.88 (R-2): 变体身份字段必须完整保留 — 此前工具轮构建的
+                                // assistantMessage 丢失 variantGroupId/variantIndex/variantCount/parentGroupId,
+                                // 重试(变体)+工具调用后落盘,重进会话树重建时消息挂错位置,
+                                // 表现为"消息重叠/第一句回复变最后一句"。
+                                variantGroupId = finalizedAssistant?.variantGroupId,
+                                variantIndex = finalizedAssistant?.variantIndex ?: 0,
+                                variantCount = finalizedAssistant?.variantCount ?: 1,
+                                parentGroupId = finalizedAssistant?.parentGroupId,
+                                toolCalls =
+                                toolCallAccumulator.toSortedMap().map { (idx, triple) ->
+                                    ToolCall(
+                                        id = triple.first ?: "call_${System.currentTimeMillis()}_$idx",
+                                        name = triple.second ?: "",
+                                        arguments = triple.third.toString(),
+                                    )
+                                },
+                            )
+                        } else {
+                            val finalAssistant =
+                                finalizedAssistant ?: UIMessage(
+                                    id = params.currentAssistantId,
+                                    role = MessageRole.ASSISTANT,
+                                    content = unmaskPii(params.builder.toString()),
+                                    reasoning = unmaskPii(params.reasoningBuilder.toString()).ifBlank { null },
+                                    thinkingSignature = thinkingSignature,
+                                    thinkingEncryptedContent = thinkingEncryptedContent,
+                                    imageBase64List = imageAccumulator.toList(),
+                                )
+                            val withCitations =
+                                finalAssistant.copy(
+                                    reasoning = if (exposeRoundThinking) finalAssistant.reasoning else null,
+                                    mood = if (exposeRoundThinking) finalAssistant.mood else null,
+                                    reflection = if (exposeRoundThinking) finalAssistant.reflection else null,
+                                    citationUrls = (finalAssistant.citationUrls + citationUrls).distinct(),
+                                    ragCitations = if (pendingRagCitations.isNotEmpty()) pendingRagCitations else finalAssistant.ragCitations,
+                                )
+                            withCitations
+                        }
+
+                    // B-02: 出口同步最后已知流式内容(同上,供中断 catch 构造部分回复)
+                    state.builder.setLength(0)
+                    state.builder.append(params.builder)
+                    state.reasoningBuilder.setLength(0)
+                    state.reasoningBuilder.append(params.reasoningBuilder)
+                    return StreamRoundResult.Success(
+                        assistantMessage = assistantMessage,
+                        hasToolCalls = hasToolCalls,
+                        contentLength = params.builder.length,
+                        firstTokenTime = firstTokenTime,
+                        citationUrls = citationUrls.toList(),
+                    )
+                }
+
+                override suspend fun requestToolApproval(
+                    toolName: String,
+                    toolCallId: String,
+                    argsPreview: String,
+                    args: Map<String, Any?>,
+                ): ToolApprovalState {
+                    return this@ChatViewModel.requestToolApprovalForSession(
+                        sessionId = sessionId,
+                        toolName = toolName,
+                        toolCallId = toolCallId,
+                        argsPreview = argsPreview,
+                        args = args,
+                    )
+                }
+
+                override fun onToolLoopError(type: ChatErrorType, message: String, recoverable: Boolean) {
+                    addError(type, message, recoverable)
+                }
+
+                // v1.x: 单个工具开始/结束回调(用于调试日志)
+                //  默认空实现已存在于接口,这里覆盖做 debug 日志,便于追踪工具执行耗时与状态。
+                override fun onToolStart(toolCallId: String, toolName: String) {
+                    chatGenerationManager.touch(sessionId)
+                    // M1.7: 工具执行在途 -> WAITING_TOOL 检查点
+                    sessionManager.runtime(sessionId)?.markWaitingTool(state.turnId)
+                    if (ConversationRebuildFlagStore.current.shadowEventsEnabled) {
+                        viewModelScope.launch(Dispatchers.IO) {
+                            recordConversationShadow(
+                                ConversationEventDraft(
+                                    sessionId = sessionId,
+                                    turnId = state.turnId,
+                                    type = ConversationEventType.TOOL_CALLED,
+                                    streamId = state.streamId,
+                                    generationSerial = state.generationSerial,
+                                    payloadJson = "{\"toolCallId\":\"$toolCallId\",\"toolName\":\"$toolName\"}",
+                                ),
+                            )
+                        }
+                    }
+                    if (experiments.debugMode) {
+                        Logger.d("ChatVM", "onToolStart | tool=$toolName | id=$toolCallId | sessionId=$sessionId")
+                    }
+                }
+
+                override fun onToolFinish(toolCallId: String, toolName: String, success: Boolean, durationMs: Long) {
+                    chatGenerationManager.touch(sessionId)
+                    // M1.7: 工具执行结束 -> 回 GENERATING(续接请求或最终回复轮)
+                    sessionManager.runtime(sessionId)?.markResumed(state.turnId)
+                    if (ConversationRebuildFlagStore.current.shadowEventsEnabled) {
+                        viewModelScope.launch(Dispatchers.IO) {
+                            recordConversationShadow(
+                                ConversationEventDraft(
+                                    sessionId = sessionId,
+                                    turnId = state.turnId,
+                                    type = ConversationEventType.TOOL_RESULT,
+                                    streamId = state.streamId,
+                                    generationSerial = state.generationSerial,
+                                    payloadJson = "{\"toolCallId\":\"$toolCallId\",\"toolName\":\"$toolName\",\"success\":$success,\"durationMs\":$durationMs}",
+                                ),
+                            )
+                        }
+                    }
+                    if (experiments.debugMode) {
+                        Logger.d(
+                            "ChatVM",
+                            "onToolFinish | tool=$toolName | success=$success | duration=${durationMs}ms | sessionId=$sessionId",
+                        )
+                    }
+                }
+            }
+
+        // v2.x: 工具轮次上限来自设置(0=无限制);读取失败回退固定值,不阻断对话。
+        val toolRoundLimit =
+            (resultOf { settings.getToolLoopMaxRounds() }.getOrNull() ?: MAX_TOOL_ROUNDS)
+                .takeIf { it > 0 } ?: 0
+
+        val toolLoopResult =
+            toolOrchestrator.runLoop(
+                params =
+                ToolLoopParams(
+                    sessionId = sessionId,
+                    // F-12: 统一链路 id(贯穿工具执行审计与日志)
+                    traceId = state.traceId,
+                    initialAssistantId = state.currentAssistantId,
+                    baseHistorySize = baseHistorySize,
+                    maxRounds = toolRoundLimit,
+                    tools = tools,
+                    skillMap = state.skillMap,
+                    routeSnapshot = state.routeSnapshot,
+                    model = effectiveModel,
+                    providerConfig = effectiveProviderConfig,
+                    temperature = effectiveTemperature,
+                    maxTokens = assistant?.maxTokens,
+                    reasoningLevel = reasoningLevel,
+                    webSearchEnabled = localWebSearchEnabled,
+                    nativeWebSearch = nativeWebSearchEnabled,
+                    experiments = experiments,
+                    assistant = assistant,
+                    initialBuilderContent = state.builder.toString(),
+                    initialReasoningContent = state.reasoningBuilder.toString(),
+                    turnId = state.turnId,
+                    generationIdentity = state.generationIdentity,
+                    toolExecutionContext = toolExecutionContext,
+                    allowToolExecution = !_state.value.chatPreferences.pauseToolExecution,
+                ),
+                conversationHistory = conversationHistory,
+                host = toolLoopHost,
+                accessor = this,
+                taskCardCoordinator = taskCardCoordinator,
+            )
+
+        state.round = toolLoopResult.round
+        state.totalCharCount = toolLoopResult.totalCharCount
+        state.totalToolCallCount = toolLoopResult.totalToolCallCount
+        state.firstTokenTime = toolLoopResult.firstTokenTime
+        state.currentAssistantId = toolLoopResult.finalAssistantId
+        // 审查修复 (2.0 C-17): 收尾兜底落盘 — exec* 内已立即落盘,这里对登记过的
+        // 工具媒体消息再扫一次,覆盖落盘失败/进程竞争等窗口;NonCancellable 保证
+        // 取消路径也能完成(登记者在取消分支走 attachMediaToMessage,此处幂等无害)。
+        if (toolMediaMessages.isNotEmpty()) {
+            val sweepSession = activeToolSessionId ?: currentSessionIdForApproval()
+            toolMediaMessages.forEach { mediaId ->
+                persistToolMessageMedia(sweepSession, mediaId)
+            }
+            toolMediaMessages.clear()
+        }
+        // A-13: 收尾递增令牌,使任何仍在途的工具执行(图片生成可达数十秒)媒体写入失效
+        toolAssistantId = null
+        activeToolSessionId = null
+        nextToolGenerationToken()
+
+        if (!toolLoopResult.success) {
+            val err = toolLoopResult.error
+            recordConversationShadow(
+                ConversationEventDraft(
+                    sessionId = sessionId,
+                    turnId = state.turnId,
+                    type = ConversationEventType.TURN_FAILED,
+                    streamId = state.streamId,
+                    generationSerial = state.generationSerial,
+                    payloadJson = "{\"round\":${toolLoopResult.round},\"errorType\":\"${err?.type ?: ChatErrorType.UNKNOWN}\"}",
+                ),
+            )
+            // P2-3: 工具循环失败必须收口 shadow turn,否则 turn 长期 OPEN、后续审计/重建失真。
+            if (ConversationRebuildFlagStore.current.shadowEventsEnabled && state.shadowTurnStarted) {
+                conversationService.finishTurn(state.turnId, "FAILED")
+            }
+            val errMessage = err?.message ?: appContext.getString(R.string.err_chat_unknown)
+            addError(err?.type ?: ChatErrorType.UNKNOWN, errMessage, isRecoverable = err?.type != ChatErrorType.API_KEY)
+            // B-24: 仅自己仍是最新生成时才清零
+            // F-10: 工具循环失败 → FAILED
+            clearStreamingStateIfLatest(state, ChatStreamPhase.FAILED)
+            return false
+        }
+
+        // Phase 8.5 修复 S16: 工具调用达到 maxToolRounds 上限且未产生最终回复时,
+        // 累积的 pendingRagCitations 需要附加到当前 assistant 消息。
+        if (toolLoopResult.finalAssistantMessage == null && pendingRagCitations.isNotEmpty()) {
+            val lastAssistant = _messages.value.firstOrNull { it.id == state.currentAssistantId }
+            if (lastAssistant != null && lastAssistant.ragCitations.isEmpty()) {
+                val withCitations = lastAssistant.copy(ragCitations = pendingRagCitations)
+                _messages.value =
+                    _messages.value.map { msg ->
+                        if (msg.id == withCitations.id) withCitations else msg
+                    }
+                // B-1: 会话已删除则跳过 citations 落盘,防止删后"复活"。
+                if (!generationController.isSessionWritesSuppressed(sessionId)) {
+                    try {
+                        sessionRepository.upsertMessage(sessionId, withCitations)
+                    } catch (e: Exception) {
+                        Logger.e("ChatVM", "upsertMessage(citations) failed", e)
+                        addError(
+                            ChatErrorType.UNKNOWN,
+                            appContext.getString(
+                                R.string.err_chat_ref_save_failed,
+                                e.message ?: appContext.getString(R.string.err_chat_unknown),
+                            ),
+                        )
+                    }
+                }
+            }
+        }
+
+        // 将 finalAssistantMessage(含 citations + artifacts)写入 UI / DB / branch
+        var finalMessagePersistenceFailed = false
+        toolLoopResult.finalAssistantMessage?.let { finalAssistant ->
+            // v1.0.75 fix (生图只显示链接根因): finalAssistantMessage 由 GenerationHandler 构造,
+            //   只含 content + toolCalls,不含媒体字段。若直接覆盖同 id 消息,
+            //   execGenerateImage 写入的 imageUrls / videoFileUri / imageBase64List 会丢失,
+            //   导致图片不渲染、模型只能复述 URL。合并保留原消息的媒体字段。
+            // A-16: 合并逻辑抽成 internal 纯函数 [mergeFinalAssistantMedia](有单测护栏)
+            val existingMsg = _messages.value.firstOrNull { it.id == finalAssistant.id }
+            val mergedMedia = mergeFinalAssistantMedia(finalAssistant, existingMsg)
+            val withCitations =
+                when {
+                    toolLoopResult.citationUrls.isNotEmpty() && pendingRagCitations.isNotEmpty() ->
+                        mergedMedia.copy(citationUrls = toolLoopResult.citationUrls, ragCitations = pendingRagCitations)
+                    toolLoopResult.citationUrls.isNotEmpty() ->
+                        mergedMedia.copy(citationUrls = toolLoopResult.citationUrls)
+                    pendingRagCitations.isNotEmpty() ->
+                        mergedMedia.copy(ragCitations = pendingRagCitations)
+                    else -> mergedMedia
+                }
+            val (replacedContent, artifacts) =
+                ArtifactExtractor.extractArtifacts(
+                    sessionId = sessionId,
+                    messageId = state.currentAssistantId.toString(),
+                    content = withCitations.content,
+                )
+            val withArtifacts =
+                if (artifacts.isNotEmpty()) {
+                    artifacts.forEach { artifactRepository.upsert(it) }
+                    withCitations.copy(
+                        content = replacedContent,
+                        artifactIds = artifacts.map { it.id },
+                    )
+                } else {
+                    withCitations
+                }
+            _messages.value =
+                _messages.value.map { msg ->
+                    if (msg.id == withArtifacts.id) withArtifacts else msg
+                }
+            conversationHistory.add(withArtifacts)
+            // v1.0.88 (S-3): 流式收尾完整性自检日志 — 记录最终 content 长度与角色,
+            // 若用户反馈"消息重叠/错乱"时可从日志快速判断是内容叠加还是排序问题。
+            Logger.i(
+                "ChatVM",
+                "finalize: msg=${withArtifacts.id.toString().take(8)} len=${withArtifacts.content.length} " +
+                    "reasoning=${withArtifacts.reasoning?.length ?: 0} " +
+                    "mood=${withArtifacts.mood?.length ?: 0} " +
+                    "variant=${withArtifacts.variantGroupId ?: "-"}",
+            )
+            try {
+                if (ConversationRebuildFlagStore.current.useNewConversationService && state.shadowTurnStarted) {
+                    val commitResult =
+                        messageCommit.commit(
+                            MessageCommitRequest(
+                                turnId = state.turnId,
+                                sessionId = sessionId,
+                                userMessageId = state.conversationHistory.lastOrNull { it.role == MessageRole.USER }?.id?.toString().orEmpty(),
+                                assistantMessageId = withArtifacts.id.toString(),
+                                message = withArtifacts,
+                                parts = buildCommitParts(withArtifacts, System.currentTimeMillis()),
+                                toolRounds = toolLoopResult.toolRounds,
+                            ),
+                        )
+                    if (commitResult is io.zer0.muse.data.chat.rewrite.MessageCommitResult.Rejected) {
+                        throw IllegalStateException("conversation commit rejected")
+                    }
+                    // B-1: 会话已删除则跳过 artifacts 落盘,防止删后"复活"。
+                } else if (!generationController.isSessionWritesSuppressed(sessionId)) {
+                    sessionRepository.upsertMessage(sessionId, withArtifacts)
+                }
+            } catch (e: Exception) {
+                // 提交失败时不能继续走正常 finalize，否则会出现“回合完成但正文未落库”。
+                finalMessagePersistenceFailed = true
+                Logger.e("ChatVM", "upsertMessage failed", e)
+                addError(
+                    ChatErrorType.UNKNOWN,
+                    appContext.getString(R.string.err_chat_reply_save_failed, e.message ?: appContext.getString(R.string.err_chat_unknown)),
+                )
+            }
+            messageController.rebuildConversationTree()
+        }
+
+        if (finalMessagePersistenceFailed) {
+            if (ConversationRebuildFlagStore.current.shadowEventsEnabled && state.shadowTurnStarted) {
+                recordConversationShadow(
+                    ConversationEventDraft(
+                        sessionId = sessionId,
+                        turnId = state.turnId,
+                        type = ConversationEventType.TURN_FAILED,
+                        streamId = state.streamId,
+                        generationSerial = state.generationSerial,
+                        payloadJson = "{\"reason\":\"message_persistence_failed\",\"messageId\":\"${state.currentAssistantId}\"}",
+                    ),
+                )
+                conversationService.finishTurn(state.turnId, "FAILED")
+            }
+            clearStreamingStateIfLatest(state, ChatStreamPhase.FAILED)
+            return false
+        }
+
+        return true
+    }
+
+    // ===== Phase I: 收尾(状态清理 / debugInfo / 通知 / memory ticker)=====
+    private suspend fun finalizeResponse(state: StreamRunState) = generationController.finalizeResponse(state)
+
+    /**
+     * v1.97: 切页/切会话/切 Tab 时脱离流式 UI,不停止后台生成。
+     *
+     * 与 [stop] 的区别:
+     * - stop():用户主动停止,取消 SSE 连接 + 生成协程
+     * - detachStreaming():切页触发,生成闭包继续在 appScope 运行
+     *   - updateAssistant 因 index==-1 静默跳过(不更新错误会话的 messages)
+     *   - persistCurrentAssistant 用 builder 内容直接落盘(不依赖 _messages.value)
+     *   - 通知仍正常更新(notificationManager 不依赖 _state)
+     *   - 切回原会话时从 DB 加载最新内容(含中间落盘)+ 恢复 isStreaming
+     */
+    private fun detachStreaming() = streamCoordinator.detachStreaming()
+
+    /** 用户点"停止"。 */
+    fun stop() = generationController.stop()
+
+    /**
+     * A8 流式插话:打断当前生成并立即用输入框内容重定向生成。
+     *
+     * stop() 同步清 isStreaming(见上),随后 send() 的 canStartGeneration 检查
+     * (text 非空 && !isStreaming)即可通过;打断前已生成的内容由流式
+     * catch(CancellationException) 块以 [已中断] 标记持久化保留。
+     */
+    fun interject() {
+        stop()
+        send()
+    }
+
+    /**
+     * 断点续传:恢复指定会话的未完成工具调用。
+     *
+     * 触发场景:用户在上次对话中手动停止流式 / App 崩溃 / 进程被杀,
+     * 导致 LLM 已决策的 tool_calls 未执行完毕。下次进入此会话时由 Banner 提示,
+     * 用户点"恢复执行"按钮触发本函数。
+     *
+     * 执行流程:
+     *  1. 从 [PendingToolCallStore] 取该会话的全部 pending(按 createdAt 升序)
+     *  2. 依次执行(skill 走 SkillExecutor,本地工具走 ToolRegistry)
+     *     - 复用 [TOOL_TIMEOUT_MS] 超时;完整工具结果会持久化,长结果按上下文预算处理
+     *  3. 每个工具结果构造为 TOOL 消息(保留原始 [PendingToolCallStore.PendingToolCall.toolCallId],
+     *     让 LLM 能对应上),持久化到 DB 并追加到 [_messages.value]
+     *  4. 全部执行完成后,从 PendingToolCallStore 清理本会话的 pending 记录
+     *  5. 追加一个空的 ASSISTANT 占位消息,调 [launchStream] 让 LLM 基于工具结果继续回复
+     *
+     * 失败容忍:单个工具执行失败不影响其他工具,失败结果仍构造为 TOOL 消息回填给 LLM,
+     * 让 LLM 自行决定是否重试或换方案(与正常流式工具调用一致)。
+     *
+     * @param chatId 会话 id(应等于 [_state.value.currentSessionId])
+     */
+
+    /**
+     * P0-6: 断点恢复前对单个待恢复工具调用重跑审批。
+     *
+     * 背景:持久化时"保存后、写审批态前"被杀的调用,其 [PendingToolCallStore.PendingToolCall.executionState]
+     * 仍是默认 EXECUTING(而非 APPROVAL_PENDING),旧实现恢复时直接执行 → 高危工具绕过审批。
+     * 这里重跑 [ToolPermissionResolver](会话模式 + 参数化策略 + 风险等级),语义与在线调用一致:
+     *  - 判 Pending → 重新走审批卡(await 用户决策)
+     *  - 判 Denied → 直接丢弃并记录
+     *  - 判 Auto/Approved → 放行执行
+     *
+     * @return null 表示放行执行;非 null 为"不允许执行"的终态(Denied/Answered),调用方丢弃记录并跳过
+     */
+    private suspend fun recheckApprovalForResume(chatId: String, pending: PendingToolCallStore.PendingToolCall): ToolApprovalState? {
+        val args = parseToolArgs(pending.arguments)
+        // P0-6: 风险取 ToolPermissionResolver.riskLevelFor(显式表 + 前缀推断的单一真源,
+        // P0-3),不取注册台账值 —— 注册值与显式表脱节时(如 TRUSTED 模式下 HIGH 工具注册为
+        // NORMAL)仍会走 Auto,恢复重审形同虚设。
+        val risk = ToolPermissionResolver.riskLevelFor(pending.toolName)
+        val perToolPolicy = toolConfigStore?.getConfiguredPolicy(pending.toolName)
+        val displayedSessionId = currentSessionIdForApproval()
+        val mode =
+            if (displayedSessionId == chatId) {
+                _state.value.sessionPermissionMode
+            } else {
+                sessionPermissionStore.getMode(chatId, settings.defaultSessionPermissionModeFlow.first())
+            }
+        val resolved = ToolPermissionResolver.resolve(pending.toolName, risk, mode, perToolPolicy, args)
+        return when (resolved) {
+            is ToolApprovalState.Pending -> {
+                // P0-6: 重新走审批卡 — 复用在线审批链路(await 用户决策)
+                requestToolApprovalForSession(
+                    sessionId = chatId,
+                    toolName = pending.toolName,
+                    toolCallId = pending.toolCallId,
+                    argsPreview = pending.arguments.take(MAX_TOOL_APPROVAL_ARGS_CHARS),
+                    args = args,
+                )
+            }
+            is ToolApprovalState.Denied, is ToolApprovalState.Answered -> resolved
+            is ToolApprovalState.Auto, is ToolApprovalState.Approved -> null
+        }
+    }
+
+    /** P0-6: 解析工具参数 JSON 为 Map<String, String>(参数化策略只读字符串值)。 */
+    private fun parseToolArgs(arguments: String): Map<String, Any?> = runCatching {
+        val element = io.zer0.common.AppJson.parseToJsonElement(arguments)
+        (element as? JsonObject)?.mapValues { (_, value) ->
+            (value as? JsonPrimitive)?.contentOrNull ?: value.toString()
+        } ?: emptyMap()
+    }.getOrNull() ?: emptyMap()
+
+    fun resumePendingToolCalls(chatId: String) {
+        // 防止与正在进行的流式生成冲突
+        if (_state.value.isStreaming) {
+            addError(ChatErrorType.UNKNOWN, appContext.getString(R.string.err_chat_resume_busy))
+            return
+        }
+        viewModelScope.launch {
+            val pendings =
+                resultOf { PendingToolCallStore.getForChat(chatId) }
+                    .onError { msg, t ->
+                        Logger.e("ChatVM", "resumePendingToolCalls getForChat 失败: $msg", t)
+                        addError(ChatErrorType.UNKNOWN, appContext.getString(R.string.err_chat_resume_read_failed, t?.message ?: msg))
+                    }.getOrNull() ?: emptyList()
+            if (pendings.isEmpty()) {
+                _state.update { it.copy(pendingToolCallCount = 0) }
+                return@launch
+            }
+            // 审批等待不能在重启后伪造 Deferred 或自动放行；要求用户显式丢弃，
+            // 或由后续专门的“重新请求审批”流程重新创建当前代的审批上下文。
+            val approvalPending =
+                pendings.filter {
+                    it.executionState == PendingToolCallStore.APPROVAL_PENDING
+                }
+            if (approvalPending.isNotEmpty()) {
+                _state.update { it.copy(pendingToolCallCount = pendings.size) }
+                addError(
+                    ChatErrorType.TOOL_ERROR,
+                    "有 ${approvalPending.size} 个工具调用在进程终止前等待审批，已阻止自动恢复；请丢弃后重新发起请求。",
+                    true,
+                )
+                Logger.w(
+                    "ChatVM",
+                    "拒绝自动恢复审批挂起工具: count=${approvalPending.size}, sessionId=$chatId",
+                )
+                return@launch
+            }
+            // 加载启用的 skill 列表,构建 id → SkillEntity 映射(与 launchStream 内的逻辑一致)
+            // v1.0.47 P3: 会话级 skill 覆盖 — 优先用 session.skillIdsJson(非"[]"且非空),
+            // 否则回退到 assistant.skillIdsJson(默认行为不变)
+            val sessionSkillIdsJson =
+                _state.value.sessions
+                    .firstOrNull { it.id == chatId }?.skillIdsJson
+            val effectiveSkillIdsJson =
+                if (!sessionSkillIdsJson.isNullOrEmpty() && sessionSkillIdsJson != "[]") {
+                    sessionSkillIdsJson
+                } else {
+                    _state.value.currentAssistant?.skillIdsJson
+                }
+            val enabledSkillIds =
+                effectiveSkillIdsJson?.let { json ->
+                    runCatching { idListJson.decodeFromString<List<String>>(json) }.getOrNull()
+                }
+            // 审计修复 (A-04/A-05/A-06): 与 ChatStreamCoordinator.resolveToolsAndModel
+            // 同一套过滤 — 本地工具同名 skill 与 channel_* 群聊 skill 不进 skillMap,
+            // 定义与执行统一走本地实现,主会话不可冒充 agent 群聊发言。
+            val localToolNames = toolRegistry.listTools().map { it.name }.toSet()
+            val skillMap =
+                resultOf { skillRepository.listEnabledByIds(enabledSkillIds) }
+                    .getOrNull()
+                    ?.filterNot { it.id in localToolNames || it.id.startsWith("channel_") }
+                    ?.associateBy { it.id } ?: emptyMap()
+
+            // v1.0.4 (P0): 进入"等待首 token"阶段 + 设置工具恢复进度文本,
+            // 让 ShimmerBubble 在工具执行期间显示"正在执行 web_search (1/3)…"
+            // (原来此阶段 isStreaming=false,ShimmerBubble 不显示,用户看到空白)
+            _state.update {
+                it.copy(
+                    isStreaming = true,
+                    isWaitingFirstToken = true,
+                    toolProgressMessage = appContext.getString(R.string.tool_resume_starting),
+                    errors = emptyList(),
+                )
+            }
+
+            // 逐个执行 pending 工具,构造 TOOL 消息
+            val now = System.currentTimeMillis()
+            for ((stepIndex, pending) in pendings.withIndex()) {
+                // 每步更新进度文本(skill 内部的 onProgress 会进一步覆盖为"正在搜索..."等具体文案)
+                _state.update {
+                    it.copy(
+                        toolProgressMessage =
+                        appContext.getString(
+                            R.string.tool_resume_step,
+                            pending.toolName,
+                            stepIndex + 1,
+                            pendings.size,
+                        ),
+                    )
+                }
+                // P0-6: 恢复前重跑审批 — 防"保存后、写审批态前"被杀的高危调用被免审批执行。
+                // 判 Pending 时重新弹审批卡 await 用户决策;判 Denied/Answered 时丢弃记录并跳过。
+                val recheck = recheckApprovalForResume(chatId, pending)
+                if (recheck is ToolApprovalState.Denied) {
+                    resultOf { PendingToolCallStore.remove(pending.toolCallId) }
+                        .onError { msg, t -> Logger.w("ChatVM", "恢复时丢弃被拒工具失败: $msg", t) }
+                    Logger.w("ChatVM", "恢复时工具被拒绝并丢弃: tool=${pending.toolName}, sessionId=$chatId")
+                    continue
+                }
+                if (recheck is ToolApprovalState.Answered) {
+                    resultOf { PendingToolCallStore.remove(pending.toolCallId) }
+                        .onError { msg, t -> Logger.w("ChatVM", "恢复时丢弃已答工具失败: $msg", t) }
+                    Logger.w("ChatVM", "恢复时工具收到自定义答案,丢弃: tool=${pending.toolName}, sessionId=$chatId")
+                    continue
+                }
+                val toolResult =
+                    resultOf {
+                        withTimeoutOrNull(TOOL_TIMEOUT_MS) {
+                            val skill = skillMap[pending.toolName]
+                            if (skill != null) {
+                                // v1.0.4 (P0): 传 onProgress 回调,SkillExecutor 在调用 web_search 等
+                                // 耗时工具前会回调"正在搜索..."等本地化文本,覆盖默认的"正在执行 xxx"
+                                skillExecutor.execute(
+                                    skill = skill,
+                                    argumentsJson = pending.arguments,
+                                    onProgress = { msg ->
+                                        _state.update { state -> state.copy(toolProgressMessage = msg) }
+                                    },
+                                    sessionId = chatId,
+                                )
+                            } else {
+                                withContext(Dispatchers.IO) {
+                                    routeGuard.executeFromJson(pending.toolName, pending.arguments)
+                                }
+                            }
+                        }
+                    }.getOrNull() ?: appContext.getString(R.string.err_chat_tool_timeout, pending.toolName, (TOOL_TIMEOUT_MS / 1000).toInt())
+                val finalResult =
+                    captureLargeToolOutput(
+                        context = appContext,
+                        filePrefix = "resumed_${pending.toolCallId}",
+                        output = toolResult,
+                    )
+                // 构造 TOOL 消息:保留原始 toolCallId,让 LLM 能对应上之前发出的 tool_calls
+                val toolMsg =
+                    UIMessage(
+                        role = MessageRole.TOOL,
+                        content = finalResult,
+                        toolCallId = pending.toolCallId,
+                    )
+                // 追加到 _messages.value(launchStream 会从 messages.dropLast(1) 取历史)
+                _messages.value = _messages.value + toolMsg
+                // 持久化到 DB(供下次启动时 LLM 仍能看到工具结果)
+                resultOf { sessionRepository.upsertMessage(chatId, toolMsg) }
+                    .onError { msg, t ->
+                        Logger.e("ChatVM", "resumePendingToolCalls upsertMessage 失败: $msg", t)
+                        addError(ChatErrorType.UNKNOWN, appContext.getString(R.string.err_chat_tool_result_save_failed, t?.message ?: msg))
+                    }
+                // 同步记录到 toolCallHistory(InputBar 动态胶囊展示)
+                val isSuccess = isToolResultSuccess(finalResult)
+                _state.update {
+                    it.copy(
+                        toolCallHistory =
+                        it.toolCallHistory +
+                            ToolCallRecord(
+                                toolName = pending.toolName,
+                                arguments = pending.arguments,
+                                result = finalResult,
+                                isSuccess = isSuccess,
+                                timestamp = now,
+                            ),
+                    )
+                }
+                // 从 pending store 移除(已执行完成)
+                resultOf { PendingToolCallStore.remove(pending.toolCallId) }
+                    .onError { msg, t -> Logger.w("ChatVM", "resumePendingToolCalls remove 失败: $msg", t) }
+            }
+
+            // 清空 pending 计数(Banner 隐藏)+ 清空工具恢复进度文本
+            // (ShimmerBubble 将回退到默认"思考中",直到 launchStream 首 token 到达)
+            _state.update {
+                it.copy(
+                    pendingToolCallCount = 0,
+                    toolProgressMessage = null,
+                )
+            }
+
+            // 追加空 ASSISTANT 占位消息,触发 launchStream 让 LLM 基于工具结果继续回复
+            val assistantMsg = UIMessage(role = MessageRole.ASSISTANT, content = "")
+            _messages.value = _messages.value + assistantMsg
+            _state.update {
+                it.copy(
+                    isStreaming = true,
+                    // v1.0.3: 断点续传也进入"等待首 token"阶段
+                    isWaitingFirstToken = true,
+                    errors = emptyList(),
+                )
+            }
+            launchStream(assistantMsg.id, chatId)
+        }
+    }
+
+    /**
+     * 断点续传:丢弃指定会话的全部未完成工具调用。
+     *
+     * 用户在 Banner 上点"丢弃"按钮时触发。清理 PendingToolCallStore 中该会话的记录,
+     * 不执行任何工具,Banner 隐藏。已持久化的 ASSISTANT tool_calls 消息保留在 DB 中
+     * (作为对话历史的一部分),LLM 下次回复时可能看到自己曾发出 tool_calls 但无对应
+     * TOOL 响应 — 这是用户主动丢弃的预期行为,LLM 通常会自行换方案继续。
+     *
+     * @param chatId 会话 id(应等于 [_state.value.currentSessionId])
+     */
+    fun discardPendingToolCalls(chatId: String) {
+        viewModelScope.launch {
+            resultOf { PendingToolCallStore.clearForChat(chatId) }
+                .onError { msg, t -> Logger.w("ChatVM", "discardPendingToolCalls 失败: $msg", t) }
+            _state.update { it.copy(pendingToolCallCount = 0) }
+        }
+    }
+
+    override fun onCleared() {
+        super.onCleared()
+        release()
+    }
+
+    /**
+     * 释放 TTS/ASR 等资源。
+     *
+     * v1.92: ChatViewModel 改为 single{} 后 onCleared 永不调用,
+     * 由 MuseApp 的 ProcessLifecycleOwner ON_STOP 观察者显式调用。
+     */
+    fun release() {
+        releaseInternal(notifySessionEnd = true)
+    }
+
+    /**
+     * 应用切后台时释放语音资源，但不把当前会话当作结束会话通知记忆 LLM。
+     * 进程回到前台后仍可能继续生成，后台生命周期不应重复排队 completeText。
+     */
+    fun releaseForBackground() {
+        releaseInternal(notifySessionEnd = false)
+    }
+
+    private fun releaseInternal(notifySessionEnd: Boolean) {
+        // 语音对话模式:取消循环协程并释放 ASR/TTS 资源(避免后台继续录音/朗读)
+        stopVoiceConversation()
+        // Phase 8.7: ViewModel 销毁时停止 TTS(避免页面退出后继续朗读)
+        stopTts()
+        // v1.53: 清除 TTS 状态回调,避免单例 TtsManager 持有已销毁 ViewModel 的回调导致内存泄漏
+        ttsManager.onStateChange = null
+        if (notifySessionEnd) notifySessionEndForCurrent()
+        // v1.91: 释放流式 ASR Controller(AudioRecord / WebSocket / 协程 scope)
+        // v1.105: 委托至 ChatAudioCoordinator
+        audioCoordinator.disposeAsr()
+        // v1.x: 释放当前会话的引用计数(与 switchSession / createNewSession 中的 acquire 配对)
+        currentSessionIdForApproval()?.let { sessionManager.release(it) }
+    }
+
+    /**
+     * v1.0.29: 应用切到后台时调用。
+     *
+     * 如果当前有正在进行的流式生成,启动前台服务通知(让用户知道后台生成进度,
+     * 同时保持进程前台优先级防止被系统回收)。前台时不显示通知(避免"正在生成"打扰)。
+     */
+    fun onAppBackground() {
+        val activeGenerations = chatGenerationManager.activeGenerations.value
+        if (activeGenerations.isNotEmpty()) {
+            val latest = activeGenerations.values.maxByOrNull { it.lastUpdatedAt }
+            Logger.i(
+                "ChatViewModel",
+                "background keep-alive started | tasks=${activeGenerations.size} | " +
+                    "latestSession=${latest?.sessionTitle ?: "unknown"}",
+            )
+            runCatching { ChatGenerationService.start(appContext) }
+                .onFailure { Logger.w("ChatViewModel", "前台服务启动失败,切后台可能被回收", it) }
+        }
+    }
+
+    /**
+     * 应用切回前台时调用。
+     *
+     * 仍有生成任务时不能停止前台服务；服务是后台生成的保活身份，
+     * 只会在全部任务结束后由 ChatGenerationService 自行退出。
+     */
+    fun onAppForeground() {
+        if (chatGenerationManager.activeGenerations.value.isEmpty()) {
+            runCatching { notificationManager.updateLiveProgress("", 0, false) }
+                .onFailure { Logger.w("ChatVM", "清理进度通知失败: ${it.message}") }
+        } else {
+            Logger.i(
+                "ChatViewModel",
+                "foreground resumed; keep generation service alive, tasks=${chatGenerationManager.activeGenerations.value.size}",
+            )
+        }
+        refreshDisplayedSessionFromDatabase()
+    }
+
+    /** 从 Room 刷新当前查看会话，不修改导航焦点，也不取消后台生成。 */
+    private fun refreshDisplayedSessionFromDatabase() {
+        val sessionId = displayedSessionId() ?: return
+        sessionMemoryCache.remove(sessionId)
+        viewModelScope.launch {
+            val loaded =
+                runCatching {
+                    withContext(Dispatchers.IO) { messageController.loadMessagesPaged(sessionId) }
+                }.onFailure { Logger.w("ChatVM", "前台刷新会话失败: ${it.message}") }.getOrNull() ?: return@launch
+            if (displayedSessionId() != sessionId) return@launch
+            val (messages, hasMore) = loaded
+            val isBackgroundStreaming = chatGenerationManager.isStreaming(sessionId)
+            val restoredAgentPlans =
+                messageController.restoreAgentPlansForSession(
+                    sessionId,
+                    messages,
+                    settleUnfinished = !isBackgroundStreaming,
+                )
+            _messages.value = messages
+            _state.update { state ->
+                if (displayedSessionId(state) != sessionId) {
+                    state
+                } else {
+                    state.copy(
+                        hasMoreHistory = hasMore,
+                        isLoadingMore = false,
+                        memoryCacheHit = false,
+                        agentPlans = restoredAgentPlans,
+                        isStreaming = isBackgroundStreaming,
+                        isWaitingFirstToken =
+                        isBackgroundStreaming && messages
+                            .lastOrNull { it.role == MessageRole.ASSISTANT }
+                            ?.let { it.content.isBlank() && it.toolCalls.isNullOrEmpty() }
+                            == true,
+                    )
+                }
+            }
+            val treeSnapshot = withContext(Dispatchers.IO) { treeSnapshotStore?.load(sessionId) }
+            if (displayedSessionId() == sessionId) {
+                messageController.rebuildConversationTree(previousOverride = treeSnapshot)
+            }
+        }
+    }
+
+    /**
+     * 通知 ticker 当前 session 结束(fire-and-forget)。
+     *
+     * Phase 8.5 修复: 原实现用 `runBlocking { settings.getSelectedModel() }` 在主线程阻塞,
+     * onCleared / createNewSession / switchSession 调用时会 ANR。
+     * 改为:model 传 null(MemoryTicker 内部 launchTracked 异步执行,能处理 null model
+     * 的降级场景),完全去掉 runBlocking。
+     */
+    private fun notifySessionEndForCurrent() {
+        // v1.0.52 P2-3: 会话结束/切换前触发 AI 记忆自动保存(非阻塞,后台执行)
+        triggerMemoryAutoSaveIfNeeded()
+        streamCoordinator.notifySessionEndForCurrent()
+    }
+
+    /**
+     * v1.0.52 P2-3: 触发 AI 记忆自动保存(会话结束/切换时)。
+     *
+     * 把当前会话的对话历史交给 [MemoryAutoSaveScheduler],由其在后台 scope 中
+     * 调 LLM 提取实体/关系/合并/分类,非阻塞,不影响 UI。
+     *
+     * 仅在 [memoryAutoSaveScheduler] 非空时触发;
+     * 历史为空或过短(<2 条)时跳过。
+     */
+    private fun triggerMemoryAutoSaveIfNeeded() {
+        val scheduler = memoryAutoSaveScheduler ?: return
+        val sessionId = displayedSessionId() ?: return
+        // v1.0.54: 30 秒内同会话去重 — 切 Tab/切会话/重启上下文会反复触发
+        //   notifySessionEndForCurrent,每次排队一个 autoSave;网络慢时堆积十几次,
+        //   用户感知"回复后一直不停下"(后台持续调用 completeText)。
+        val now = System.currentTimeMillis()
+        if (sessionId == lastAutoSaveSessionId && now - lastAutoSaveAt < 30_000L) return
+        lastAutoSaveSessionId = sessionId
+        lastAutoSaveAt = now
+        val uiHistory = _messages.value
+        if (uiHistory.size < 2) return
+        val assistantId = _state.value.currentAssistant?.id ?: "default"
+        val scope = if (assistantId == "default") "main" else assistantId
+        val locale = "zh-CN"
+        // 在排队前捕获当前空间，不能把后台提取永远写入 default；
+        // 之后用户切换空间也不会改变这次 session 的归属。
+        viewModelScope.launch(Dispatchers.IO) {
+            // 记忆提取不能受聊天页首屏分页限制;优先读取完整持久历史,
+            // 再补上尚未落库的 UI 消息(例如切换/进程边界上的最后一轮)。
+            val dbHistory =
+                if (settings.memoryConfigCache.conversationRecallEnabled) {
+                    resultOf { sessionRepository.getAllMessagesForWarmup(sessionId) }
+                        .onError { msg, t -> Logger.w("ChatVM", "memory full history load failed: $msg", t) }
+                        .getOrNull()
+                        .orEmpty()
+                } else {
+                    emptyList()
+                }
+            val dbIds = dbHistory.mapTo(HashSet()) { it.id }
+            val history = if (dbHistory.isEmpty()) {
+                uiHistory
+            } else {
+                dbHistory + uiHistory.filter { it.id !in dbIds }
+            }
+            if (history.size < 2) return@launch
+            val spaceId = settings.currentSpaceIdFlow.firstOrNull().orEmpty().ifBlank { "default" }
+            // model 传 null,MemoryLlmClient 实现侧用 Provider 配置的默认模型
+            scheduler.scheduleAutoSave(
+                sessionId = sessionId,
+                history = history,
+                assistantId = assistantId,
+                spaceId = spaceId,
+                scope = scope,
+                model = null,
+                locale = locale,
+            )
+        }
+    }
+
+    /**
+     * v1.80 (M-CVM2): 标记当前 assistant 消息为 [已中断] 并把部分回复落盘。
+     *
+     * 在流式被取消(用户点停止/切会话)或异常中断时调用,确保已接收的内容不随 ViewModel 销毁丢失。
+     * 持久化用 [NonCancellable] 包裹,保证协程被取消时仍能完成 DB 写入
+     * (否则 suspend 调用在已取消协程中会立即抛 CancellationException,落盘失败)。
+     */
+    // A-12/A-14: 透传 expectedAssistantId — [已中断] 只允许标记本轮生成消息
+    private suspend fun persistInterruptedAssistant(
+        sessionId: String,
+        partialMsg: UIMessage? = null,
+        expectedAssistantId: Uuid? = null,
+        durationMs: Long? = null,
+    ) = streamCoordinator.persistInterruptedAssistant(sessionId, partialMsg, expectedAssistantId, durationMs)
+
+    /**
+     * v1.43: 周期性落盘 — 把当前 assistant 消息的流中进度持久化到数据库,
+     * 让切页/后台后的新 ViewModel 能从 DB 恢复最新内容。
+     * 不提取产物(产物只在流式结束后提取),也不附加 citation(流式中 pending)。
+     *
+     * v1.97 (P1-2): 周期性落盘用 skipFts=true 跳过 FTS 重建(toNgram 对长文本开销大)。
+     * 流式结束后最终落盘(直接 upsertMessage)会同步 FTS;中断走 persistInterruptedAssistant 也同步。
+     * 若 app 崩溃导致 FTS 漂移,下次启动 ensureFtsIndexConsistent 会自动 rebuild。
+     */
+    private suspend fun persistCurrentAssistant(sessionId: String, assistantId: Uuid, msg: UIMessage? = null) =
+        streamCoordinator.persistCurrentAssistant(sessionId, assistantId, msg, ::addError)
+
+    private fun updateAssistant(
+        id: Uuid,
+        content: String,
+        reasoning: String? = null,
+        imageBase64List: List<String>? = null,
+        imageUrls: List<String>? = null,
+        videoFileUri: String? = null,
+        isStreaming: Boolean = false,
+    ) = streamCoordinator.updateAssistant(id, content, reasoning, imageBase64List, imageUrls, videoFileUri, isStreaming)
+
+    /**
+     * B10: 流式 ThinkTag 实时剥离(轻量纯函数路径)。
+     *
+     * 只有缓冲内容含 `<think>` 标记时才做视觉转换,其余情况直接走原始
+     * [updateAssistant] 快速路径 —— 不含标签的普通流式路径零行为变化。
+     *
+     * 性能契约(替代原 applyVisualTransform 全管道调用):
+     *  - 短路: 先做一次 O(n) 的 `contains("<think>")`,绝大多数 chunk 不含标签,
+     *    直接命中快速路径,不触达任何转换逻辑。
+     *  - 轻量: 命中时调用 [splitThinkTagsForStreaming] 纯函数(单趟正则 + 单趟字符串拼接),
+     *    不再跑 transformerPipeline.applyVisualTransform(那会遍历全部 Transformer
+     *    并为每次节流 flush 构造临时消息列表)。
+     *  - 触发频率: 每次节流 UI flush 一次(默认 50ms,长文本按 streamFlushIntervalMs 自适应放大),
+     *    且仅在内容含 `<think>` 期间;一次生成通常只在开头 think 段落命中。
+     *
+     * 说明: 流式视觉转换当前唯一实现是 ThinkTag 剥离;若将来新增 visualTransform 钩子,
+     * 需评估是否并入本轻量路径(而非无条件回退全管道)。
+     */
+    private suspend fun updateAssistantWithVisualTransform(
+        assistantId: Uuid,
+        content: String,
+        reasoning: String? = null,
+        isStreaming: Boolean = false,
+    ) {
+        val (visualReasoning, visualContent) =
+            if (content.contains("<think>", ignoreCase = true)) {
+                splitThinkTagsForStreaming(content, reasoning)
+            } else {
+                reasoning to content
+            }
+        updateAssistant(assistantId, visualContent, visualReasoning, isStreaming = isStreaming)
+    }
+
+    // ── v1.135 / P2-23: 媒体工具结果落盘(工具本体已迁至 MediaGenToolsImpl) ──────
+
+    /**
+     * 审计修复 (S-01): 工具执行成功后把含媒体的消息立即落盘。
+     *
+     * 工具实现见 [io.zer0.muse.tools.MediaGenToolsImpl](App 启动时注册),本方法由
+     * [ChatMediaGenHost] 的 persistMediaMessage 回调在"当前会话仍显示中"时调用。
+     *
+     * 背景: 多轮 Agent Loop 中,工具轮消息 A1 在工具执行前已被
+     * ToolOrchestrator.persistAssistantToolMsg 落盘(无媒体字段),此后没有任何代码
+     * 重新 upsert A1 — 媒体只存在于内存 _messages,重启/切页后图片视频全部丢失。
+     * 收尾合并只处理 finalAssistantMessage(A2),对 A1 是 no-op。
+     *
+     * 落盘对象取 _messages 中该 id 的当前消息(含 updateAssistant 写入的媒体),
+     * 用 NonCancellable 包裹保证取消时也能完成写入。
+     */
+    private suspend fun persistToolMessageMedia(sessionId: String?, assistantId: Uuid) {
+        if (sessionId.isNullOrBlank()) return
+        val msg = _messages.value.firstOrNull { it.id == assistantId } ?: return
+        if (msg.imageUrls.isEmpty() && msg.imageBase64List.isEmpty() && msg.videoFileUri == null) return
+        withContext(Dispatchers.IO + NonCancellable) {
+            // B-1: 会话已删除则跳过媒体消息落盘,防止删后"复活"。
+            if (generationController.isSessionWritesSuppressed(sessionId).not()) {
+                runCatching { sessionRepository.upsertMessage(sessionId, msg) }
+                    .onFailure { Logger.e("ChatVM", "媒体消息落盘失败 | session=$sessionId | id=$assistantId", it) }
+            }
+        }
+    }
+
+    // ── Phase 10.1: 任务卡完整调度(v1.134 P1-5 转发到 taskCardCoordinator) ────
+
+    /** 判断工具执行结果是否成功(转发到 taskCardCoordinator)。 */
+    private fun isToolResultSuccess(result: String): Boolean = taskCardCoordinator.isToolResultSuccess(result)
+
+    /** 更新任务卡阶段(转发到 taskCardCoordinator)。 */
+    private fun updateTaskCardPhase(taskCardId: String, phase: io.zer0.muse.ui.taskcard.TaskCardPhase) =
+        taskCardCoordinator.updateTaskCardPhase(taskCardId, phase)
+
+    /** 精准更新单个 TaskStep(转发到 taskCardCoordinator)。 */
+    private fun updateTaskCardStep(
+        taskCardId: String,
+        stepIndex: Int,
+        transform: (io.zer0.muse.ui.taskcard.TaskStep) -> io.zer0.muse.ui.taskcard.TaskStep,
+    ) = taskCardCoordinator.updateTaskCardStep(taskCardId, stepIndex, transform)
+
+    /** 切换任务卡展开 / 折叠状态(转发到 taskCardCoordinator)。 */
+    fun toggleTaskCardExpand(taskCardId: String) = taskCardCoordinator.toggleTaskCardExpand(taskCardId)
+
+    /** 切换任务卡中单个尚未开始工具步骤的暂停意图。 */
+    fun toggleTaskStepPause(taskCardId: String, stepId: String) =
+        taskCardCoordinator.toggleTaskStepPause(taskCardId, stepId)
+
+    /** 切换任务卡中所有尚未开始工具步骤的暂停意图。 */
+    fun toggleTaskCardPause(taskCardId: String) =
+        taskCardCoordinator.toggleTaskCardPause(taskCardId)
+
+    /**
+     * 重试任务卡中失败的步骤(转发到 taskCardCoordinator)。
+     *
+     * - stepId = "ALL_FAILED":重试全部失败步骤
+     * - stepId = 具体 step id:重试单个失败步骤
+     *
+     * 注意:重试仅更新 UI 状态(FAILED → RUNNING → SUCCESS/FAILED),
+     * 不重新请求 LLM(工具参数已在步骤中保留)。
+     * 若需要让 LLM 基于新结果继续,用户应手动重生成。
+     */
+    fun retryFailedStep(taskCardId: String, stepId: String) = taskCardCoordinator.retryFailedStep(taskCardId, stepId)
+
+    // ── Phase 8.2: Assistant 多人格管理 ─────────────────────────────────────
+
+    /**
+     * v1.0.54: Agent Tab 切换助手 = 切换该助手的 Agent 对话房间。
+     *
+     * 设计约束(吸取 8-01 污染教训):
+     * - 仅 Agent 模式(isAgentMode=true)有效;任务 Tab 请用 [setSessionAssistant]
+     * - 只操作 agentSessionId,绝不碰 currentSessionId(任务会话完全隔离)
+     * - 不走 switchSession(绕开其缓存 put/get 与 currentSessionId 更新),
+     *   直接 loadMessagesPaged 查 DB,天然避免缓存键污染/空缓存自命中
+     * - 切换前停止全部后台生成(旧会话的 Agent Loop 不得继续跑)
+     */
+    fun switchAgentAssistant(assistantId: String) {
+        if (!_state.value.isAgentMode) return
+        val targetId = assistantId.ifBlank { "default" }
+        // v2.x: 切换序号 — 过期(被更新的切换取代)的异步加载结果在提交前丢弃,防止串会话
+        val switchToken = io.zer0.muse.ui.chat.SessionSwitchGuard.begin()
+        // 停止所有后台生成 + 脱离 UI 流式 + 停 TTS/ASR,与 switchSession 一致
+        chatGenerationManager.stop()
+        runCatching { io.zer0.muse.schedule.ChatGenerationService.stop(appContext) }
+        if (_state.value.isStreaming) detachStreaming()
+        stopTts()
+        disposeAsr()
+        notifySessionEndForCurrent()
+        viewModelScope.launch {
+            // 取 2 条并排除当前会话:命中历史房间则恢复,否则新建
+            val recent = sessionRepository.getRecentAgentByAssistant(targetId, 2)
+            val current = _state.value.agentSessionId
+            val target = recent.firstOrNull { it.id != current }
+            val sessionId = target?.id ?: sessionRepository.createAgentSession(assistantId = targetId)
+            if (target != null) {
+                io.zer0.common.Logger.i("ChatVM", "switchAgentAssistant: 命中历史房间 ${target.id}(assistant=$targetId)")
+            } else {
+                io.zer0.common.Logger.i("ChatVM", "switchAgentAssistant: 新建房间 $sessionId(assistant=$targetId)")
+            }
+            // v1.0.54: 同步"默认 Agent 助手"偏好 — 退出再进入 Agent Tab 时保持该助手
+            //   (setAgentMode(true) 按此偏好恢复房间),设置页入口看到的值也一致
+            runCatching {
+                val cfg = settings.proactiveMessageConfigFlow.first()
+                if (cfg.agentId != targetId) {
+                    settings.saveProactiveMessageConfig(cfg.copy(agentId = targetId))
+                }
+            }
+            // 切换会话引用计数(与 setAgentMode 一致)
+            _state.value.agentSessionId?.let { sessionManager.release(it) }
+            sessionManager.acquire(sessionId)
+            // 预加载消息(直接查 DB,不读缓存),一次性更新状态
+            val (messages, hasMore) = messageController.loadMessagesPaged(sessionId)
+            if (io.zer0.muse.ui.chat.SessionSwitchGuard.isStale(switchToken)) {
+                // 已被更新的切换取代:释放本次 acquire,丢弃加载结果
+                sessionManager.release(sessionId)
+                Logger.i("ChatVM", "switchAgentAssistant 结果过期,丢弃: $sessionId")
+                return@launch
+            }
+            val permissionMode =
+                sessionPermissionStore.getMode(
+                    sessionId,
+                    settings.defaultSessionPermissionModeFlow.first(),
+                )
+            val assistant =
+                assistantRepository.getById(targetId)
+                    ?: assistantRepository.getById("default")
+            val restoredAgentPlans =
+                messageController.restoreAgentPlansForSession(
+                    sessionId,
+                    messages,
+                    // 切换助手已停止生成，旧计划应收尾，不要留下转圈卡。
+                    settleUnfinished = true,
+                )
+            _messages.value = messages
+            _state.update {
+                it.copy(
+                    agentSessionId = sessionId,
+                    currentAssistant = assistant,
+                    errors = emptyList(),
+                    hasMoreHistory = hasMore,
+                    isLoadingMore = false,
+                    lastHistoryLoadCount = 0,
+                    isStreaming = false,
+                    // v1.0.72 fix: 切换助手清空引用(防跨会话污染)
+                    replyingTo = null,
+                    replyQuoteOverride = null,
+                    taskCards = emptyMap(),
+                    toolCallHistory = emptyList(),
+                    agentPlans = restoredAgentPlans,
+                    visionAssistedMessageIds = emptySet(),
+                    visionProgress = null,
+                    sessionPermissionMode = permissionMode,
+                    listFirstVisibleItemIndex = messages.lastIndex.coerceAtLeast(0),
+                    listFirstVisibleItemScrollOffset = 0,
+                )
+            }
+            refreshContextInfo()
+        }
+    }
+
+    /**
+     * 切换当前会话绑定的 Assistant。
+     * - 持久化到 sessions.assistantId
+     * - 更新 currentAssistant 状态(影响下一次 launchStream)
+     * - 不重新发消息(避免误触发);用户可手动重生成
+     */
+    fun setSessionAssistant(assistantId: String) {
+        val sessionId = displayedSessionId() ?: return
+        viewModelScope.launch {
+            sessionRepository.setSessionAssistant(sessionId, assistantId)
+            val assistant =
+                assistantRepository.getById(assistantId)
+                    ?: assistantRepository.getById("default")
+            _state.update { it.copy(currentAssistant = assistant) }
+        }
+    }
+
+    /** 新增 Assistant。返回新 id。 */
+    fun createAssistant(name: String, callback: (String) -> Unit = {}) {
+        viewModelScope.launch {
+            val id = "assistant-" + System.currentTimeMillis()
+            val now = System.currentTimeMillis()
+            assistantRepository.upsert(
+                AssistantEntity(
+                    id = id,
+                    name = name.ifBlank { "新助手" },
+                    avatarEmoji = "",
+                    // v1.0.51: 新建助手预填默认 prompt(从 assets 加载,带 locale 回落)
+                    systemPrompt = assistantRepository.loadDefaultPrompt(),
+                    createdAt = now,
+                    updatedAt = now,
+                ),
+            )
+            callback(id)
+        }
+    }
+
+    /** 更新 Assistant 字段(任意 subset)。 */
+    fun saveAssistant(assistant: AssistantEntity) {
+        val now = System.currentTimeMillis()
+        val saved = assistant.copy(updatedAt = now)
+        viewModelScope.launch {
+            resultOf { assistantRepository.upsert(saved) }
+                .onSuccess {
+                    // Phase 8.5 修复: 用含新 updatedAt 的 saved 刷新 currentAssistant,避免 UI 拿到旧对象
+                    if (_state.value.currentAssistant?.id == assistant.id) {
+                        _state.update { it.copy(currentAssistant = saved) }
+                    }
+                }
+                .onError { msg, t ->
+                    Logger.e("ChatVM", "saveAssistant failed", t)
+                    reportError(appContext.getString(R.string.err_chat_assistant_save_failed, msg))
+                }
+        }
+    }
+
+    /** 删除 Assistant(不允许删 default,不允许删当前绑定的)。 */
+    fun deleteAssistant(id: String) {
+        if (id == "default") return
+        if (_state.value.currentAssistant?.id == id) return
+        viewModelScope.launch {
+            resultOf { assistantRepository.delete(id) }
+                .onError { msg, t ->
+                    Logger.e("ChatVM", "deleteAssistant failed", t)
+                    reportError(appContext.getString(R.string.err_chat_assistant_delete_failed, msg))
+                }
+        }
+    }
+
+    /**
+     * Phase 8.3: 切换消息收藏状态。
+     * - 同步 DB(乐观先改 UI 列表,DB 失败回滚)
+     * - 同时更新 messages(当前会话)与 favoriteMessages(跨会话列表)两个 state 字段
+     *
+     * Phase 8.5 修复: 原实现只在 `messages`(当前会话)里找 target,跨会话取消收藏
+     * (FavoritesScreen 点掉非当前会话的收藏)会因 target==null 直接 return,完全失效。
+     * 改为:先查 currentSession messages,找不到再查 favoriteMessages(跨会话收藏列表)。
+     */
+    fun toggleFavorite(messageId: Uuid) {
+        // v1.0.88 (S-4): 收藏变更同步失效内存缓存 — 否则会话缓存里消息的
+        // favorite 状态陈旧(气泡收藏图标与收藏面板不一致)。
+        displayedSessionId()?.let { sessionMemoryCache.remove(it) }
+        miscCoordinator.toggleFavorite(messageId)
+    }
+
+    /** 功能1: 设置消息表情回应(null = 取消)。 */
+    fun setReaction(messageId: Uuid, reaction: String?) {
+        val messageIdStr = messageId.toString()
+        viewModelScope.launch {
+            sessionRepository.setMessageReaction(messageIdStr, reaction?.takeIf { it.isNotEmpty() })
+            // 乐观更新 UI
+            _messages.value =
+                _messages.value.map { msg ->
+                    if (msg.id == messageId) msg.copy(reaction = reaction?.takeIf { it.isNotEmpty() }) else msg
+                }
+        }
+    }
+
+    /**
+     * v1.104 U7: 设置收藏分组标签(null = 移到未分组)。
+     *
+     * 乐观更新 favoriteMessages(立即改 tag,UI 立即响应);
+     * favoriteTags 列表由 DAO Flow 自动重新发射,无需手动维护。
+     * DB 写失败时回滚 favoriteMessages 中的 tag 字段。
+     */
+    fun setMessageFavoriteTag(messageId: Uuid, tag: String?) = miscCoordinator.setMessageFavoriteTag(messageId, tag)
+
+    /**
+     * v1.104 U7: 设置当前收藏夹的分组筛选条件。
+     *
+     *  - null = 显示全部
+     *  - 非空字符串 = 仅显示该 tag
+     *  - [FAVORITE_TAG_UNGROUPED] = 仅显示未分组
+     *
+     * FavoritesScreen 顶部 FilterChip 点击时调用。
+     */
+    fun setFavoriteTagFilter(tag: String?) = miscCoordinator.setFavoriteTagFilter(tag)
+
+    /**
+     * v2.0: 设置预设分类筛选(全部/灵感/代码/学习/自定义)。
+     * 设为 null 表示"全部",回退到 favoriteTagFilter。
+     */
+    fun setFavoriteGroup(group: String?) = miscCoordinator.setFavoriteGroup(group)
+
+    /**
+     * v1.48: 删除单条消息(长按菜单"删除消息")。
+     *
+     * 乐观更新 UI,失败时回滚并提示。
+     */
+    fun deleteMessage(messageId: Uuid) {
+        // v1.0.85 (T-2): 删除消息同步失效会话内存缓存 — 否则切走再切回时命中
+        // 删除前的旧快照,已删消息"复活"(用户反馈:删了重进还在)。
+        val sessionId =
+            displayedSessionId()
+        sessionId?.let { sessionMemoryCache.remove(it) }
+        // B-1: 删除前停止该会话在途生成并禁止后续落盘,防止已删消息被流式"复活"。
+        generationController.stopGenerationForSession(sessionId)
+        generationController.suppressSessionWrites(sessionId)
+        miscCoordinator.deleteMessage(messageId)
+        // v1.0.80 (T-4): 同步对话树 — 删除后若树仍保留被删消息,切回会话时
+        // rebuildConversationTree 会用 mergeRebuildMessages 把旧树消息合并回来,
+        // 再经 healBranchCounts 写回 DB,导致已删消息"复活"且旧消息时序错乱。
+        _conversationTree.value = _conversationTree.value.removeMessage(messageId)
+        val tree = _conversationTree.value
+        val sid = sessionId
+        if (sid != null) {
+            viewModelScope.launch(Dispatchers.IO) { treeSnapshotStore?.save(sid, tree) }
+        }
+    }
+
+    /**
+     * U-16: 删除目标消息及其后全部消息(截断语义)。
+     * 文档 §4 承诺"只删这条,或连同后续一起删"。数据层走 sessionRepository.truncateFrom,
+     * UI 层由 [ChatMiscCoordinator.deleteMessagesFrom] 乐观更新并于失败回滚。
+     */
+    fun deleteMessageWithFollowing(messageId: Uuid) {
+        val sessionId =
+            displayedSessionId() ?: return
+        sessionMemoryCache.remove(sessionId)
+        // B-1: 删除前停止该会话在途生成并禁止后续落盘,防止已删消息被流式"复活"。
+        generationController.stopGenerationForSession(sessionId)
+        generationController.suppressSessionWrites(sessionId)
+        miscCoordinator.deleteMessagesFrom(messageId, sessionId)
+        // 同步对话树:移除该消息节点(后续节点由 DB 截断,切回时 rebuild 纠正)
+        _conversationTree.value = _conversationTree.value.removeMessage(messageId)
+        val tree = _conversationTree.value
+        viewModelScope.launch(Dispatchers.IO) { treeSnapshotStore?.save(sessionId, tree) }
+    }
+
+    // ── B7-01: 消息多选批量操作 ──────────────────────────────────────────
+
+    fun setSelectionMode(enabled: Boolean) {
+        _state.update {
+            it.copy(
+                selectionMode = enabled,
+                selectedMessageIds = if (enabled) it.selectedMessageIds else emptySet(),
+            )
+        }
+    }
+
+    fun toggleMessageSelection(messageId: Uuid) {
+        _state.update {
+            val id = messageId.toString()
+            it.copy(
+                selectedMessageIds =
+                if (id in it.selectedMessageIds) {
+                    it.selectedMessageIds - id
+                } else {
+                    it.selectedMessageIds + id
+                },
+            )
+        }
+    }
+
+    fun selectAllMessages(ids: Collection<String>) {
+        _state.update { it.copy(selectedMessageIds = ids.toSet()) }
+    }
+
+    /** B7-03: 滚动到底部时标记当前会话已读。 */
+    fun markSessionRead() {
+        val sessionId = displayedSessionId() ?: return
+        // 新会话消息可能尚未加载（_messages 为空），此时也必须按 messageCount 标记已读，
+        // 否则 lastReadCount 一直为 0，messageCount - lastReadCount > 0，新会话永远显示“未读 1”。
+        viewModelScope.launch {
+            val session = _state.value.sessions.find { it.id == sessionId }
+            val last = _messages.value.lastOrNull()
+            val readCount = session?.messageCount?.coerceAtLeast(_messages.value.size) ?: _messages.value.size
+            sessionRepository.updateLastReadMessage(sessionId, last?.id?.toString() ?: "", readCount)
+        }
+    }
+
+    fun deleteSelectedMessages() {
+        val ids = _state.value.selectedMessageIds
+        if (ids.isEmpty()) return
+        ids.forEach { id ->
+            runCatching { Uuid.parse(id) }.getOrNull()?.let { deleteMessage(it) }
+        }
+        _state.update { it.copy(selectionMode = false, selectedMessageIds = emptySet()) }
+    }
+
+    // ── Phase 9.1 (M13): 文件夹分组 CRUD ──────────────────────────────────
+
+    /** 新建文件夹。 */
+    fun createFolder(name: String) = miscCoordinator.createFolder(name, ::reportError)
+
+    /** 重命名文件夹。 */
+    fun renameFolder(id: String, name: String) = miscCoordinator.renameFolder(id, name, ::reportError)
+
+    /** 删除文件夹(关联会话移到未分组)。 */
+    fun deleteFolder(id: String) = miscCoordinator.deleteFolder(id, ::reportError)
+
+    /** 切换文件夹展开/折叠状态。 */
+    fun toggleFolderExpanded(id: String, expanded: Boolean) = miscCoordinator.toggleFolderExpanded(id, expanded)
+
+    /** 移动会话到文件夹(folderId=null = 移到未分组)。 */
+    fun moveSessionToFolder(sessionId: String, folderId: String?) = miscCoordinator.moveSessionToFolder(sessionId, folderId, ::reportError)
+
+    /** P0-1 修复: 切换会话置顶状态。 */
+    fun togglePinned(sessionId: String) = miscCoordinator.togglePinned(sessionId, ::reportError)
+
+    /** B7-05: 持久化置顶会话拖拽后的新顺序。 */
+    fun reorderPinnedSessions(ids: List<String>) = miscCoordinator.reorderPinnedSessions(ids, ::reportError)
+
+    /**
+     * Phase 8.4: 切换联网搜索开关(InputBar 上的图标按钮)。
+     * 仅改 UI 即时反馈 + 持久化到 settings(下次启动恢复)。
+     */
+    fun toggleWebSearch() = settingsController.toggleWebSearch()
+
+    /** v0.39: 切换深度思考开关(仅运行时状态,不持久化,下次进入会话恢复助手默认)。 */
+    fun toggleDeepThinking() = settingsController.toggleDeepThinking()
+
+    /**
+     * v1.0.47 P5-6: 循环深度思考级别(LOW → MEDIUM → HIGH → XHIGH → LOW)。
+     *
+     * 仅在 [ChatUiState.deepThinkingEnabled]=true 时由 UI 级别胶囊调用。
+     * 不含 OFF/OFF 由 toggleDeepThinking 负责;此处只调档位。
+     */
+    fun cycleDeepThinkingLevel() = settingsController.cycleDeepThinkingLevel()
+
+    /** v1.43: 选中产物卡片,打开 ArtifactViewerDialog。 */
+    fun selectArtifact(artifact: io.zer0.muse.data.artifact.ArtifactEntity) = mediaController.selectArtifact(artifact)
+
+    /** v1.43: 关闭产物卡片查看弹窗。 */
+    fun dismissArtifactViewer() = mediaController.dismissArtifactViewer()
+
+    /** v1.43: 观察某条消息关联的产物卡片列表。 */
+    fun observeArtifactsByMessage(messageId: String): kotlinx.coroutines.flow.Flow<List<io.zer0.muse.data.artifact.ArtifactEntity>> =
+        mediaController.observeArtifactsByMessage(messageId)
+
+    /** v1.45: 缓存列表滚动位置,切页/后台后恢复。 */
+    fun onListScrollPositionChanged(index: Int, offset: Int) = messageController.onListScrollPositionChanged(index, offset)
+
+    /** v1.45: 切换指定消息 mood 块的展开/折叠状态。 */
+    fun toggleMessageMoodExpanded(messageId: String) = messageController.toggleMessageMoodExpanded(messageId)
+
+    /** v1.45: 切换指定消息 reasoning 块的展开/折叠状态。 */
+    fun toggleMessageReasoningExpanded(messageId: String) = messageController.toggleMessageReasoningExpanded(messageId)
+
+    /** v1.64: 切换指定消息 reflection 块的展开/折叠状态。 */
+    fun toggleMessageReflectionExpanded(messageId: String) = messageController.toggleMessageReflectionExpanded(messageId)
+
+    /** v2.4.6: 切换指定消息译文块的展开/折叠状态。 */
+    fun toggleMessageTranslationExpanded(messageId: String) = messageController.toggleMessageTranslationExpanded(messageId)
+
+    /**
+     * Phase 8.7: 切换消息朗读状态。
+     * - 当前正在朗读这条消息 → 停止
+     * - 当前正在朗读其他消息或未朗读 → 开始朗读这条
+     *
+     * @param messageId 消息 id
+     * @param content 待朗读的文本(含 Markdown 会被 TtsManager 自动剥离)
+     *
+     * v1.105: 委托至 [ChatAudioCoordinator.toggleTts]。
+     */
+    fun toggleTts(messageId: Uuid, content: String) {
+        // v1.0.4 (P2): TTS 未就绪时给即时反馈(原仅静默返回 false,用户感觉"点击没反应")
+        // 仅当当前消息未在播放时检查(speakingMessageId == messageId 时是停止操作,无需就绪)
+        if (_state.value.speakingMessageId != messageId && !ttsManager.isReady.value) {
+            // 区分「还在初始化」与「初始化已失败」：后者不该一直让用户“稍后重试”
+            MuseToast.show(
+                appContext.getString(
+                    if (ttsManager.initFailedState.value) {
+                        R.string.speech_tts_init_failed
+                    } else {
+                        R.string.tts_not_ready
+                    },
+                ),
+            )
+            return
+        }
+        audioCoordinator.toggleTts(messageId, content, ::reportError)
+    }
+
+    /** Phase 8.7: 停止当前朗读(切换会话/退出页面时调用)。v1.105: 委托至 [ChatAudioCoordinator]。 */
+    fun stopTts() {
+        audioCoordinator.stopTts()
+    }
+
+    // ── v1.91: 流式 ASR(v1.105 委托至 ChatAudioCoordinator)─────────────
+
+    /** v1.91: 开始流式录音识别。v1.105: 委托至 [ChatAudioCoordinator]。 */
+    fun startStreamingAsr() {
+        audioCoordinator.startStreamingAsr()
+    }
+
+    /** v1.91: 停止流式录音,等待最后结果。v1.105: 委托至 [ChatAudioCoordinator]。 */
+    fun stopStreamingAsr() {
+        audioCoordinator.stopStreamingAsr()
+    }
+
+    /** v1.91: 取消流式录音(恢复原始输入框文本)。v1.105: 委托至 [ChatAudioCoordinator]。 */
+    fun cancelStreamingAsr() {
+        audioCoordinator.cancelStreamingAsr()
+    }
+
+    /** v1.91: 释放 ASR Controller(会话切换/ViewModel 销毁时)。v1.105: 委托至 [ChatAudioCoordinator]。 */
+    fun disposeAsr() {
+        audioCoordinator.disposeAsr()
+    }
+
+    /** Phase 9.3 (M2): 保存 ASR 配置。v1.105: 委托至 [ChatAudioCoordinator]。 */
+    fun saveAsrConfig(config: io.zer0.muse.asr.AsrConfig) {
+        audioCoordinator.saveAsrConfig(config)
+    }
+
+    /**
+     * Phase 9.3 (M2): 判断当前是否应走 API 录音路径(而非系统 Intent)。
+     * v1.105: 委托至 [ChatAudioCoordinator]。
+     */
+    fun shouldUseApiRecording(): Boolean {
+        return audioCoordinator.shouldUseApiRecording()
+    }
+
+    // ── 语音对话模式(完整 ASR + AI + TTS 循环)──────────────────────────────
+
+    /**
+     * 进入语音对话模式:开始首轮 LISTENING 并启动状态机循环观察。
+     *
+     * 前置条件:
+     *  - RECORD_AUDIO 权限已授予(UI 层负责检查/申请)
+     *  - ASR API 已配置([shouldUseApiRecording] 返回 true),否则报错退出
+     *
+     * 状态流转:IDLE → LISTENING(启动 ASR)→ 等待用户说话 → 自动发送 → THINKING →
+     * SPEAKING(TTS 朗读)→ LISTENING(连续对话)→ ...
+     */
+    fun startVoiceConversation() = mediaController.startVoiceConversation()
+
+    /**
+     * 退出语音对话模式:停止 ASR/TTS,取消循环观察协程,状态归零。
+     *
+     * 调用时机:用户点击关闭按钮(X)、页面退出、ViewModel 销毁。
+     */
+    fun stopVoiceConversation() = mediaController.stopVoiceConversation()
+
+    /**
+     * 中断当前语音对话状态(用户点击主按钮)。
+     *
+     * 行为:
+     *  - LISTENING:停止 ASR,丢弃当前转写
+     *  - THINKING:停止 ASR + 停止 AI 生成
+     *  - SPEAKING:停止 TTS 朗读
+     *  - IDLE:无操作
+     *
+     * 中断后状态回到 IDLE,等待用户再次点击主按钮开始新一轮对话。
+     */
+    fun interruptVoiceConversation() = mediaController.interruptVoiceConversation()
+
+    /**
+     * 启动一轮 ASR 录音,识别文本通过回调写入 [_voiceConversationTranscript]。
+     *
+     * 注意:不写入输入框字段(语音对话模式不走 InputBar 文本流),
+     * 与 [io.zer0.muse.ui.chat.ChatAudioCoordinator.startStreamingAsr] 区分。
+     */
+    /** 语音对话循环观察协程已迁至 ChatMediaController。 */
+
+    /**
+     * 启动状态机循环观察协程:监听 ASR/流式/TTS 状态切换,自动驱动状态机循环。
+     *
+     * 三个观察点(单一 collect,内部分支处理):
+     *  1. LISTENING 状态下 ASR isRecording 由 true → false:录音结束,取 transcript 自动发送 → THINKING
+     *  2. THINKING 状态下 isStreaming 由 true → false:AI 回复完成,取最后一条 assistant 消息调 TTS → SPEAKING
+     *  3. SPEAKING 状态下 isSpeaking 由 true → false:TTS 朗读完成,恢复录音 → LISTENING(连续对话)
+     *
+     * 协程在 [stopVoiceConversation] / [interruptVoiceConversation] 时被 cancel。
+     */
+    /** 语音对话状态机循环观察协程已迁至 ChatMediaController。 */
+
+    /** 查询系统 TTS 可用声音列表(切换语音 Bottom Sheet 用)。 */
+    fun getAvailableTtsVoices(): List<android.speech.tts.Voice> = mediaController.getAvailableTtsVoices()
+
+    /** 当前生效的 TTS 声音名称(用于切换语音 Sheet 标记选中项)。 */
+    fun currentTtsVoiceName(): String = mediaController.currentTtsVoiceName()
+
+    /**
+     * 切换 TTS 声音:立即应用到 TtsManager,并持久化到 Settings(下次启动仍生效)。
+     *
+     * @param voiceName 系统 TTS Voice 的 name(来自 [getAvailableTtsVoices])
+     */
+    fun setTtsVoice(voiceName: String) = mediaController.setTtsVoice(voiceName)
+
+    /**
+     * Phase 8.4: 保存 Web 搜索配置(Settings 页编辑后调用)。
+     * Phase 8.5 修复:同步调用 CompositeWebSearchService.updateConfig 使运行时切换立即生效。
+     */
+    fun saveWebSearchConfig(config: WebSearchConfig) {
+        viewModelScope.launch {
+            // v1.117: 改用 resultOf 避免吞 CancellationException(saveWebSearchConfig 是 suspend)
+            resultOf { settings.saveWebSearchConfig(config) }
+            // 同步刷新运行时 service,避免下次 search 仍用启动时旧 config
+            (webSearchService as? io.zer0.muse.web.CompositeWebSearchService)?.updateConfig(config)
+        }
+    }
+
+    // ── Phase 8.5: QuickMessages / Lorebook / PromptInjection ────────────
+
+    /**
+     * Phase 8.5: 切换当前模式(用于 PromptInjection)。
+     * "default" 表示无注入;其他模式触发对应 PromptInjection 条目。
+     */
+    fun setMode(mode: String) {
+        // v1.80 (M-CVM5): 原子更新
+        _state.update { it.copy(currentMode = mode) }
+    }
+
+    /** Phase 8.5: 取当前可用的模式列表(预置 + 数据库中已有的)。 */
+    fun getAvailableModes(): List<Pair<String, String>> = promptInjectionRepository.presetModes
+
+    /**
+     * Phase 8.5: 插入快捷消息到输入框。
+     * 支持 {{input}} / {{clipboard}} / {{date}} 模板变量替换。
+     * 若模板包含 {{input}},替换为当前输入框内容;否则追加到输入框末尾。
+     */
+    fun insertQuickMessage(quickMessage: QuickMessageEntity, clipboardText: String = "") {
+        val currentInput = _state.value.input
+        val rendered =
+            quickMessageRepository.renderTemplate(
+                template = quickMessage.content,
+                currentInput = currentInput,
+                clipboard = clipboardText,
+            )
+        // 若模板原文包含 {{input}},rendered 已替换;否则把渲染结果作为新输入
+        val newInput =
+            if (quickMessage.content.contains("{{input}}")) {
+                rendered
+            } else if (currentInput.isBlank()) {
+                rendered
+            } else {
+                "$currentInput\n\n$rendered"
+            }
+        // v1.80 (M-CVM5): 原子更新
+        _state.update { it.copy(input = newInput) }
+    }
+
+    /** v1.58: 插入 Prompt 模板内容到输入框(若输入框已有内容则追加)。 */
+    fun insertPromptTemplate(template: io.zer0.muse.data.prompttemplate.PromptTemplate) {
+        val currentInput = _state.value.input
+        val newInput =
+            if (currentInput.isBlank()) {
+                template.content
+            } else {
+                "$currentInput\n\n${template.content}"
+            }
+        // v1.80 (M-CVM5): 原子更新
+        _state.update { it.copy(input = newInput) }
+    }
+
+    /** Phase 8.5: 解析 Assistant.quickMessageIdsJson / lorebookIdsJson / modeInjectionIdsJson。 */
+    private fun parseIdList(json: String): List<String> = runCatching { idListJson.decodeFromString<List<String>>(json) }
+        .getOrDefault(emptyList())
+
+    // ── Phase 8.5: Lorebook / PromptInjection / QuickMessage CRUD(管理页用) ──
+
+    /**
+     * v1.97 (P1-1): 懒加载全部 Lorebook 条目(管理页进入时调用)。
+     * 替代原 init 中的常驻 Flow 收集器,减少聊天主流程的无谓 DB 观察开销。
+     */
+    fun refreshLorebooks() = miscCoordinator.refreshLorebooks()
+
+    /** ST-01: 收藏列表加载失败后的重试入口。 */
+    fun retryLoadFavorites() = loadFavorites()
+
+    /** ST-01: 归档会话列表加载失败后的重试入口。 */
+    fun retryLoadArchivedSessions() = loadArchivedSessions()
+
+    /** ST-01: 世界书列表加载失败后的重试入口。 */
+    fun retryLoadLorebooks() = miscCoordinator.refreshLorebooks()
+
+    /** ST-01: 观察跨会话收藏消息,失败时记录 [favoritesError] 供收藏页错误态展示。 */
+    private fun loadFavorites() {
+        viewModelScope.launch {
+            try {
+                sessionRepository.observeAllFavorites().collect { favs ->
+                    _state.update { it.copy(favoriteMessages = favs, isFavoritesLoading = false, favoritesError = null) }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _state.update {
+                    it.copy(
+                        isFavoritesLoading = false,
+                        favoritesError = e.message ?: appContext.getString(R.string.common_load_failed),
+                    )
+                }
+            }
+        }
+    }
+
+    /** ST-01: 观察已归档会话,失败时记录 [archivedSessionsError] 供归档页错误态展示。 */
+    private fun loadArchivedSessions() {
+        viewModelScope.launch {
+            try {
+                sessionRepository.observeArchived().collect { archived ->
+                    _state.update { it.copy(archivedSessions = archived, archivedSessionsError = null) }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _state.update { it.copy(archivedSessionsError = e.message ?: appContext.getString(R.string.common_load_failed)) }
+            }
+        }
+    }
+
+    /** Lorebook: 新增或更新。 */
+    fun saveLorebook(entity: LorebookEntity) = miscCoordinator.saveLorebook(entity)
+
+    /** Lorebook: 删除。 */
+    fun deleteLorebook(id: String) = miscCoordinator.deleteLorebook(id)
+
+    /**
+     * v1.97 (P1-1): 懒加载全部 PromptInjection 条目(管理页进入时调用)。
+     */
+    fun refreshPromptInjections() = miscCoordinator.refreshPromptInjections()
+
+    /** PromptInjection: 新增或更新。 */
+    fun savePromptInjection(entity: PromptInjectionEntity) = miscCoordinator.savePromptInjection(entity)
+
+    /** PromptInjection: 删除。 */
+    fun deletePromptInjection(id: String) = miscCoordinator.deletePromptInjection(id)
+
+    /**
+     * v1.97 (P1-1): 懒加载全部 QuickMessage 条目(管理页进入时调用)。
+     */
+    fun refreshAllQuickMessages() = miscCoordinator.refreshAllQuickMessages()
+
+    /** QuickMessage: 新增或更新。 */
+    fun saveQuickMessage(entity: QuickMessageEntity) = miscCoordinator.saveQuickMessage(entity)
+
+    /** QuickMessage: 删除。 */
+    fun deleteQuickMessage(id: String) = miscCoordinator.deleteQuickMessage(id)
+    private suspend fun persistCheckpointAndReleaseOutbox(
+        state: StreamRunState,
+        sessionId: String,
+        userMessageId: String,
+        assistantMessageId: String,
+        content: String,
+        createdAt: Long,
+    ) {
+        val pendingOutboxId = state.outboxId
+        val checkpointPersisted = resultOf {
+            if (pendingOutboxId != null) {
+                sessionRepository.upsertGenerationCheckpointAndDeleteOutbox(
+                    sessionId = sessionId,
+                    userMessageId = userMessageId,
+                    assistantMessageId = assistantMessageId,
+                    content = content,
+                    createdAt = createdAt,
+                    outboxId = pendingOutboxId,
+                )
+            } else {
+                sessionRepository.upsertGenerationCheckpoint(
+                    sessionId = sessionId,
+                    userMessageId = userMessageId,
+                    assistantMessageId = assistantMessageId,
+                    content = content,
+                    createdAt = createdAt,
+                )
+            }
+        }.onError { msg, _ -> Logger.w("ChatVM", "generation checkpoint 写入失败: $msg") }.isSuccess
+        if (checkpointPersisted && pendingOutboxId != null) {
+            state.outboxId = null
+        }
+    }
+}

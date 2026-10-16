@@ -1,0 +1,218 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    i18n review summary for ai / memory / transformer modules:
+    - ai module (standalone Gradle module): user-visible error messages are delivered
+      to UI via Result.Error/exceptions, but cannot reference app's R.string directly.
+      Each source file is annotated with // TODO i18n pending extraction; extraction
+      requires an error-code enum approach.
+    - memory module (standalone Gradle module): validation errors (MemoryConfig.validate)
+      and isZh time labels (Key Facts/Timeline etc.) are user-visible, but cross-module
+      and some labels participate in LLM output parsing contracts.
+      Each source file is annotated with // TODO i18n pending extraction.
+    - transformer module (inside app): per file review, all Chinese strings are LLM
+      prompt content (SYSTEM messages sent to LLM), logger messages, code comments, or
+      internal exception messages. No directly user-visible UI strings; kept as-is per
+      the "LLM prompts not extracted" rule.
+    This file currently has no string entries; it serves as a placeholder and review record.
+-->
+<resources>
+    <string name="memory_meta_hit_count">Использована %1$d раз</string>
+    <string name="memory_menu_history">История</string>
+    <string name="memory_revision_title">Журнал изменений</string>
+    <string name="memory_revision_empty">Изменений пока нет</string>
+    <string name="memory_revision_revert">Вернуть эту версию</string>
+    <string name="memory_revision_reverted">Версия восстановлена</string>
+    <string name="memory_revision_revert_failed">Не удалось восстановить</string>
+    <string name="memory_meta_last_hit">Последнее попадание %1$d дн. назад</string>
+    <!-- v4: memory importance related -->
+    <string name="memory_importance_normal">Нормальный</string>
+    <string name="memory_importance_important">Важный</string>
+    <string name="memory_importance_critical">Критический</string>
+    <string name="memory_importance_set_title">Установить важность</string>
+    <string name="memory_importance_normal_desc">Ежедневные предпочтения, безвредные, если их забыть</string>
+    <string name="memory_importance_important_desc">Средний риск, ошибки доставляют неудобства</string>
+    <string name="memory_importance_critical_desc">Высокий риск, ошибки причиняют вред (никогда не забывайте)</string>
+    <string name="memory_source_session">Источник: Сеанс %1$s</string>
+    <string name="memory_created_today">Добавлено сегодня</string>
+    <string name="memory_created_yesterday">Добавлено вчера</string>
+    <string name="memory_created_days_ago">Добавлено %1$d дней назад</string>
+    <string name="memory_sync_never">Память еще не сформирована, разговоров нет в долговременной памяти.</string>
+    <string name="memory_sync_recent">Последняя компиляция %1$d мин назад, память синхронизирована</string>
+    <string name="memory_sync_stale">Последняя компиляция %1$d мин назад, возможно, недавних разговоров еще нет в памяти.</string>
+    <string name="memory_screen_experience_category_general">Общая</string>
+    <string name="memory_chart_type_distribution_cd">Кольцевая диаграмма распределения типов памяти</string>
+    <string name="memory_chart_daily_trend_cd">График ежедневной динамики памяти</string>
+    <string name="memory_sync_set_importance_cd">Установить важность</string>
+
+    <!-- v6: MemoryViewModel CRUD error messages -->
+    <string name="memory_delete_failed">Не удалось удалить: %1$s</string>
+    <string name="memory_edit_failed">Не удалось изменить: %1$s</string>
+    <string name="memory_set_failed">Установить не удалось: %1$s</string>
+    <string name="memory_add_failed">Не удалось добавить: %1$s</string>
+    <string name="memory_add_experience_failed">Не удалось добавить опыт: %1$s</string>
+    <string name="memory_edit_experience_failed">Не удалось изменить опыт: %1$s</string>
+    <string name="memory_delete_experience_failed">Не удалось удалить опыт: %1$s</string>
+
+    <!-- v6: Compile section display titles -->
+    <string name="memory_compile_section_facts">Краткое изложение фактов</string>
+    <string name="memory_compile_section_today">Сегодня</string>
+    <string name="memory_compile_section_week">На этой неделе</string>
+    <string name="memory_compile_section_longterm">Долгосрочный</string>
+
+    <!-- v6: Summary item title -->
+    <string name="memory_summary_title">Сеанс %1$s</string>
+
+    <!-- v6: Error trace labels -->
+    <string name="memory_error_trace_header">== Ошибка памяти музы ==</string>
+    <string name="memory_error_trace_time">Время:</string>
+    <string name="memory_error_trace_exception">Исключение:</string>
+    <string name="memory_error_trace_message">Сообщение:</string>
+    <string name="memory_error_trace_device">Устройство:</string>
+    <string name="memory_error_trace_stack_header">== Трассировка стека ==</string>
+
+    <!-- v8: memory scope related -->
+    <string name="memory_scope_all">Все</string>
+    <string name="memory_scope_main">Главный помощник</string>
+    <string name="memory_scope_assistant">Помощник Памяти</string>
+    <string name="memory_scope_label">Объем памяти</string>
+
+    <!-- v1.0.52 P2-2: memory space related -->
+    <string name="memory_space_manage_title">Пространства памяти</string>
+    <string name="memory_space_create">Создать пространство</string>
+    <string name="memory_space_create_title">Новое пространство памяти</string>
+    <string name="memory_space_rename">Переименовать</string>
+    <string name="memory_space_rename_title">Переименовать пространство памяти</string>
+    <string name="memory_space_delete">Удалить</string>
+    <string name="memory_space_name_label">Имя пространства</string>
+    <string name="memory_space_fact_count">%1$d факты</string>
+    <string name="memory_space_entry">Пространства памяти</string>
+
+    <!-- MemoryScreen.kt: view mode toggle / export / stats card -->
+    <string name="memory_stats_view_list">Список</string>
+    <string name="memory_stats_view_timeline">Хронология</string>
+    <string name="memory_stats_export_title">Экспортировать память</string>
+    <string name="memory_stats_export_format_hint">Выберите формат экспорта:</string>
+    <string name="memory_stats_section_title">Статистика памяти</string>
+    <string name="memory_stats_total">Общий</string>
+    <string name="memory_stats_importance_distribution">Распределение важности</string>
+    <string name="memory_stats_top_sessions">Самые активные сессии</string>
+    <string name="memory_stats_session_count">%1$d записи</string>
+    <string name="memory_stats_trend_30_days">Тенденция за последние 30 дней</string>
+    <!-- 前端修复 (i18n-3.x): 群聊记忆 Tab + 时间轴筛选 i18n(临时复制中文,后续补译) -->
+    <string name="memory_group_chat_empty">Пока нет памяти группового чата</string>
+    <string name="memory_group_chat_count">Всего %1$d</string>
+    <string name="memory_group_chat_empty_hint">После каждого ответа ассистента в групповом чате здесь создается сводная память.\nЕсли стиль речи ассистента станет странным, вы можете удалить или очистить их здесь.</string>
+    <string name="memory_group_chat_clear_title">Очистить всю память группового чата</string>
+    <string name="memory_group_chat_clear_content">Очистить всю память группового чата? Ассистент больше не будет ссылаться на прежние сводки группового чата.</string>
+    <string name="memory_group_chat_delete_cd">Удалить</string>
+    <string name="memory_timeline_filter_all">Все</string>
+    <string name="memory_timeline_filter_fact">Факты</string>
+    <string name="memory_timeline_filter_summary">Сводка</string>
+    <string name="memory_timeline_filter_milestone">Вехи</string>
+    <string name="memory_tab_group_chat">Групповой чат</string>
+    <string name="memory_tab_graph">Дерево памяти</string>
+    <string name="memory_graph_preview_title">Дерево памяти</string>
+    <string name="memory_graph_preview_hint">Нажмите на воспоминание, чтобы увидеть связи</string>
+    <string name="memory_graph_preview_selected">В фокусе: %1$s</string>
+    <string name="memory_graph_preview_node_muse">Muse</string>
+    <string name="memory_graph_preview_node_android">Разработка Android</string>
+    <string name="memory_graph_preview_node_local_ai">Локальный ИИ</string>
+    <string name="memory_graph_preview_node_photo">Фотография</string>
+    <string name="memory_graph_preview_node_camera">Nikon Z50 II</string>
+    <string name="memory_graph_preview_node_goal">Долгосрочная цель</string>
+    <string name="memory_graph_preview_node_writing">Письмо</string>
+    <string name="memory_graph_empty_title">Нет данных о связях</string>
+    <string name="memory_graph_empty_subtitle">Когда воспоминания накопятся, связи появятся здесь</string>
+    <string name="memory_graph_node_type_label">Тип: %1$s</string>
+    <string name="memory_graph_node_pinned">Закреплено</string>
+    <string name="memory_graph_node_expired">Истекло</string>
+    <string name="memory_graph_node_related">%1$d связей</string>
+    <string name="memory_graph_load_failed">Ошибка загрузки</string>
+    <string name="memory_graph_category_preference">Предпочтение</string>
+    <string name="memory_graph_category_identity">Личность</string>
+    <string name="memory_graph_category_event">Событие</string>
+    <string name="memory_graph_category_relationship">Отношение</string>
+    <string name="memory_graph_category_goal">Цель</string>
+    <string name="memory_graph_category_medical">Здоровье</string>
+    <string name="memory_graph_category_general">Факт</string>
+    <string name="memory_graph_relation_related_to">Связано</string>
+    <string name="memory_graph_relation_causes">Влияет</string>
+    <string name="memory_graph_relation_explains">Объясняет</string>
+    <string name="memory_graph_relation_part_of">Часть от</string>
+    <string name="memory_graph_relation_contradicts">Противоречит</string>
+    <string name="memory_graph_relation_supports">Поддерживает</string>
+    <string name="memory_graph_edge_weight">Сила: %1$d%%</string>
+    <string name="memory_graph_edge_confirm">Подтвердить связь</string>
+    <string name="memory_graph_edge_delete">Удалить связь</string>
+    <string name="memory_delete_group_chat_failed">Не удалось удалить память группового чата: %1$s</string>
+    <string name="memory_clear_group_chat_failed">Не удалось очистить память группового чата: %1$s</string>
+    <string name="memory_dedup_button">Объединить повторяющиеся воспоминания</string>
+    <string name="memory_dedup_result">Объединено %1$s повторяющихся воспоминаний</string>
+    <string name="memory_dedup_failed">Не удалось удалить дубликаты памяти</string>
+    <string name="memory_compile_done">Компиляция памяти завершена</string>
+    <string name="memory_compile_failed">Не удалось скомпилировать память. Проверьте настройки модели и повторите попытку</string>
+    <string name="memory_menu_cd">Другие действия</string>
+    <string name="memory_menu_pin">Закрепить</string>
+    <string name="memory_menu_unpin">Открепить</string>
+    <string name="memory_menu_importance">Задать важность</string>
+    <string name="memory_menu_edit">Изменить</string>
+    <string name="memory_menu_delete">Удалить</string>
+    <string name="memory_center_fact_count">фактов</string>
+    <string name="memory_center_summary_count">Сводок: %1$d</string>
+    <string name="memory_center_updated">Обновлено %1$s</string>
+    <string name="memory_center_empty_title">Пока нет воспоминаний</string>
+    <string name="memory_center_empty_subtitle">Продолжайте общаться с Muse или скажите «запомни это», чтобы добавить факт.</string>
+    <string name="memory_center_ready_subtitle">Факты, которые Muse сейчас хранит о вас.</string>
+    <string name="memory_center_open_facts">Открыть библиотеку фактов</string>
+    <string name="memory_center_tab_stream">Поток памяти</string>
+    <string name="memory_center_tab_constellation">Созвездие памяти</string>
+    <string name="memory_center_stream_title">Недавно запомнено</string>
+    <string name="memory_center_library_title">Библиотека фактов</string>
+    <string name="memory_center_constellation_hint">Важные факты находятся ближе к центру. Факты видны даже до сортировки связей.</string>
+    <string name="memory_center_constellation_empty">Пока нет узлов фактов. Добавьте факт и вернитесь сюда.</string>
+    <string name="memory_center_filter_empty">В этой области или пространстве нет фактов. Попробуйте изменить фильтры выше.</string>
+    <string name="memory_center_scope_all">Все</string>
+    <string name="memory_center_space_default">По умолчанию</string>
+    <string name="memory_center_scope_line">%1$s · %2$s</string>
+    <string name="memory_center_filter_title">Фильтр</string>
+    <string name="memory_center_filter_scope">Область</string>
+    <string name="memory_center_filter_space">Пространство памяти</string>
+    <string name="memory_compile_running">Организация памяти…</string>
+    <string name="memory_organize_action">Организовать память</string>
+    <string name="memory_organize_stage_prepare">Подготовка</string>
+    <string name="memory_organize_stage_compile">Составление сводок</string>
+    <string name="memory_organize_stage_dedup">Объединение дубликатов</string>
+    <string name="memory_organize_stage_complete">Готово, объединено: %1$d</string>
+    <string name="memory_organize_stage_no_duplicates">Готово, дубликатов для объединения не найдено</string>
+    <string name="memory_organize_stage_failed">Не удалось организовать память, попробуйте снова</string>
+    <string name="memory_center_stream_subtitle">Сгруппированы по времени: факты из диалогов, выстроенные в ленту</string>
+    <string name="memory_center_facts_subtitle">Управление по записям: поиск, добавление, редактирование и удаление</string>
+    <string name="memory_center_filter_advanced">Расширенный фильтр</string>
+    <string name="memory_center_filter_importance">Важность</string>
+    <string name="memory_center_filter_importance_all">Все</string>
+    <string name="memory_center_filter_time">Период</string>
+    <string name="memory_center_filter_time_30">Последние 30 дней</string>
+    <string name="memory_center_filter_time_7">Последние 7 дней</string>
+    <string name="memory_center_filter_time_90">Последние 90 дней</string>
+    <string name="memory_center_filter_time_all">За всё время</string>
+    <string name="memory_contradictions_dismiss_cd">Подтвердить и удалить</string>
+    <string name="memory_contradictions_title">Противоречивые воспоминания, ожидающие подтверждения</string>
+    <string name="memory_delete_confirm_title">Удалить воспоминание</string>
+    <string name="memory_fact_source_label">Исходный диалог</string>
+    <string name="memory_pin_failed">Не удалось закрепить. Попробуйте снова.</string>
+    <string name="memory_stats_session_live">Диалог %1$d</string>
+    <string name="memory_stream_mode_list">Список</string>
+    <string name="memory_stream_mode_timeline">Хронология</string>
+    <string name="memory_unpin_failed">Не удалось открепить. Попробуйте снова.</string>
+    <string name="memory_graph_reset_view">Сбросить вид</string>
+    <!-- v2.2.1: подсказки об архивации/восстановлении библиотеки памяти -->
+    <string name="memory_archive_rebuilt_hint">Библиотека памяти была заархивирована и пересоздана из-за смены версии; часть истории могла не сохраниться</string>
+    <string name="memory_archive_recovered">Восстановлено %1$d воспоминаний из архива смены версии</string>
+    <string name="memory_archive_recovery_title">Доступен архив памяти</string>
+    <string name="memory_archive_recovery_message">Найден архив смены версии: сводок сессий — %1$d, скомпилированных разделов — %2$d. Текущая база памяти пуста, восстановление безопасно.</string>
+    <string name="memory_archive_recovery_action">Восстановить архив</string>
+    <string name="memory_archive_recovery_confirm_title">Восстановить архив памяти?</string>
+    <string name="memory_archive_recovery_confirm">Сводки и скомпилированная память будут восстановлены в пустую текущую базу без перезаписи существующих данных. Продолжить?</string>
+    <string name="memory_archive_recovery_done">Восстановлено записей памяти: %1$d</string>
+    <string name="memory_archive_recovery_failed">Не удалось восстановить архив памяти: %1$s</string>
+</resources>

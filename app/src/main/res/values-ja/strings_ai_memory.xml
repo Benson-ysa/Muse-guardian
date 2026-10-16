@@ -1,0 +1,218 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    i18n review summary for ai / memory / transformer modules:
+    - ai module (standalone Gradle module): user-visible error messages are delivered
+      to UI via Result.Error/exceptions, but cannot reference app's R.string directly.
+      Each source file is annotated with // TODO i18n pending extraction; extraction
+      requires an error-code enum approach.
+    - memory module (standalone Gradle module): validation errors (MemoryConfig.validate)
+      and isZh time labels (Key Facts/Timeline etc.) are user-visible, but cross-module
+      and some labels participate in LLM output parsing contracts.
+      Each source file is annotated with // TODO i18n pending extraction.
+    - transformer module (inside app): per file review, all Chinese strings are LLM
+      prompt content (SYSTEM messages sent to LLM), logger messages, code comments, or
+      internal exception messages. No directly user-visible UI strings; kept as-is per
+      the "LLM prompts not extracted" rule.
+    This file currently has no string entries; it serves as a placeholder and review record.
+-->
+<resources>
+    <string name="memory_meta_hit_count">ヒット %1$d 回</string>
+    <string name="memory_menu_history">変更履歴</string>
+    <string name="memory_revision_title">変更ログ</string>
+    <string name="memory_revision_empty">まだ変更はありません</string>
+    <string name="memory_revision_revert">この版に戻す</string>
+    <string name="memory_revision_reverted">この版に戻しました</string>
+    <string name="memory_revision_revert_failed">復元に失敗しました</string>
+    <string name="memory_meta_last_hit">最終ヒット %1$d 日前</string>
+    <!-- v4: memory importance related -->
+    <string name="memory_importance_normal">普通</string>
+    <string name="memory_importance_important">重要</string>
+    <string name="memory_importance_critical">致命的</string>
+    <string name="memory_importance_set_title">重要度の設定</string>
+    <string name="memory_importance_normal_desc">毎日の好み、忘れても無害</string>
+    <string name="memory_importance_important_desc">中リスク、間違いは迷惑を引き起こす</string>
+    <string name="memory_importance_critical_desc">リスクが高く、間違いは害をもたらします（決して忘れないでください）</string>
+    <string name="memory_source_session">出典: セッション%1$s</string>
+    <string name="memory_created_today">本日追加されました</string>
+    <string name="memory_created_yesterday">昨日追加されました</string>
+    <string name="memory_created_days_ago">%1$d 日前に追加されました</string>
+    <string name="memory_sync_never">記憶はまだ編集されておらず、会話は長期記憶に残っていない</string>
+    <string name="memory_sync_recent">最後にコンパイルされたのは %1$d 分前、メモリは同期されました</string>
+    <string name="memory_sync_stale">最後にコンパイルされたのは %1$d 分前ですが、最近の会話はまだメモリにない可能性があります。</string>
+    <string name="memory_screen_experience_category_general">一般</string>
+    <string name="memory_chart_type_distribution_cd">メモリタイプ分布ドーナツチャート</string>
+    <string name="memory_chart_daily_trend_cd">毎日のメモリ傾向グラフ</string>
+    <string name="memory_sync_set_importance_cd">重要度を設定する</string>
+
+    <!-- v6: MemoryViewModel CRUD error messages -->
+    <string name="memory_delete_failed">削除に失敗しました: %1$s</string>
+    <string name="memory_edit_failed">編集に失敗しました: %1$s</string>
+    <string name="memory_set_failed">設定に失敗しました: %1$s</string>
+    <string name="memory_add_failed">追加に失敗しました: %1$s</string>
+    <string name="memory_add_experience_failed">エクスペリエンスの追加に失敗しました: %1$s</string>
+    <string name="memory_edit_experience_failed">編集エクスペリエンスが失敗しました: %1$s</string>
+    <string name="memory_delete_experience_failed">エクスペリエンスの削除に失敗しました: %1$s</string>
+
+    <!-- v6: Compile section display titles -->
+    <string name="memory_compile_section_facts">事実の概要</string>
+    <string name="memory_compile_section_today">今日</string>
+    <string name="memory_compile_section_week">今週</string>
+    <string name="memory_compile_section_longterm">長期</string>
+
+    <!-- v6: Summary item title -->
+    <string name="memory_summary_title">セッション%1$s</string>
+
+    <!-- v6: Error trace labels -->
+    <string name="memory_error_trace_header">== ミューズメモリエラー ==</string>
+    <string name="memory_error_trace_time">時間：</string>
+    <string name="memory_error_trace_exception">例外：</string>
+    <string name="memory_error_trace_message">メッセージ：</string>
+    <string name="memory_error_trace_device">デバイス：</string>
+    <string name="memory_error_trace_stack_header">== スタック トレース ==</string>
+
+    <!-- v8: memory scope related -->
+    <string name="memory_scope_all">全て</string>
+    <string name="memory_scope_main">メインアシスタント</string>
+    <string name="memory_scope_assistant">アシスタントメモリー</string>
+    <string name="memory_scope_label">メモリスコープ</string>
+
+    <!-- v1.0.52 P2-2: memory space related -->
+    <string name="memory_space_manage_title">メモリ空間</string>
+    <string name="memory_space_create">スペースを作成する</string>
+    <string name="memory_space_create_title">新しいメモリ空間</string>
+    <string name="memory_space_rename">名前の変更</string>
+    <string name="memory_space_rename_title">メモリ空間の名前を変更する</string>
+    <string name="memory_space_delete">消去</string>
+    <string name="memory_space_name_label">スペース名</string>
+    <string name="memory_space_fact_count">%1$d 事実</string>
+    <string name="memory_space_entry">メモリ空間</string>
+
+    <!-- MemoryScreen.kt: view mode toggle / export / stats card -->
+    <string name="memory_stats_view_list">リスト</string>
+    <string name="memory_stats_view_timeline">タイムライン</string>
+    <string name="memory_stats_export_title">エクスポートメモリ</string>
+    <string name="memory_stats_export_format_hint">エクスポート形式を選択します:</string>
+    <string name="memory_stats_section_title">メモリ統計</string>
+    <string name="memory_stats_total">合計</string>
+    <string name="memory_stats_importance_distribution">重要度の分布</string>
+    <string name="memory_stats_top_sessions">最もアクティブなセッション</string>
+    <string name="memory_stats_session_count">%1$d エントリ</string>
+    <string name="memory_stats_trend_30_days">過去 30 日間の傾向</string>
+    <!-- 前端修复 (i18n-3.x): 群聊记忆 Tab + 时间轴筛选 i18n(临时复制中文,后续补译) -->
+    <string name="memory_group_chat_empty">グループチャットメモリはまだありません</string>
+    <string name="memory_group_chat_count">合計 %1$d 件</string>
+    <string name="memory_group_chat_empty_hint">グループチャットでアシスタントが返信するたびに、ここに要約メモリが生成されます。\nアシスタントの話し方がおかしくなった場合は、ここで削除またはクリアできます。</string>
+    <string name="memory_group_chat_clear_title">すべてのグループチャットメモリをクリア</string>
+    <string name="memory_group_chat_clear_content">すべてのグループチャットメモリをクリアしますか?アシスタントは過去のグループチャット要約を参照しなくなります。</string>
+    <string name="memory_group_chat_delete_cd">削除</string>
+    <string name="memory_timeline_filter_all">すべて</string>
+    <string name="memory_timeline_filter_fact">事実</string>
+    <string name="memory_timeline_filter_summary">要約</string>
+    <string name="memory_timeline_filter_milestone">マイルストーン</string>
+    <string name="memory_tab_group_chat">グループチャット</string>
+    <string name="memory_tab_graph">記憶の木</string>
+    <string name="memory_graph_preview_title">記憶の木</string>
+    <string name="memory_graph_preview_hint">記憶をタップすると関連項目を表示します</string>
+    <string name="memory_graph_preview_selected">フォーカス中: %1$s</string>
+    <string name="memory_graph_preview_node_muse">Muse</string>
+    <string name="memory_graph_preview_node_android">Android開発</string>
+    <string name="memory_graph_preview_node_local_ai">ローカルAI</string>
+    <string name="memory_graph_preview_node_photo">写真</string>
+    <string name="memory_graph_preview_node_camera">Nikon Z50 II</string>
+    <string name="memory_graph_preview_node_goal">長期目標</string>
+    <string name="memory_graph_preview_node_writing">執筆</string>
+    <string name="memory_graph_empty_title">記憶関係データがありません</string>
+    <string name="memory_graph_empty_subtitle">会話で記憶が蓄積されると関係が表示されます</string>
+    <string name="memory_graph_node_type_label">タイプ: %1$s</string>
+    <string name="memory_graph_node_pinned">固定</string>
+    <string name="memory_graph_node_expired">期限切れ</string>
+    <string name="memory_graph_node_related">%1$d件関連</string>
+    <string name="memory_graph_load_failed">読み込み失敗</string>
+    <string name="memory_graph_category_preference">好み</string>
+    <string name="memory_graph_category_identity">身元</string>
+    <string name="memory_graph_category_event">イベント</string>
+    <string name="memory_graph_category_relationship">関係</string>
+    <string name="memory_graph_category_goal">目標</string>
+    <string name="memory_graph_category_medical">健康</string>
+    <string name="memory_graph_category_general">事実</string>
+    <string name="memory_graph_relation_related_to">関連</string>
+    <string name="memory_graph_relation_causes">影響</string>
+    <string name="memory_graph_relation_explains">説明</string>
+    <string name="memory_graph_relation_part_of">一部</string>
+    <string name="memory_graph_relation_contradicts">矛盾</string>
+    <string name="memory_graph_relation_supports">サポート</string>
+    <string name="memory_graph_edge_weight">強度: %1$d%%</string>
+    <string name="memory_graph_edge_confirm">関係を確認</string>
+    <string name="memory_graph_edge_delete">関係を削除</string>
+    <string name="memory_delete_group_chat_failed">グループチャットの記憶を削除できませんでした: %1$s</string>
+    <string name="memory_clear_group_chat_failed">グループチャットの記憶を消去できませんでした: %1$s</string>
+    <string name="memory_dedup_button">重複した記憶を統合</string>
+    <string name="memory_dedup_result">重複した記憶を %1$s 件統合しました</string>
+    <string name="memory_dedup_failed">記憶の重複除去に失敗しました</string>
+    <string name="memory_compile_done">記憶の編纂が完了しました</string>
+    <string name="memory_compile_failed">記憶の編纂に失敗しました。モデル設定を確認して再試行してください</string>
+    <string name="memory_menu_cd">その他の操作</string>
+    <string name="memory_menu_pin">固定</string>
+    <string name="memory_menu_unpin">固定を解除</string>
+    <string name="memory_menu_importance">重要度を設定</string>
+    <string name="memory_menu_edit">編集</string>
+    <string name="memory_menu_delete">削除</string>
+    <string name="memory_center_fact_count">件の事実</string>
+    <string name="memory_center_summary_count">%1$d 件の要約</string>
+    <string name="memory_center_updated">更新 %1$s</string>
+    <string name="memory_center_empty_title">まだ記憶はありません</string>
+    <string name="memory_center_empty_subtitle">Muse と話し続けるか、「これを覚えて」と伝えてください。</string>
+    <string name="memory_center_ready_subtitle">Muse が現在保持しているあなたに関する事実です。</string>
+    <string name="memory_center_open_facts">事実ライブラリを開く</string>
+    <string name="memory_center_tab_stream">記憶の流れ</string>
+    <string name="memory_center_tab_constellation">記憶の星座</string>
+    <string name="memory_center_stream_title">最近覚えたこと</string>
+    <string name="memory_center_library_title">事実ライブラリ</string>
+    <string name="memory_center_constellation_hint">重要な事実は中心に近く表示されます。関係を整理する前でも事実は表示されます。</string>
+    <string name="memory_center_constellation_empty">表示できる事実がまだありません。事実を追加してから戻ってきてください。</string>
+    <string name="memory_center_filter_empty">このスコープまたはスペースには事実がありません。上のフィルターを変更してください。</string>
+    <string name="memory_center_scope_all">すべて</string>
+    <string name="memory_center_space_default">デフォルト</string>
+    <string name="memory_center_scope_line">%1$s · %2$s</string>
+    <string name="memory_center_filter_title">フィルター</string>
+    <string name="memory_center_filter_scope">スコープ</string>
+    <string name="memory_center_filter_space">記憶スペース</string>
+    <string name="memory_compile_running">記憶を整理中…</string>
+    <string name="memory_organize_action">記憶を整理</string>
+    <string name="memory_organize_stage_prepare">準備中</string>
+    <string name="memory_organize_stage_compile">要約を作成中</string>
+    <string name="memory_organize_stage_dedup">重複を統合中</string>
+    <string name="memory_organize_stage_complete">整理完了、%1$d 件を統合</string>
+    <string name="memory_organize_stage_no_duplicates">整理完了、統合できる重複記憶はありません</string>
+    <string name="memory_organize_stage_failed">整理に失敗しました。もう一度お試しください</string>
+    <string name="memory_center_stream_subtitle">発生時刻ごとに集約：会話から自動的に蓄積された事実を時系列で表示</string>
+    <string name="memory_center_facts_subtitle">項目単位で管理：検索・追加・編集・削除が可能</string>
+    <string name="memory_center_filter_advanced">詳細フィルター</string>
+    <string name="memory_center_filter_importance">重要度</string>
+    <string name="memory_center_filter_importance_all">すべて</string>
+    <string name="memory_center_filter_time">期間</string>
+    <string name="memory_center_filter_time_30">最近30日</string>
+    <string name="memory_center_filter_time_7">最近7日</string>
+    <string name="memory_center_filter_time_90">最近90日</string>
+    <string name="memory_center_filter_time_all">すべての期間</string>
+    <string name="memory_contradictions_dismiss_cd">確認して削除</string>
+    <string name="memory_contradictions_title">確認待ちの矛盾する記憶</string>
+    <string name="memory_delete_confirm_title">記憶を削除</string>
+    <string name="memory_fact_source_label">元の会話</string>
+    <string name="memory_pin_failed">ピン留めに失敗しました。もう一度お試しください。</string>
+    <string name="memory_stats_session_live">会話 %1$d</string>
+    <string name="memory_stream_mode_list">リスト</string>
+    <string name="memory_stream_mode_timeline">タイムライン</string>
+    <string name="memory_unpin_failed">ピン留めの解除に失敗しました。もう一度お試しください。</string>
+    <string name="memory_graph_reset_view">ビューをリセット</string>
+    <!-- v2.2.1: 記憶ライブラリのアーカイブ/復元のヒント -->
+    <string name="memory_archive_rebuilt_hint">バージョン変更により記憶ライブラリがアーカイブ・再構築されました。一部の履歴が保持されていない可能性があります</string>
+    <string name="memory_archive_recovered">バージョン変更のアーカイブから %1$d 件の記憶を復元しました</string>
+    <string name="memory_archive_recovery_title">復元可能な記憶アーカイブ</string>
+    <string name="memory_archive_recovery_message">バージョン変更のアーカイブにセッション概要 %1$d 件とコンパイル済みセクション %2$d 件があります。現在の記憶データベースは空のため安全に復元できます。</string>
+    <string name="memory_archive_recovery_action">アーカイブを復元</string>
+    <string name="memory_archive_recovery_confirm_title">記憶アーカイブを復元しますか?</string>
+    <string name="memory_archive_recovery_confirm">既存データを上書きせず、空の現在のデータベースに概要とコンパイル済み記憶を復元します。続行しますか?</string>
+    <string name="memory_archive_recovery_done">%1$d 件の記憶レコードを復元しました</string>
+    <string name="memory_archive_recovery_failed">記憶アーカイブの復元に失敗しました: %1$s</string>
+</resources>

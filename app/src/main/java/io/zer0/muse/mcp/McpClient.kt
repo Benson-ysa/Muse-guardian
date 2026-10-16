@@ -1,0 +1,1538 @@
+package io.zer0.muse.mcp
+
+import io.zer0.common.AppJson
+import io.zer0.common.Logger
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.channels.ReceiveChannel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.put
+import okhttp3.HttpUrl.Companion.toHttpUrl
+import okhttp3.MediaType.Companion.toMediaType
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
+import okhttp3.sse.EventSource
+import okhttp3.sse.EventSourceListener
+import okhttp3.sse.EventSources
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicLong
+
+/**
+ * Phase 9.5 (M3): MCP 协议数据类。
+ *
+ * 按 MCP 规范:
+ * - 2024-11-05: https://spec.modelcontextprotocol.io/spec/2024-11-05/
+ * - 2025-03-26: https://spec.modelcontextprotocol.io/spec/2025-03-26/
+ *
+ * JSON-RPC 2.0 协议:
+ * - 请求: {jsonrpc:"2.0", id, method, params?}
+ * - 响应: {jsonrpc:"2.0", id, result? | error?}
+ * - 通知: {jsonrpc:"2.0", method, params?}(无 id)
+ */
+
+@Serializable
+data class McpTool(
+    val name: String,
+    val description: String? = null,
+    val inputSchema: JsonElement? = null,
+)
+
+@Serializable
+data class McpToolCallResult(
+    val content: List<JsonElement> = emptyList(),
+    val isError: Boolean = false,
+    /** MCP 2025-03-26 可选的结构化工具结果,部分 server 只在这里返回业务数据。 */
+    val structuredContent: JsonElement? = null,
+)
+
+/**
+ * Phase 11.1.2: MCP Resource(MCP 2025-03-26 spec § Resources)。
+ *
+ * Resource 是 server 暴露的被动资源(带 URI),由用户/客户端选择注入对话 context。
+ * 与 Tool 的区别:Tool 是 LLM 主动调用,Resource 是用户被动选择。
+ *
+ * @param uri 资源唯一标识(如 file:///doc.md / db://schema/users)
+ * @param name 资源名(用户可读)
+ * @param description 描述(可选)
+ * @param mimeType MIME 类型(可选,如 text/markdown / application/json)
+ */
+@Serializable
+data class McpResource(
+    val uri: String,
+    val name: String? = null,
+    val description: String? = null,
+    val mimeType: String? = null,
+)
+
+/**
+ * Phase 11.1.2: MCP Resource 内容(resources/read 响应)。
+ *
+ * @param uri 资源 URI
+ * @param mimeType MIME 类型(可选)
+ * @param text 文本内容(与 blob 二选一)
+ * @param blob 二进制内容 base64 编码(与 text 二选一)
+ */
+@Serializable
+data class McpResourceContent(
+    val uri: String,
+    val mimeType: String? = null,
+    val text: String? = null,
+    val blob: String? = null,
+)
+
+/**
+ * Phase 11.1.2: MCP Prompt(MCP 2025-03-26 spec § Prompts)。
+ *
+ * Prompt 是 server 暴露的快捷指令模板,用户点击触发后返回一组 messages,
+ * 作为新对话起点或插入当前对话。
+ *
+ * @param name prompt 唯一名(用作 prompts/get 的 key)
+ * @param description 描述(可选)
+ * @param arguments 参数列表(可选,用户填写后传入 prompts/get)
+ */
+@Serializable
+data class McpPrompt(
+    val name: String,
+    val description: String? = null,
+    val arguments: List<McpPromptArgument> = emptyList(),
+)
+
+/** Prompt 参数定义。 */
+@Serializable
+data class McpPromptArgument(
+    val name: String,
+    val description: String? = null,
+    val required: Boolean = false,
+)
+
+/**
+ * Phase 11.1.2: MCP Prompt 内容(prompts/get 响应)。
+ *
+ * @param description 描述(可选)
+ * @param messages 消息列表(role + content),作为对话起点
+ */
+@Serializable
+data class McpPromptResult(
+    val description: String? = null,
+    val messages: List<McpPromptMessage> = emptyList(),
+)
+
+/**
+ * Prompt 消息(role + content)。
+ *
+ * @param role user / assistant / system
+ * @param content 消息内容(JsonObject,可能为 {type:"text",text:"..."} 等多种形态)
+ */
+@Serializable
+data class McpPromptMessage(
+    val role: String,
+    val content: JsonElement,
+)
+
+/**
+ * 等待 SSE 首个 endpoint 事件。
+ *
+ * EventSource 失败时监听器会关闭 channel。直接调用 [ReceiveChannel.receive]
+ * 会抛 ClosedReceiveChannelException,而“服务端断开”只是普通连接失败,不能让
+ * MCP 后台协程把整个应用带崩。
+ */
+internal suspend fun awaitSseEndpoint(channel: ReceiveChannel<String>, timeoutMs: Long): String? = withTimeoutOrNull(timeoutMs) {
+    channel.receiveCatching().getOrNull()
+}
+
+@Serializable
+internal data class McpServerInfo(
+    val name: String? = null,
+    val version: String? = null,
+)
+
+/**
+ * Phase 9.5 (M3): MCP Client。
+ *
+ * 职责:
+ *  1. 建立 SSE / StreamableHTTP 连接,完成 initialize 握手
+ *  2. 提供 [listTools] / [callTool] suspend API(对标 MCP tools/list、tools/call)
+ *  3. 自动重连(指数退避:base * 2^attempt,上限 30s,达到 [McpServerConfig.maxReconnectAttempts] 转 FAILED)
+ *  4. 暴露 [state] StateFlow 供 UI 观察连接状态
+ *
+ * 协议实现:
+ *  - initialize 请求带 protocolVersion(2025-03-26 / 2024-11-05,server 自行选择兼容版本)
+ *  - Initialized 通知在 initialize 响应后发送(MCP 要求的握手第二步)
+ *  - tools/list 响应解析为 [McpTool] 列表
+ *  - tools/call 请求带 name + arguments(JsonObject),响应解析为 [McpToolCallResult]
+ *
+ * 传输实现:
+ *  - [SseTransport]: EventSource 接收 server→client 事件,POST 到 server 告知的 endpoint
+ *  - [StreamableHttpTransport]: 单一 endpoint POST,响应可能是 JSON 或 SSE 流
+ *
+ * 线程模型:
+ *  - 所有网络 IO 在 Dispatchers.IO
+ *  - 状态变更通过 MutableStateFlow,线程安全
+ *  - 请求-响应配对用 ConcurrentHashMap<id, Channel<JsonObject>>(支持并发请求)
+ *
+ * 独立编写(按 MCP 官方规范),Apache 2.0。
+ */
+class McpClient(
+    private val config: McpServerConfig,
+    private val client: OkHttpClient = McpClient.defaultClient,
+    /** Phase 10.4: SettingsRepository 注入(OAuth 启用时用于 token 持久化;null 走静态 token)。 */
+    private val settings: io.zer0.muse.data.SettingsRepository? = null,
+    /** P1-A: 应用上下文（stdio 传输解析内置运行时路径用；其他传输可为 null）。 */
+    private val appContext: android.content.Context? = null,
+) : AutoCloseable {
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val idCounter = AtomicLong(1)
+    private val pendingRequests = ConcurrentHashMap<Long, Channel<JsonObject>>()
+
+    private val _state = MutableStateFlow(McpConnectionState.DISCONNECTED)
+    val state: StateFlow<McpConnectionState> = _state.asStateFlow()
+
+    /** 当前 SSE 连接(用于 close 时取消)。 */
+    @Volatile
+    private var eventSource: EventSource? = null
+
+    /** P1-A: stdio 传输(本地子进程)。 */
+    @Volatile
+    private var stdioTransport: McpStdioTransport? = null
+
+    /** SSE 传输模式下的 POST endpoint(server 通过 endpoint 事件告知)。 */
+    @Volatile
+    private var postEndpoint: String? = null
+
+    /**
+     * Streamable HTTP 会话 ID。
+     *
+     * MCP 2025-03-26 允许 server 在 initialize 响应的
+     * `Mcp-Session-Id` 响应头中分配会话,后续 tools/list、tools/call 等请求必须
+     * 原样带回该请求头。没有这个头时,很多 server 会让握手看似成功,但后续请求返回
+     * 404/400,模型最终就拿不到任何 MCP 工具。
+     */
+    @Volatile
+    private var streamableSessionId: String? = null
+
+    /** initialize 协商出的 MCP 协议版本,后续 HTTP 请求按 server 选择的版本发送。 */
+    @Volatile
+    private var negotiatedProtocolVersion: String = PROTOCOL_VERSION
+
+    /** server 终止会话后,下一次请求需要重新 initialize。 */
+    @Volatile
+    private var streamableSessionInvalidated = false
+
+    /** Streamable HTTP 会话恢复互斥，避免并发请求重复 initialize。 */
+    private val streamableSessionRecoveryMutex = Mutex()
+
+    /** 每次真正更换 Streamable HTTP session 时递增，用于让并发请求复用同一轮恢复结果。 */
+    private val streamableSessionGeneration = AtomicLong(0)
+
+    /** 最近一次传输层失败摘要,只保存状态码/网络类别,不保存响应正文或凭证。 */
+    @Volatile
+    private var lastTransportFailure: String? = null
+
+    /** 服务端信息(initialize 响应里返回)。 */
+    @Volatile
+    private var serverInfo: McpServerInfo? = null
+
+    /** 重连次数(成功连接后重置)。 */
+    @Volatile
+    private var reconnectAttempts = 0
+
+    /** 是否已主动 close(区分主动关闭 vs 网络断开,主动 close 不触发重连)。 */
+    @Volatile
+    private var closed = false
+
+    /** Phase 10.4: OAuth token 内存缓存(从 settings 加载,refresh 后更新)。 */
+    @Volatile
+    private var oauthToken: McpTokenInfo? = null
+
+    /** 飞书 TAT 内存缓存(短期 token,真实凭证仍保存在 SettingsRepository 的加密 token key 中)。 */
+    @Volatile
+    private var feishuTenantToken: McpTokenInfo? = null
+
+    private val feishuAuthEnabled: Boolean
+        get() = config.feishuAuth.isConfigured() && settings != null
+
+    private val feishuTenantTokenClient = McpFeishuTenantTokenClient()
+    private val feishuRefreshMutex = Mutex()
+
+    /** Phase 10.4: 当前 PKCE pair(startOAuthFlow 生成,completeOAuthFlow 消费)。 */
+    @Volatile
+    private var pendingPkce: McpOAuthFlow.PkcePair? = null
+
+    /** Phase 10.4: 是否启用 OAuth。 */
+    private val oauthEnabled: Boolean get() = config.oauthConfig.enabled && settings != null
+
+    /**
+     * Phase 9.5 (P3-2): tools/list_changed 通知回调。
+     *
+     * 当 server 发出 `notifications/tools/list_changed`(MCP 2025-03-26 §Tools)时触发,
+     * 由 [McpRegistry] 注入实现:重新拉取 tools/list 并重新注册到 ToolRegistry。
+     *
+     * 解耦设计:McpClient 不依赖 Registry,仅通过回调上抛事件,保持依赖方向单一。
+     * 回调在 [handleNotification] 的 IO 协程上下文执行,实现方应避免长时间阻塞
+     * (Registry 端会 launch 独立协程做实际拉取)。
+     */
+    @Volatile
+    var onToolsListChanged: (() -> Unit)? = null
+
+    /**
+     * P2-24: 自动重连成功回调(仅在 RECONNECTING 后的重连成功时触发,首次连接不触发)。
+     * Registry 据此同步连接状态并重新拉取工具(断开期间 server 工具集可能变化)。
+     * 回调在连接协程上下文执行,实现方应避免长时间阻塞(Registry 端会 launch 独立协程)。
+     */
+    @Volatile
+    var onReconnected: (() -> Unit)? = null
+
+    /** B3-09: prompts/list_changed 通知回调(无缓存时仅作刷新信号)。 */
+    @Volatile
+    var onPromptsListChanged: (() -> Unit)? = null
+
+    /** B3-09: resources/list_changed 通知回调(无缓存时仅作刷新信号)。 */
+    @Volatile
+    var onResourcesListChanged: (() -> Unit)? = null
+
+    /**
+     * 启动 MCP client。建立连接 + initialize 握手。
+     * 失败则触发重连流程(若 [McpServerConfig.autoReconnect] 为 true)。
+     */
+    fun start() {
+        // M-MCP4: synchronized 保护 check-then-launch,避免竞态导致重复连接
+        synchronized(this) {
+            if (closed) return
+            if (_state.value != McpConnectionState.DISCONNECTED &&
+                _state.value != McpConnectionState.FAILED &&
+                _state.value != McpConnectionState.NEEDS_AUTH
+            ) {
+                return
+            }
+            scope.launch { connect() }
+        }
+    }
+
+    /**
+     * 同步建立连接 + initialize 握手。
+     * 在 IO 协程里调用。失败触发 [scheduleReconnect]。
+     *
+     * Phase 10.4: OAuth 启用时,先确保 token 有效(加载/refresh);无 token 或 refresh 失败
+     * 转 NEEDS_AUTH 状态(等 UI 调 [startOAuthFlow] 引导用户授权)。
+     */
+    /**
+     * C-25: OAuth 回调 URI 日志脱敏 — 只留 scheme://host/path,丢弃 query
+     * (query 含授权 code / state,整条入日志会泄漏授权码)。
+     */
+    private fun sanitizeRedirectUriForLog(uri: String): String = runCatching {
+        val u = java.net.URI(uri)
+        "${u.scheme}://${u.host}${u.rawPath ?: ""}"
+    }.getOrElse { "(unparseable redirect uri)" }
+
+    private suspend fun connect() {
+        try {
+            connectInternal()
+        } catch (ce: kotlinx.coroutines.CancellationException) {
+            throw ce
+        } catch (e: Exception) {
+            Logger.e(TAG, "[${config.name}] MCP 连接流程异常,已转入重连/失败状态", e)
+            if (!closed && _state.value != McpConnectionState.FAILED) {
+                scheduleReconnect()
+            }
+        }
+    }
+
+    private suspend fun connectInternal() {
+        _state.value = McpConnectionState.CONNECTING
+        // 每次新建 Streamable HTTP 连接都必须从 initialize 重新取得会话 ID。
+        streamableSessionId = null
+        negotiatedProtocolVersion = PROTOCOL_VERSION
+        streamableSessionInvalidated = false
+        val endpointDesc = if (config.transportType == McpTransportType.STDIO) {
+            "command=${config.command}"
+        } else {
+            "url=${config.url}"
+        }
+        Logger.d(TAG, "[${config.name}] 连接中 transport=${config.transportType} $endpointDesc")
+
+        // Phase 10.4: OAuth 模式下先校验 token
+        if (oauthEnabled && !ensureValidToken()) {
+            Logger.w(TAG, "[${config.name}] OAuth token 无效或未授权,转 NEEDS_AUTH")
+            _state.value = McpConnectionState.NEEDS_AUTH
+            return
+        }
+        if (config.feishuAuth.enabled && !ensureFeishuTenantToken()) {
+            Logger.w(TAG, "[${config.name}] 飞书 TAT 获取失败,进入重连/失败状态")
+            scheduleReconnect()
+            return
+        }
+
+        val connected = when (config.transportType) {
+            McpTransportType.SSE -> connectSse()
+            McpTransportType.STREAMABLE_HTTP -> connectStreamableHttp()
+            McpTransportType.STDIO -> connectStdio()
+        }
+
+        if (connected) {
+            val wasReconnect = reconnectAttempts > 0
+            reconnectAttempts = 0
+            _state.value = McpConnectionState.CONNECTED
+            Logger.i(TAG, "[${config.name}] 已连接,server=${serverInfo?.name}:${serverInfo?.version}")
+            // P2-24: 重连成功后通知 Registry 同步状态并刷新工具(首次连接走 connectServer 的 registerTools)
+            if (wasReconnect) {
+                runCatching { onReconnected?.invoke() }
+                    .onFailure { e -> Logger.w(TAG, "[${config.name}] onReconnected 回调异常: ${e.message}") }
+            }
+        } else {
+            Logger.w(TAG, "[${config.name}] 连接失败")
+            scheduleReconnect()
+        }
+    }
+
+    // ── Phase 10.4: OAuth 2.1 PKCE ───────────────────────────────────────────
+
+    /**
+     * 确保 OAuth token 有效:加载缓存 → 检查过期 → refresh。
+     * @return true 表示当前有有效 token;false 表示未授权 / refresh 失败(需重新授权)
+     */
+    private suspend fun ensureValidToken(forceRefresh: Boolean = false): Boolean {
+        if (!oauthEnabled) return true
+        // 首次加载:从 DataStore 读缓存
+        if (oauthToken == null) {
+            oauthToken = settings?.getMcpToken(config.id)
+        }
+        val token = oauthToken ?: return false // 未授权
+        // M-MCP2: forceRefresh=true 时强制 refresh(用于请求收到 401 后重试)
+        if (!forceRefresh && token.isValid()) return true
+        // 过期 → 尝试 refresh
+        if (!token.canRefresh()) {
+            settings?.clearMcpToken(config.id)
+            oauthToken = null
+            return false
+        }
+        Logger.d(TAG, "[${config.name}] OAuth token 过期,尝试 refresh")
+        val newToken = McpOAuthFlow.refreshAccessToken(config.oauthConfig, token.refreshToken)
+        if (newToken == null) {
+            Logger.w(TAG, "[${config.name}] OAuth refresh 失败,需重新授权")
+            settings?.clearMcpToken(config.id)
+            oauthToken = null
+            return false
+        }
+        oauthToken = newToken
+        settings?.saveMcpToken(config.id, newToken)
+        Logger.i(TAG, "[${config.name}] OAuth token refreshed,新有效期至 ${newToken.expiresAt}")
+        return true
+    }
+
+    /**
+     * 确保飞书 tenant_access_token 有效。
+     *
+     * 与 MCP OAuth 分开处理:飞书 TAT 没有 refresh_token,过期后用 app_id +
+     * app_secret 重新换取。短期 TAT 持久化到已有加密 token 存储,但永远不写日志。
+     */
+    private suspend fun ensureFeishuTenantToken(forceRefresh: Boolean = false): Boolean {
+        if (!config.feishuAuth.enabled) return true
+        if (!feishuAuthEnabled) {
+            Logger.w(TAG, "[${config.name}] 飞书自动刷新已启用,但 App ID/App Secret 或 SettingsRepository 缺失")
+            return false
+        }
+        return feishuRefreshMutex.withLock {
+            if (feishuTenantToken == null) {
+                feishuTenantToken = settings?.getMcpToken(config.id)
+            }
+            if (!forceRefresh && feishuTenantToken?.isUsableForFeishu() == true) return@withLock true
+
+            val auth = config.feishuAuth
+            val token = feishuTenantTokenClient.fetch(auth.appId, auth.appSecret)
+                ?: return@withLock false
+            feishuTenantToken = token
+            settings?.saveMcpToken(config.id, token)
+            Logger.i(TAG, "[${config.name}] 飞书 TAT 已刷新,有效期至 ${token.expiresAt}")
+            true
+        }
+    }
+
+    /** 飞书 token 剩余不足 30 分钟时刷新,避免多设备频繁换 token 互相失效。 */
+    private fun McpTokenInfo.isUsableForFeishu(now: Long = System.currentTimeMillis()): Boolean =
+        accessToken.isNotBlank() && (expiresAt == 0L || expiresAt > now + FEISHU_REFRESH_MARGIN_MS)
+
+    /**
+     * 构造请求头:静态 headers + authToken + OAuth Bearer(OAuth 优先级最高)。
+     * OAuth token 由 [ensureValidToken] 预先刷新到 [oauthToken],此方法仅读取。
+     */
+    private fun resolvedAuthHeaders(): Map<String, String> {
+        val headers = config.resolvedHeaders().toMutableMap()
+        oauthToken?.takeIf { it.accessToken.isNotBlank() }?.let { token ->
+            headers["Authorization"] = "Bearer ${token.accessToken}"
+        }
+        feishuTenantToken?.takeIf { it.accessToken.isNotBlank() }?.let { token ->
+            headers["X-Lark-MCP-TAT"] = token.accessToken
+        }
+        return headers
+    }
+
+    /**
+     * Phase 10.4: 启动 OAuth 授权流程(由 UI 调用)。
+     *
+     * @return 授权 URL(用 Intent.ACTION_VIEW 打开浏览器);null 表示 OAuth 未启用
+     */
+    fun startOAuthFlow(): String? {
+        if (!oauthEnabled) return null
+        val pkce = McpOAuthFlow.generatePkcePair()
+        pendingPkce = pkce
+        return McpOAuthFlow.buildAuthorizationUrl(config.oauthConfig, pkce)
+    }
+
+    /**
+     * Phase 10.4: 完成 OAuth 授权流程(浏览器回调后调用)。
+     *
+     * @param redirectUri 回调 URI(含 code + state 参数)
+     * @return true 成功(token 已持久化,可调 [start] 重连);false 失败(state 不匹配 / 交换失败)
+     */
+    suspend fun completeOAuthFlow(redirectUri: String): Boolean {
+        val pkce = pendingPkce ?: run {
+            Logger.w(TAG, "[${config.name}] completeOAuthFlow 但无 pending PKCE pair")
+            return false
+        }
+        val parsed = McpOAuthFlow.parseRedirectCallback(redirectUri, config.oauthConfig.redirectUri)
+        if (parsed == null) {
+            // C-25: 回调 URI 含 code/state,整条入日志会泄漏授权码 — 只记 scheme://host/path
+            Logger.w(TAG, "[${config.name}] OAuth 回调解析失败: ${sanitizeRedirectUriForLog(redirectUri)}")
+            return false
+        }
+        val (code, state) = parsed
+        if (state != pkce.state) {
+            Logger.w(TAG, "[${config.name}] OAuth state 不匹配: expected=${pkce.state}, got=$state")
+            return false
+        }
+        val token = McpOAuthFlow.exchangeCodeForToken(config.oauthConfig, code, pkce.verifier)
+        if (token == null) {
+            Logger.w(TAG, "[${config.name}] OAuth token 交换失败")
+            return false
+        }
+        oauthToken = token
+        settings?.saveMcpToken(config.id, token)
+        pendingPkce = null
+        Logger.i(TAG, "[${config.name}] OAuth 授权成功,token 有效期至 ${token.expiresAt}")
+        return true
+    }
+
+    /** Phase 10.4: 撤销 OAuth 授权(清 token + PKCE,转 NEEDS_AUTH)。 */
+    suspend fun revokeOAuth() {
+        oauthToken = null
+        pendingPkce = null
+        settings?.clearMcpToken(config.id)
+        _state.value = McpConnectionState.NEEDS_AUTH
+        Logger.i(TAG, "[${config.name}] OAuth 授权已撤销")
+    }
+
+    /** Phase 10.4: 是否需要 OAuth 授权(NEEDS_AUTH 状态 + OAuth 启用)。 */
+    fun needsOAuth(): Boolean = oauthEnabled && _state.value == McpConnectionState.NEEDS_AUTH
+
+    // ── SSE 传输 ──────────────────────────────────────────────────────────────
+
+    /**
+     * SSE 传输连接(MCP 2024-11-05):
+     *  1. EventSource 连到 [McpServerConfig.url],接收 server→client 事件
+     *  2. 首个事件通常是 endpoint 事件(data: <POST endpoint URL>),
+     *     告知 client 后续请求 POST 到哪个 URL
+     *  3. initialize 请求通过 POST 发送,响应通过 SSE 事件返回
+     */
+    private suspend fun connectSse(): Boolean {
+        // H-MCP1: 重连时先取消旧 eventSource,避免资源泄漏与响应错配
+        eventSource?.cancel()
+        eventSource = null
+
+        val sseFactory = EventSources.createFactory(client)
+        val firstEventChannel = Channel<String>(Channel.CONFLATED)
+        var gotEndpoint = false
+
+        val request = Request.Builder()
+            .url(config.url.toHttpUrl())
+            .header("Accept", "text/event-stream")
+            .apply { resolvedAuthHeaders().forEach { (k, v) -> header(k, v) } }
+            .get()
+            .build()
+
+        val listener = object : EventSourceListener() {
+            override fun onOpen(eventSource: EventSource, response: Response) {
+                if (!response.isSuccessful) {
+                    Logger.w(TAG, "[${config.name}] SSE 连接 HTTP ${response.code}")
+                    firstEventChannel.close()
+                    eventSource.cancel()
+                }
+            }
+
+            override fun onEvent(eventSource: EventSource, id: String?, type: String?, data: String) {
+                // MCP 2024-11-05: 首个事件 type="endpoint",data 是 POST URL
+                if (type == "endpoint" && !gotEndpoint) {
+                    gotEndpoint = true
+                    postEndpoint = resolvePostUrl(data)
+                    Logger.d(TAG, "[${config.name}] SSE endpoint: $postEndpoint")
+                    firstEventChannel.trySend("endpoint")
+                } else {
+                    // 普通事件: data 是 JSON-RPC 响应/通知
+                    handleSseEvent(data)
+                }
+            }
+
+            override fun onClosed(eventSource: EventSource) {
+                Logger.w(TAG, "[${config.name}] SSE 连接关闭")
+                if (!closed) scheduleReconnect()
+            }
+
+            override fun onFailure(eventSource: EventSource, t: Throwable?, response: Response?) {
+                // v1.113: 区分"协程主动取消"与"真实网络故障"。
+                // OkHttp 在 Call.cancel() 时抛 IOException("Canceled"),此时不应触发重连。
+                if (closed || !scope.isActive) {
+                    firstEventChannel.close()
+                    return
+                }
+                if (t is java.io.IOException && t.message == "Canceled") {
+                    Logger.d(TAG, "[${config.name}] SSE 被 Call.cancel() 取消,不重连")
+                    firstEventChannel.close()
+                    return
+                }
+                Logger.w(TAG, "[${config.name}] SSE 连接失败: ${t?.message ?: response?.code}")
+                firstEventChannel.close()
+                if (!closed) scheduleReconnect()
+            }
+        }
+
+        eventSource = sseFactory.newEventSource(request, listener)
+
+        // 等 endpoint 事件(L-MCP2: 超时提取为常量)
+        val gotEp = awaitSseEndpoint(firstEventChannel, SSE_ENDPOINT_TIMEOUT_MS)
+        firstEventChannel.close()
+        if (gotEp == null || postEndpoint == null) {
+            eventSource?.cancel()
+            return false
+        }
+        // M-MCP1: 校验 postEndpoint 与 config.url 同源,防止 Open Redirect
+        val ep = postEndpoint ?: return false
+        if (!isSameOrigin(ep, config.url)) {
+            Logger.w(TAG, "[${config.name}] SSE endpoint 与 server 不同源: $ep vs ${config.url},拒绝连接")
+            eventSource?.cancel()
+            eventSource = null
+            postEndpoint = null
+            return false
+        }
+
+        // 发 initialize 请求
+        return sendInitialize()
+    }
+
+    /** SSE 事件处理:解析 JSON-RPC 消息,按 response / notification / server request 分发。 */
+    private fun handleSseEvent(data: String) {
+        if (data.isBlank()) return
+        val obj = runCatching {
+            AppJson.decodeFromString(JsonObject.serializer(), data)
+        }.getOrNull() ?: return
+
+        val idEl = obj["id"]
+        val methodEl = obj["method"]
+
+        if (idEl == null) {
+            // 无 id: notification(必须有 method)
+            val method = (methodEl as? JsonPrimitive)?.content ?: return
+            val params = obj["params"] as? JsonObject ?: buildJsonObject {}
+            handleNotification(method, params)
+            return
+        }
+
+        val id = (idEl as? JsonPrimitive)?.content?.toLongOrNull()
+        if (id == null) {
+            Logger.w(TAG, "[${config.name}] 收到无效 id 的消息: ${data.take(200)}")
+            return
+        }
+
+        if (methodEl != null) {
+            // 有 id 且有 method: server→client request(支持 ping,未知方法返回 MethodNotFound)
+            val method = (methodEl as? JsonPrimitive)?.content
+            handleServerRequest(id, method)
+            return
+        }
+
+        // 有 id 无 method: response,匹配 pending channel
+        val channel = pendingRequests.remove(id) ?: return
+        channel.trySend(obj)
+        channel.close()
+    }
+
+    /**
+     * v1.0.47 P4 / Phase 9.5 (P3-2): 处理 server→client notification(无 id)。
+     *
+     * 支持的 notification(MCP 2025-03-26):
+     *  - `notifications/tools/list_changed`: 工具列表变更,触发 [onToolsListChanged] 回调,
+     *    由 Registry 重新拉取 tools/list 并重新注册。
+     *  - `notifications/prompts/list_changed`: prompt 列表变更(记录日志,后续接入)。
+     *  - `notifications/resources/list_changed`: 资源列表变更(记录日志,后续接入)。
+     *  - `notifications/initialized`: 握手完成通知(忽略,client 主动发)。
+     *  - `notifications/progress`: 长任务进度(记录日志)。
+     *  - 其他: 记录日志。
+     *
+     * 回调安全:[onToolsListChanged] 调用包裹在 runCatching 中,避免 Registry 端异常
+     * 影响后续 notification 处理(如 SSE 流中多个事件)。
+     */
+    private fun handleNotification(method: String, params: JsonObject) {
+        Logger.i(TAG, "收到 notification: $method (params=${params.toString().take(200)})")
+        when (method) {
+            "notifications/tools/list_changed" -> {
+                // 触发 Registry 重新拉取工具;回调内会 launch 独立协程,不阻塞此处
+                runCatching { onToolsListChanged?.invoke() }
+                    .onFailure { e -> Logger.w(TAG, "[${config.name}] onToolsListChanged 回调异常: ${e.message}") }
+            }
+            "notifications/prompts/list_changed" -> {
+                runCatching { onPromptsListChanged?.invoke() }
+                    .onFailure { e -> Logger.w(TAG, "[${config.name}] onPromptsListChanged 回调异常: ${e.message}") }
+            }
+            "notifications/resources/list_changed" -> {
+                runCatching { onResourcesListChanged?.invoke() }
+                    .onFailure { e -> Logger.w(TAG, "[${config.name}] onResourcesListChanged 回调异常: ${e.message}") }
+            }
+            "notifications/progress",
+            -> {
+                // 已记录日志,进度通知无本地缓存
+            }
+            "notifications/initialized" -> {
+                // client 主动发出的握手通知,server 不应回发;忽略
+            }
+            else -> {
+                Logger.d(TAG, "[${config.name}] 未处理的 notification: $method")
+            }
+        }
+    }
+
+    /** SSE 传输模式下的 POST 请求(initialize / tools/list / tools/call 等)。 */
+    private suspend fun postSseRequest(jsonRpc: String, retryOn401: Boolean = true): JsonObject? {
+        val endpoint = postEndpoint ?: return null
+        if (config.feishuAuth.enabled && !ensureFeishuTenantToken()) return null
+        val authHeaders = resolvedAuthHeaders()
+        val request = Request.Builder()
+            .url(endpoint.toHttpUrl())
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json, text/event-stream")
+            .apply { authHeaders.forEach { (k, v) -> header(k, v) } }
+            .post(jsonRpc.toRequestBody(JSON_MEDIA_TYPE))
+            .build()
+
+        // SSE 模式下,POST 请求通常返回 202(响应通过 SSE 事件回来)
+        // 但有些 server 直接返回 JSON 响应(非标准但常见)
+        return withContext(Dispatchers.IO) {
+            try {
+                client.newCall(request).execute().use { resp ->
+                    // M-MCP2: 收到 401 时强制 refresh token 并重试一次
+                    if (resp.code == 401 && retryOn401 && (oauthEnabled || feishuAuthEnabled)) {
+                        Logger.w(TAG, "[${config.name}] POST 收到 401,尝试刷新认证凭证后重试")
+                        val refreshed = if (oauthEnabled) {
+                            ensureValidToken(forceRefresh = true)
+                        } else {
+                            ensureFeishuTenantToken(forceRefresh = true)
+                        }
+                        if (refreshed) {
+                            return@withContext postSseRequest(jsonRpc, retryOn401 = false)
+                        }
+                        return@withContext null
+                    }
+                    if (resp.isSuccessful) {
+                        val body = resp.body.string()
+                        if (body.isNotBlank() && body.trimStart().startsWith("{")) {
+                            runCatching { AppJson.decodeFromString(JsonObject.serializer(), body) }.getOrNull()
+                        } else {
+                            null // 202 Accepted,等 SSE 事件
+                        }
+                    } else {
+                        lastTransportFailure = "MCP HTTP ${resp.code}"
+                        null
+                    }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: java.io.IOException) {
+                // v1.113: 协程取消导致的 IOException("Canceled") 不应触发重连逻辑
+                if (closed || e.message == "Canceled") {
+                    Logger.d(TAG, "[${config.name}] POST 请求被取消,不重连")
+                    return@withContext null
+                }
+                Logger.w(TAG, "[${config.name}] POST 请求 IO 异常: ${e.message}")
+                lastTransportFailure = "MCP network request failed"
+                null
+            }
+        }
+    }
+
+    /** 解析 SSE endpoint 事件 data(可能是相对路径,如 /messages?session_id=xxx)。 */
+    private fun resolvePostUrl(data: String): String {
+        val trimmed = data.trim()
+        return runCatching {
+            if (trimmed.startsWith("http://") || trimmed.startsWith("https://")) {
+                trimmed
+            } else {
+                val base = config.url.toHttpUrl()
+                base.resolve(trimmed)?.toString() ?: trimmed
+            }
+        }.getOrDefault(trimmed)
+    }
+
+    /** M-MCP1: 校验两个 URL 是否同源(scheme + host + port 一致)。 */
+    private fun isSameOrigin(url1: String, url2: String): Boolean {
+        return try {
+            val u1 = url1.toHttpUrl()
+            val u2 = url2.toHttpUrl()
+            u1.scheme == u2.scheme && u1.host == u2.host && u1.port == u2.port
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    // ── StreamableHTTP 传输 ───────────────────────────────────────────────────
+
+    /**
+     * StreamableHTTP 传输连接(MCP 2025-03-26):
+     *  1. POST initialize 到 [McpServerConfig.url],Accept: application/json, text/event-stream
+     *  2. 响应可能是单个 JSON(非流式)或 SSE 流(流式)
+     *  3. 解析响应,完成握手
+     *
+     * 与 SSE 不同,StreamableHTTP 无需保持长连接 — 每个请求独立 POST。
+     * 若 server 返回 SSE,则在 SSE 流结束前保持连接。
+     */
+    private suspend fun connectStreamableHttp(): Boolean {
+        return sendInitialize()
+    }
+
+    /**
+     * StreamableHTTP 请求:POST JSON-RPC,响应可能是 JSON 或 SSE。
+     * 解析响应,返回 JsonObject(单次响应)或从 SSE 流聚合最后一个事件。
+     */
+    private suspend fun postStreamableRequest(jsonRpc: String, retryOn401: Boolean = true): JsonObject? {
+        if (config.feishuAuth.enabled && !ensureFeishuTenantToken()) return null
+        val authHeaders = resolvedAuthHeaders()
+        val requestSessionId = streamableSessionId
+        val request = Request.Builder()
+            .url(config.url.toHttpUrl())
+            .header("Content-Type", "application/json")
+            .header("Accept", "application/json, text/event-stream")
+            .header("MCP-Protocol-Version", negotiatedProtocolVersion)
+            .apply {
+                requestSessionId?.let { header("Mcp-Session-Id", it) }
+            }
+            .apply { authHeaders.forEach { (k, v) -> header(k, v) } }
+            .post(jsonRpc.toRequestBody(JSON_MEDIA_TYPE))
+            .build()
+
+        return withContext(Dispatchers.IO) {
+            try {
+                client.newCall(request).execute().use { resp ->
+                    // M-MCP2: 收到 401 时强制 refresh token 并重试一次
+                    if (resp.code == 401 && retryOn401 && (oauthEnabled || feishuAuthEnabled)) {
+                        Logger.w(TAG, "[${config.name}] StreamableHTTP 收到 401,尝试刷新认证凭证后重试")
+                        val refreshed = if (oauthEnabled) {
+                            ensureValidToken(forceRefresh = true)
+                        } else {
+                            ensureFeishuTenantToken(forceRefresh = true)
+                        }
+                        if (refreshed) {
+                            return@withContext postStreamableRequest(jsonRpc, retryOn401 = false)
+                        }
+                        return@withContext null
+                    }
+                    if (!resp.isSuccessful) {
+                        lastTransportFailure = "MCP HTTP ${resp.code}"
+                        if (
+                            resp.code == 404 &&
+                            requestSessionId != null &&
+                            streamableSessionId == requestSessionId
+                        ) {
+                            // Only invalidate the session used by this request. A late 404 from
+                            // the previous session must not clear a newer ID installed by recovery.
+                            streamableSessionInvalidated = true
+                            streamableSessionId = null
+                        }
+                        Logger.w(
+                            TAG,
+                            "[${config.name}] StreamableHTTP HTTP ${resp.code}",
+                        )
+                        return@use null
+                    }
+                    // initialize 通常是第一个 Streamable HTTP 请求,但规范允许 server
+                    // 在后续响应更新会话 ID,因此每次响应都读取并覆盖本地缓存。
+                    resp.header("Mcp-Session-Id")?.takeIf { it.isNotBlank() }?.let { sessionId ->
+                        if (streamableSessionId != sessionId) {
+                            streamableSessionGeneration.incrementAndGet()
+                        }
+                        streamableSessionId = sessionId
+                        Logger.d(
+                            TAG,
+                            "[${config.name}] StreamableHTTP session established " +
+                                "(length=${sessionId.length})",
+                        )
+                    }
+                    val contentType = resp.header("Content-Type") ?: ""
+                    val body = resp.body.string()
+                    when {
+                        contentType.contains("text/event-stream") -> {
+                            // SSE 流: 解析 data: 行,取最后一个 JSON 事件
+                            parseSseResponse(body)
+                        }
+                        contentType.contains("application/json") -> {
+                            runCatching { AppJson.decodeFromString(JsonObject.serializer(), body) }.getOrNull()
+                        }
+                        else -> {
+                            // 兜底: 尝试当 JSON 解析
+                            if (body.isNotBlank() && body.trimStart().startsWith("{")) {
+                                runCatching { AppJson.decodeFromString(JsonObject.serializer(), body) }.getOrNull()
+                            } else {
+                                null
+                            }
+                        }
+                    }
+                }
+            } catch (e: kotlinx.coroutines.CancellationException) {
+                throw e
+            } catch (e: java.io.IOException) {
+                Logger.w(TAG, "[${config.name}] StreamableHTTP 请求 IO 异常: ${e.message}")
+                lastTransportFailure = "MCP network request failed"
+                null
+            }
+        }
+    }
+
+    /**
+     * 解析 SSE 响应体(纯文本 data: 行)。
+     * v1.0.47 P4: 遍历所有事件 — notification 立即调用 handleNotification,
+     * response 记录并返回最后一个(避免被 notification 覆盖)。
+     */
+    private fun parseSseResponse(body: String): JsonObject? {
+        var lastResponse: JsonObject? = null
+        val sb = StringBuilder()
+
+        // 处理单个已解析 JSON 事件:按类型分发
+        fun processEvent(text: String) {
+            val json = runCatching {
+                AppJson.decodeFromString(JsonObject.serializer(), text)
+            }.getOrNull() ?: return
+
+            val idEl = json["id"]
+            val methodEl = json["method"]
+            when {
+                // notification(无 id,有 method):立即分发
+                idEl == null && methodEl != null -> {
+                    val method = (methodEl as? JsonPrimitive)?.content ?: return
+                    val params = json["params"] as? JsonObject ?: buildJsonObject {}
+                    handleNotification(method, params)
+                }
+                // server→client request(有 id 且有 method):支持 ping,未知方法返回 MethodNotFound
+                idEl != null && methodEl != null -> {
+                    val method = (methodEl as? JsonPrimitive)?.content
+                    val id = (idEl as? JsonPrimitive)?.content?.toLongOrNull()
+                    if (id != null) handleServerRequest(id, method)
+                }
+                // response(有 id,无 method):记录并返回最后一个
+                else -> {
+                    lastResponse = json
+                }
+            }
+        }
+
+        for (line in body.lines()) {
+            if (line.startsWith("data:")) {
+                // L-MCP4: 按 SSE 规范,多行 data 用 \n 连接
+                if (sb.isNotEmpty()) sb.append('\n')
+                sb.append(line.removePrefix("data:").trim())
+            } else if (line.isBlank() && sb.isNotEmpty()) {
+                processEvent(sb.toString())
+                sb.clear()
+            }
+        }
+        // 处理末尾未以空行结束的情况
+        if (sb.isNotEmpty()) {
+            processEvent(sb.toString())
+        }
+        return lastResponse
+    }
+
+    // ── JSON-RPC 请求 ─────────────────────────────────────────────────────────
+
+    /** 发送 initialize 请求 + initialized 通知,完成握手。 */
+    /**
+     * P1-A: stdio 传输连接 — 启动本地 MCP server 子进程并完成 initialize 握手。
+     */
+    private suspend fun connectStdio(): Boolean {
+        val ctx = appContext ?: run {
+            Logger.w(TAG, "[${config.name}] stdio 连接缺少应用上下文")
+            return false
+        }
+        stdioTransport?.stop()
+        val transport = McpStdioTransport(
+            config = config,
+            context = ctx,
+            scope = scope,
+            onMessage = { json -> handleStdioMessage(json) },
+            onExit = { code -> handleStdioExit(code) },
+        )
+        return if (transport.start()) {
+            stdioTransport = transport
+            sendInitialize()
+        } else {
+            false
+        }
+    }
+
+    /**
+     * P1-A: stdio 消息分流。
+     *  - 有 id 且有 method → server→client 请求（回包走 sendResponse）
+     *  - 有 id → 请求响应（投递到 pendingRequests）
+     *  - 无 id → 通知（走 [handleNotification]）
+     */
+    private fun handleStdioMessage(json: JsonObject) {
+        val id = (json["id"] as? JsonPrimitive)?.contentOrNull?.toLongOrNull()
+        val method = (json["method"] as? JsonPrimitive)?.contentOrNull
+        when {
+            id != null && method != null -> handleServerRequest(id, method)
+            id != null -> pendingRequests[id]?.trySend(json)
+            method != null -> {
+                val params = json["params"] as? JsonObject ?: JsonObject(emptyMap())
+                handleNotification(method, params)
+            }
+        }
+    }
+
+    /** P1-A: stdio 进程退出 — 非主动关闭时走重连。 */
+    private fun handleStdioExit(code: Int) {
+        Logger.w(TAG, "[${config.name}] stdio 进程退出: code=$code")
+        stdioTransport = null
+        if (!closed) scheduleReconnect()
+    }
+
+    private suspend fun sendInitialize(allowSessionRecovery: Boolean = true): Boolean {
+        val id = idCounter.getAndIncrement()
+        val request = buildJsonObject {
+            put("jsonrpc", "2.0")
+            put("id", id)
+            put("method", "initialize")
+            put(
+                "params",
+                buildJsonObject {
+                    put("protocolVersion", PROTOCOL_VERSION)
+                    // v1.0.47 P4: 声明 sampling 能力(允许 server 请求客户端 LLM)
+                    put(
+                        "capabilities",
+                        buildJsonObject {
+                            put("sampling", buildJsonObject {})
+                            // v1.0.47 P4: 声明 roots 能力(允许 server 访问客户端文件系统根)
+                            put(
+                                "roots",
+                                buildJsonObject {
+                                    put("listChanged", true)
+                                },
+                            )
+                        },
+                    )
+                    put(
+                        "clientInfo",
+                        buildJsonObject {
+                            put("name", "muse")
+                            put("version", "1.0.0")
+                        },
+                    )
+                },
+            )
+        }
+        val response = sendRequest(id, request, allowSessionRecovery = allowSessionRecovery) ?: return false
+        logJsonRpcError("initialize", response)
+
+        // 解析 serverInfo
+        val result = response["result"] as? JsonObject
+        // L-MCP3: 读取 server 返回的 protocolVersion 并记录
+        val serverProtocolVersion = (result?.get("protocolVersion") as? JsonPrimitive)?.content
+        if (serverProtocolVersion != null) {
+            negotiatedProtocolVersion = serverProtocolVersion
+            Logger.i(TAG, "[${config.name}] server protocolVersion=$serverProtocolVersion (client=${PROTOCOL_VERSION})")
+        }
+        serverInfo = result?.let {
+            val info = it["serverInfo"] as? JsonObject
+            McpServerInfo(
+                name = (info?.get("name") as? JsonPrimitive)?.content,
+                version = (info?.get("version") as? JsonPrimitive)?.content,
+            )
+        }
+
+        // 仅有一个没有 error 的 JSON-RPC 外壳不代表握手成功;必须确认 result
+        // 存在,否则后续 tools/list 会在“假 CONNECTED”状态下静默变成空工具集。
+        if (response["error"] != null || result == null) return false
+        // 发 initialized 通知(无 id)
+        sendNotification("notifications/initialized")
+        return true
+    }
+
+    /**
+     * tools/list:列出 server 暴露的所有工具。
+     * @return 工具列表;失败返回空列表
+     */
+    suspend fun listTools(): List<McpTool> = withContext(Dispatchers.IO) {
+        listToolsOrNull() ?: emptyList()
+    }
+
+    /**
+     * tools/list 的可空版本。
+     *
+     * 空列表是 MCP server 的合法结果,不能和 HTTP/JSON-RPC 失败混为一谈;
+     * Registry 需要据此决定是否允许聊天继续等待工具注册。
+     */
+    suspend fun listToolsOrNull(): List<McpTool>? = withContext(Dispatchers.IO) {
+        if (_state.value != McpConnectionState.CONNECTED) return@withContext null
+        val id = idCounter.getAndIncrement()
+        val request = buildJsonObject {
+            put("jsonrpc", "2.0")
+            put("id", id)
+            put("method", "tools/list")
+        }
+        val response = sendRequest(id, request) ?: return@withContext null
+        logJsonRpcError("tools/list", response)
+        if (response["error"] != null) return@withContext null
+        val result = response["result"] as? JsonObject ?: return@withContext null
+        val toolsEl = result["tools"] ?: return@withContext null
+        runCatching {
+            AppJson.decodeFromString(
+                kotlinx.serialization.builtins.ListSerializer(McpTool.serializer()),
+                AppJson.encodeToString(toolsEl),
+            )
+        }.getOrNull()
+    }
+
+    /**
+     * tools/call:调用指定工具。
+     * @param name 工具名
+     * @param arguments 参数(JsonObject)
+     * @return 调用结果;失败返回 isError=true 的空结果
+     */
+    suspend fun callTool(name: String, arguments: JsonObject): McpToolCallResult = withContext(Dispatchers.IO) {
+        if (_state.value != McpConnectionState.CONNECTED) {
+            lastTransportFailure = "MCP client is not connected"
+            return@withContext McpToolCallResult(
+                isError = true,
+                content = listOf(
+                    buildJsonObject {
+                        put("type", "text")
+                        put("text", lastTransportFailure ?: "MCP client is not connected")
+                    },
+                ),
+            )
+        }
+        lastTransportFailure = null
+        val id = idCounter.getAndIncrement()
+        val request = buildJsonObject {
+            put("jsonrpc", "2.0")
+            put("id", id)
+            put("method", "tools/call")
+            put(
+                "params",
+                buildJsonObject {
+                    put("name", name)
+                    put("arguments", arguments)
+                },
+            )
+        }
+        val response = sendRequest(id, request) ?: return@withContext McpToolCallResult(
+            isError = true,
+            content = listOf(
+                buildJsonObject {
+                    put("type", "text")
+                    put("text", lastTransportFailure ?: "MCP transport request failed")
+                },
+            ),
+        )
+        logJsonRpcError("tools/call", response)
+        response["error"]?.let { error ->
+            return@withContext McpToolCallResult(
+                isError = true,
+                content = listOf(
+                    buildJsonObject {
+                        put("type", "text")
+                        put("text", "JSON-RPC error: $error")
+                    },
+                ),
+            )
+        }
+        val result = response["result"] ?: return@withContext McpToolCallResult(
+            isError = true,
+            content = listOf(
+                buildJsonObject {
+                    put("type", "text")
+                    put("text", "MCP response did not contain a result")
+                },
+            ),
+        )
+        val rawResultJson = AppJson.encodeToString(result)
+        runCatching {
+            AppJson.decodeFromString(McpToolCallResult.serializer(), rawResultJson)
+        }.getOrElse { decodeError ->
+            // v1.0.79 (D-2): 解析失败不再静默丢弃 — 保留原始 result JSON 作为错误详情回传,
+            // 并记录日志。此前 getOrDefault(isError=true 空结果) 会把 server 的错误原因
+            // 全部吞掉,模型拿不到失败原因无法自我纠正。
+            Logger.w(TAG, "[${config.id}] tools/call 结果解析失败: ${decodeError.message}")
+            McpToolCallResult(
+                isError = true,
+                content = listOf(
+                    buildJsonObject {
+                        put("type", "text")
+                        put("text", "MCP server returned malformed result: $rawResultJson")
+                    },
+                ),
+            )
+        }
+    }
+
+    // ── Phase 11.1.2: resources / prompts ───────────────────────────────────
+
+    /**
+     * Phase 11.1.2: resources/list — 列出 server 暴露的所有资源。
+     *
+     * @return 资源列表;失败返回空列表
+     */
+    suspend fun listResources(): List<McpResource> = withContext(Dispatchers.IO) {
+        if (_state.value != McpConnectionState.CONNECTED) return@withContext emptyList()
+        val id = idCounter.getAndIncrement()
+        val request = buildJsonObject {
+            put("jsonrpc", "2.0")
+            put("id", id)
+            put("method", "resources/list")
+        }
+        val response = sendRequest(id, request) ?: return@withContext emptyList()
+        logJsonRpcError("resources/list", response)
+        val result = response["result"] as? JsonObject ?: return@withContext emptyList()
+        val resourcesEl = result["resources"] ?: return@withContext emptyList()
+        runCatching {
+            AppJson.decodeFromString(
+                kotlinx.serialization.builtins.ListSerializer(McpResource.serializer()),
+                AppJson.encodeToString(resourcesEl),
+            )
+        }.getOrDefault(emptyList())
+    }
+
+    /**
+     * Phase 11.1.2: resources/read — 读取指定资源内容。
+     *
+     * @param uri 资源 URI(resources/list 返回的 uri 字段)
+     * @return 资源内容列表(可能多个,如目录资源返回多个文件);失败返回空列表
+     */
+    suspend fun readResource(uri: String): List<McpResourceContent> = withContext(Dispatchers.IO) {
+        if (_state.value != McpConnectionState.CONNECTED) return@withContext emptyList()
+        val id = idCounter.getAndIncrement()
+        val request = buildJsonObject {
+            put("jsonrpc", "2.0")
+            put("id", id)
+            put("method", "resources/read")
+            put(
+                "params",
+                buildJsonObject {
+                    put("uri", uri)
+                },
+            )
+        }
+        val response = sendRequest(id, request) ?: return@withContext emptyList()
+        logJsonRpcError("resources/read", response)
+        val result = response["result"] as? JsonObject ?: return@withContext emptyList()
+        val contentsEl = result["contents"] ?: return@withContext emptyList()
+        runCatching {
+            AppJson.decodeFromString(
+                kotlinx.serialization.builtins.ListSerializer(McpResourceContent.serializer()),
+                AppJson.encodeToString(contentsEl),
+            )
+        }.getOrDefault(emptyList())
+    }
+
+    /**
+     * Phase 11.1.2: prompts/list — 列出 server 暴露的所有 prompt 模板。
+     *
+     * @return prompt 列表;失败返回空列表
+     */
+    suspend fun listPrompts(): List<McpPrompt> = withContext(Dispatchers.IO) {
+        if (_state.value != McpConnectionState.CONNECTED) return@withContext emptyList()
+        val id = idCounter.getAndIncrement()
+        val request = buildJsonObject {
+            put("jsonrpc", "2.0")
+            put("id", id)
+            put("method", "prompts/list")
+        }
+        val response = sendRequest(id, request) ?: return@withContext emptyList()
+        logJsonRpcError("prompts/list", response)
+        val result = response["result"] as? JsonObject ?: return@withContext emptyList()
+        val promptsEl = result["prompts"] ?: return@withContext emptyList()
+        runCatching {
+            AppJson.decodeFromString(
+                kotlinx.serialization.builtins.ListSerializer(McpPrompt.serializer()),
+                AppJson.encodeToString(promptsEl),
+            )
+        }.getOrDefault(emptyList())
+    }
+
+    /**
+     * Phase 11.1.2: prompts/get — 获取指定 prompt 的消息内容。
+     *
+     * @param name prompt 名(prompts/list 返回的 name 字段)
+     * @param arguments 参数(name→value),对应 [McpPrompt.arguments]
+     * @return prompt 消息列表;失败返回空 messages
+     */
+    suspend fun getPrompt(name: String, arguments: Map<String, String> = emptyMap()): McpPromptResult = withContext(Dispatchers.IO) {
+        if (_state.value != McpConnectionState.CONNECTED) {
+            return@withContext McpPromptResult()
+        }
+        val id = idCounter.getAndIncrement()
+        val request = buildJsonObject {
+            put("jsonrpc", "2.0")
+            put("id", id)
+            put("method", "prompts/get")
+            put(
+                "params",
+                buildJsonObject {
+                    put("name", name)
+                    if (arguments.isNotEmpty()) {
+                        put(
+                            "arguments",
+                            buildJsonObject {
+                                arguments.forEach { (k, v) -> put(k, v) }
+                            },
+                        )
+                    }
+                },
+            )
+        }
+        val response = sendRequest(id, request) ?: return@withContext McpPromptResult()
+        logJsonRpcError("prompts/get", response)
+        val result = response["result"] ?: return@withContext McpPromptResult()
+        runCatching {
+            AppJson.decodeFromString(McpPromptResult.serializer(), AppJson.encodeToString(result))
+        }.getOrDefault(McpPromptResult())
+    }
+
+    /** M-MCP5: 记录 JSON-RPC error 响应(code + message),避免静默丢弃。 */
+    private fun logJsonRpcError(context: String, response: JsonObject?) {
+        val error = response?.get("error") as? JsonObject ?: return
+        val code = (error["code"] as? JsonPrimitive)?.content
+        val message = (error["message"] as? JsonPrimitive)?.content
+        Logger.w(TAG, "[${config.name}] $context JSON-RPC error: code=$code, message=$message")
+    }
+
+    /**
+     * B3-09: 处理 server→client request。
+     * ping 返回空 result,未知方法返回 JSON-RPC MethodNotFound。
+     */
+    private fun handleServerRequest(id: Long, method: String?) {
+        scope.launch {
+            val response = if (method == "ping") {
+                buildJsonObject {
+                    put("jsonrpc", "2.0")
+                    put("id", id)
+                    put("result", buildJsonObject {})
+                }
+            } else {
+                buildJsonObject {
+                    put("jsonrpc", "2.0")
+                    put("id", id)
+                    put(
+                        "error",
+                        buildJsonObject {
+                            put("code", -32601)
+                            put("message", "Method not found")
+                        },
+                    )
+                }
+            }
+            sendResponse(response)
+        }
+    }
+
+    /** 发送 JSON-RPC 响应(用于 server→client request 的回包)。 */
+    private suspend fun sendResponse(response: JsonObject) {
+        val jsonStr = AppJson.encodeToString(response)
+        when (config.transportType) {
+            McpTransportType.STREAMABLE_HTTP -> postStreamableRequest(jsonStr)
+            McpTransportType.SSE -> postSseRequest(jsonStr)
+            McpTransportType.STDIO -> stdioTransport?.send(jsonStr)
+        }
+    }
+
+    /**
+     * 发送 JSON-RPC 请求,等待响应(带超时)。
+     * SSE 模式:POST 后等 SSE 事件;StreamableHTTP:直接拿响应。
+     */
+    private suspend fun sendRequest(id: Long, request: JsonObject, allowSessionRecovery: Boolean = true): JsonObject? {
+        val jsonStr = AppJson.encodeToString(request)
+        val timeoutMs = config.requestTimeoutMs
+        val sessionGenerationAtStart = if (config.transportType == McpTransportType.STREAMABLE_HTTP) {
+            streamableSessionGeneration.get()
+        } else {
+            -1L
+        }
+
+        val response = when (config.transportType) {
+            McpTransportType.STREAMABLE_HTTP -> {
+                withTimeoutOrNull(timeoutMs) { postStreamableRequest(jsonStr) }
+            }
+            McpTransportType.SSE -> {
+                // SSE 模式:注册 pending channel,POST 请求,等 SSE 事件回来
+                val channel = Channel<JsonObject>(Channel.CONFLATED)
+                pendingRequests[id] = channel
+                try {
+                    withTimeoutOrNull(timeoutMs) {
+                        // POST 请求(server 可能直接返回响应,也可能通过 SSE 事件)
+                        val directResponse = postSseRequest(jsonStr)
+                        if (directResponse != null) {
+                            directResponse
+                        } else {
+                            // 等 SSE 事件
+                            channel.receiveCatching().getOrNull()
+                        }
+                    }
+                } finally {
+                    pendingRequests.remove(id)
+                }
+            }
+            McpTransportType.STDIO -> {
+                // P1-A: 注册 pending channel -> 写 stdin -> 等 stdout 行响应
+                val channel = Channel<JsonObject>(Channel.CONFLATED)
+                pendingRequests[id] = channel
+                try {
+                    withTimeoutOrNull(timeoutMs) {
+                        if (stdioTransport?.send(jsonStr) == true) {
+                            channel.receiveCatching().getOrNull()
+                        } else {
+                            null
+                        }
+                    }
+                } finally {
+                    pendingRequests.remove(id)
+                }
+            }
+        }
+
+        if (
+            response == null &&
+            allowSessionRecovery &&
+            config.transportType == McpTransportType.STREAMABLE_HTTP &&
+            (
+                streamableSessionInvalidated ||
+                    streamableSessionGeneration.get() > sessionGenerationAtStart ||
+                    streamableSessionRecoveryMutex.isLocked
+                )
+        ) {
+            val recovered = streamableSessionRecoveryMutex.withLock {
+                if (streamableSessionGeneration.get() > sessionGenerationAtStart) {
+                    true
+                } else if (streamableSessionInvalidated) {
+                    streamableSessionInvalidated = false
+                    Logger.i(TAG, "[${config.name}] MCP session 已失效,重新 initialize 后重试原请求")
+                    sendInitialize(allowSessionRecovery = false)
+                } else {
+                    false
+                }
+            }
+            if (recovered) {
+                return sendRequest(id, request, allowSessionRecovery = false)
+            }
+        }
+        return response
+    }
+
+    /** 发送 JSON-RPC 通知(无 id,无响应)。 */
+    private suspend fun sendNotification(method: String) {
+        val request = buildJsonObject {
+            put("jsonrpc", "2.0")
+            put("method", method)
+        }
+        val jsonStr = AppJson.encodeToString(request)
+        when (config.transportType) {
+            McpTransportType.STREAMABLE_HTTP -> postStreamableRequest(jsonStr)
+            McpTransportType.SSE -> postSseRequest(jsonStr)
+            McpTransportType.STDIO -> stdioTransport?.send(jsonStr)
+        }
+    }
+
+    // ── 重连 ──────────────────────────────────────────────────────────────────
+
+    /**
+     * 指数退避重连:base * 2^attempt,上限 30s。
+     * 达到 [McpServerConfig.maxReconnectAttempts] 转 FAILED 状态。
+     */
+    private fun scheduleReconnect() {
+        if (closed) return
+        if (!config.autoReconnect) {
+            _state.value = McpConnectionState.FAILED
+            return
+        }
+        if (reconnectAttempts >= config.maxReconnectAttempts) {
+            Logger.w(TAG, "[${config.name}] 超过最大重连次数 ${config.maxReconnectAttempts},转 FAILED")
+            _state.value = McpConnectionState.FAILED
+            return
+        }
+
+        _state.value = McpConnectionState.RECONNECTING
+        val delayMs = minOf(
+            config.reconnectBaseMs * (1L shl reconnectAttempts),
+            RECONNECT_MAX_DELAY_MS,
+        )
+        reconnectAttempts++
+        Logger.d(TAG, "[${config.name}] 第 $reconnectAttempts 次重连,${delayMs}ms 后重试")
+
+        scope.launch {
+            delay(delayMs)
+            if (!closed) connect()
+        }
+    }
+
+    // ── 生命周期 ─────────────────────────────────────────────────────────────
+
+    /** 主动关闭连接(不触发重连)。 */
+    override fun close() {
+        closed = true
+        _state.value = McpConnectionState.DISCONNECTED
+        stdioTransport?.stop()
+        stdioTransport = null
+        eventSource?.cancel()
+        eventSource = null
+        scope.cancel()
+        pendingRequests.clear()
+        streamableSessionId = null
+        negotiatedProtocolVersion = PROTOCOL_VERSION
+    }
+
+    private companion object {
+        const val TAG = "McpClient"
+        const val PROTOCOL_VERSION = "2025-03-26"
+
+        // L-MCP2: 超时/重连魔法数字提取为常量
+        const val SSE_ENDPOINT_TIMEOUT_MS = 5_000L
+        const val RECONNECT_MAX_DELAY_MS = 30_000L
+        const val FEISHU_REFRESH_MARGIN_MS = 30 * 60 * 1000L
+        val JSON_MEDIA_TYPE = "application/json; charset=utf-8".toMediaType()
+        val defaultClient = OkHttpClient.Builder()
+            .connectTimeout(15, TimeUnit.SECONDS)
+            // v1.114 修复: SSE 长连接场景 readTimeout 60s 偏短(服务端长时间无数据会被误断),
+            //   与 chat client 一致改为 120s
+            .readTimeout(120, TimeUnit.SECONDS)
+            // v1.114 修复: SSE 会话可能持续很久(MCP 工具调用 / 长推理),callTimeout 60s 会强制中断整个会话;
+            //   0 表示无限制,由 readTimeout / pingInterval 控制活性
+            .callTimeout(0, TimeUnit.SECONDS)
+            .pingInterval(30, TimeUnit.SECONDS)
+            .build()
+    }
+}

@@ -1,0 +1,144 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- ===== notification ===== -->
+    <!-- Notification channel names -->
+    <string name="notif_channel_chat_completed_name">Geração de mensagem concluída</string>
+    <string name="notif_channel_chat_completed_desc">Notificação quando a geração de streaming em segundo plano for concluída</string>
+    <string name="notif_channel_chat_live_update_name">Progresso da geração</string>
+    <string name="notif_channel_chat_live_update_desc">Notificação de progresso em tempo real durante a geração de streaming</string>
+    <string name="notif_channel_web_server_name">Servidor web</string>
+    <string name="notif_channel_web_server_desc">Servidor Web executando notificação de status</string>
+    <string name="notif_channel_proactive_message_name">Mensagem proativa</string>
+    <string name="notif_channel_proactive_message_desc">Notificação quando o assistente lhe envia uma mensagem proativamente</string>
+    <!-- Notification title/content -->
+    <string name="notif_chat_completed_title">Resposta concluída · %1$s</string>
+    <string name="notif_proactive_message_title">%1$s enviou uma mensagem</string>
+    <string name="notif_live_progress_title">Gerando · %1$s</string>
+    <string name="notif_live_progress_text">%1$d caracteres</string>
+    <string name="notif_web_server_title">muse servidor Web em execução</string>
+    <string name="notif_web_server_text">Porta %1$d · Dispositivos LAN podem acessar</string>
+    <!-- v1.133: App update notification (reuses CHANNEL_CHAT_COMPLETED) -->
+    <string name="update_notif_title">Nova versão disponível</string>
+    <string name="update_notif_text">%1$s foi lançado, toque para ver detalhes</string>
+    <!-- v1.133: In-app update banner -->
+    <string name="update_banner_published">%1$s lançado</string>
+    <string name="update_banner_view_detail">Ver detalhes</string>
+    <string name="update_banner_download_apk">Baixar APK</string>
+    <string name="update_banner_close_cd">Dispensar banner da nova versão</string>
+    <string name="update_found_new">Nova versão encontrada, veja o banner no topo</string>
+    <string name="update_already_latest">Já atualizado</string>
+
+    <!-- ===== schedule ===== -->
+    <!-- Scheduled task notification channel -->
+    <string name="schedule_channel_name">Tarefas agendadas</string>
+    <string name="schedule_channel_desc">Notificação para tarefa agendada vencida</string>
+    <!-- Scheduled task default session name -->
+    <string name="schedule_default_session_name">Tarefa agendada</string>
+    <!-- Chat generation foreground service default notification title -->
+    <string name="schedule_generating_default_title">Gerando</string>
+    <!-- v1.137: Execution summary when automation condition is not met -->
+    <string name="schedule_condition_not_met">Condição não atendida, ignorada</string>
+
+    <!-- ===== main activity ===== -->
+    <!-- Safe mode -->
+    <string name="main_activity_safe_mode_title">musa está em modo de segurança</string>
+    <string name="main_activity_safe_mode_desc">Um acidente ocorreu da última vez.</string>
+    <string name="main_activity_crash_log_copied">Log de falhas copiado para a área de transferência</string>
+    <string name="main_activity_copy_crash_log">Copiar registro de falha</string>
+    <string name="main_activity_clear_flag_and_exit">Limpar bandeira e sair</string>
+    <string name="main_activity_send_crash_email">Enviar log de falhas por e-mail</string>
+    <string name="main_activity_send_crash_email_failed">Nenhum aplicativo de e-mail encontrado, registro copiado para a área de transferência</string>
+    <!-- v2.0+: SafeModeScreen new copy  -->
+    <string name="safe_mode_warning_title">O último lançamento falhou</string>
+    <string name="safe_mode_continue_normal">Continuar inicialização normal</string>
+    <string name="safe_mode_view_full_log">Ver registro completo de falhas</string>
+    <string name="safe_mode_clear_data_restart">Limpe todos os dados e reinicie</string>
+    <string name="safe_mode_copy_crash_info">Copiar informações de falha</string>
+    <string name="safe_mode_crash_time_label">Hora do acidente</string>
+    <string name="safe_mode_stack_trace_label">Rastreamento de pilha</string>
+    <string name="safe_mode_no_crash_log">Nenhum registro de falha registrado</string>
+    <string name="safe_mode_share_log_failed">Falha ao compartilhar o registro de falhas</string>
+    <!-- PIN lock screen -->
+    <string name="main_activity_locked_title">musa está bloqueada</string>
+    <string name="main_activity_pin_prompt">Digite o PIN para continuar</string>
+    <string name="main_activity_pin_locked">Muitas tentativas incorretas de PIN. Aguarde %1$ds antes de tentar novamente</string>
+    <string name="main_activity_pin_error">PIN incorreto. Tente novamente</string>
+    <string name="main_activity_exit_app">Sair do aplicativo</string>
+
+    <!-- ===== NotificationListenerScreen.kt ===== -->
+    <string name="notif_listener_screen_title">Ouvinte de notificação</string>
+    <string name="notif_bridge_title">Acesso de ponte</string>
+    <string name="notif_bridge_desc">Ao ativar para uma fonte, o texto da notificação entra no contexto do chat (somente local; as demais seguem ocultas)</string>
+    <string name="notif_listener_open_settings_failed">Não é possível abrir as configurações do sistema</string>
+    <string name="notif_listener_auth_settings">Conceder acesso</string>
+    <string name="notif_listener_cleared_toast">Registros de notificação apagados</string>
+    <string name="notif_listener_clear_records">Limpar registros</string>
+    <string name="notif_listener_feature_title">Descrição do recurso</string>
+    <string name="notif_listener_feature_desc">Uma vez autorizado, o Muse pode detectar notificações de outros aplicativos como fontes de eventos para a IA consultar no chat.</string>
+    <string name="notif_listener_privacy_title">Limite de privacidade</string>
+    <string name="notif_listener_privacy_desc">• O conteúdo da notificação é armazenado apenas localmente (máximo de 50 entradas, a mais antiga é descartada quando cheia)\n• A UI do sistema e as próprias notificações do Muse são filtradas\n• Nenhum dado de notificação é carregado em nenhum servidor\n• Você pode \"Limpar registros\" aqui ou revogar o acesso nas configurações do sistema a qualquer momento</string>
+    <string name="notif_listener_recent_header">Notificações recentes (%1$d/50)</string>
+    <string name="notif_listener_empty_connected">Ainda não há registros de notificação\nNovas notificações aparecerão aqui automaticamente assim que autorizadas</string>
+    <string name="notif_listener_empty_disconnected">Ainda não autorizado\nToque primeiro em \"Conceder acesso\" acima</string>
+    <string name="notif_listener_authorized">Autorizado</string>
+    <string name="notif_listener_unauthorized">Não autorizado</string>
+    <string name="notif_listener_recent_count_connected">Notificações recentes: %1$d</string>
+    <string name="notif_listener_recent_count_disconnected">Notificações recentes: %1$d · Por favor, conceda acesso nas configurações do sistema primeiro</string>
+    <string name="notif_listener_refresh_cd">Atualizar status</string>
+    <string name="safe_mode_data_recovery">Guia de recuperação de dados</string>
+    <string name="safe_mode_data_recovery_title">Guia de recuperação de dados</string>
+    <string name="safe_mode_data_recovery_desc">Esta falha não afeta seus dados locais; conversas e configurações estão intactas. Para restaurar de um backup na nuvem: após reiniciar, vá em Configurações → Backup de dados → Restaurar da nuvem.</string>
+    <string name="safe_mode_data_recovery_ok">Entendi</string>
+    <string name="safe_mode_continue_normal_desc">Mantenha conversas e configurações e tente abrir o Muse novamente</string>
+    <string name="safe_mode_view_full_log_desc">Veja ou compartilhe o registro completo para ajudar a diagnosticar o problema</string>
+    <string name="safe_mode_clear_data_restart_desc">Exclui conversas, configurações e arquivos locais; use apenas quando o Muse não abrir normalmente</string>
+    <string name="safe_mode_clear_data_confirm_title">Excluir todos os dados?</string>
+    <string name="safe_mode_clear_data_confirm_desc">Isso exclui conversas, configurações, avatares e arquivos locais e não pode ser desfeito. Use apenas se o Muse continuar sem abrir normalmente.</string>
+    <string name="safe_mode_clear_data_confirm_action">Excluir todos os dados</string>
+    <string name="safe_mode_copy_crash_info_desc">Copie o horário e a pilha de erros para enviar em um relatório</string>
+    <string name="safe_mode_data_recovery_desc_short">Veja o que será mantido e como restaurar um backup</string>
+    <string name="notif_auto_backup_success_title">Backup automático concluído</string>
+    <string name="notif_auto_backup_success_text">Seus dados foram salvos na nuvem</string>
+    <string name="notif_auto_backup_failed_title">Falha no backup automático</string>
+    <string name="notif_auto_backup_failed_text">O backup automático não foi concluído. Verifique as configurações de backup na nuvem</string>
+    <string name="notif_auto_backup_failed_write_text">Falha ao escrever na nuvem. Verifique a rede e a configuração de cópia.</string>
+    <string name="notif_auto_backup_failed_verify_text">Cópia salva, mas a verificação falhou. Os dados podem estar incompletos.</string>
+    <string name="notif_permission_status_on">Permissão de notificação ativada</string>
+    <string name="notif_permission_status_off">Permissão de notificação desativada</string>
+    <string name="notif_permission_guide">Ative para receber notificações de mensagens e cópias</string>
+    <string name="notif_permission_open">Ativar</string>
+    <!-- v1.0.85: release localization -->
+    <string name="notif_listener_search_hint">Pesquisar notificações</string>
+    <string name="notif_listener_all_apps">Todos os apps</string>
+    <string name="notif_listener_show_all">Mostrar tudo</string>
+    <string name="notif_listener_unread_only">Somente não lidas</string>
+    <string name="notif_listener_mark_all_read">Marcar tudo como lido</string>
+    <string name="notif_listener_export">Exportar</string>
+    <string name="notif_listener_export_success">Notificações exportadas</string>
+    <string name="notif_listener_export_failed">Falha ao exportar notificações: %1$s</string>
+    <string name="notif_listener_export_write_failed">Não foi possível gravar o arquivo exportado</string>
+    <string name="notif_listener_filter_empty">Nenhuma notificação corresponde ao filtro atual</string>
+    <string name="notif_listener_no_text">Esta notificação não tem texto para exibir</string>
+    <string name="notif_listener_unread_label">Não lida</string>
+    <string name="notif_listener_active_only">Somente ativas</string>
+    <string name="notif_listener_show_history">Mostrar histórico</string>
+    <string name="notif_listener_counts">%1$d no total · %2$d ativas · %3$d não lidas</string>
+    <string name="notif_listener_active_label">Na barra de notificações</string>
+    <string name="notif_listener_removed_label">Removida</string>
+    <string name="notif_listener_channel_label">Canal: %1$s</string>
+    <string name="notif_listener_category_label">Categoria: %1$s</string>
+    <string-array name="greeting_notify_titles">
+        <item>Ei</item>
+        <item>Não esqueça</item>
+        <item>Um lembrete</item>
+        <item>Tenho algo para te contar</item>
+        <item>Vou te contar em segredo</item>
+    </string-array>
+    <string name="schedule_err_tool_id_required">O ID da ferramenta não pode ficar vazio</string>
+    <string name="schedule_err_tool_params_invalid">Os parâmetros da ferramenta não são um JSON válido: %1$s</string>
+    <string name="schedule_run_failed_detail">Falha na execução: %1$s</string>
+    <string name="schedule_run_success_detail">Executado com sucesso: %1$s</string>
+    <string name="schedule_tool_advanced_hint">Dica: recursos avançados costumam ser mais fáceis de descrever com IA</string>
+    <string name="schedule_tool_templates_title">Preenchimento rápido de ferramentas comuns (toque para preencher automaticamente)</string>
+    <string name="schedule_view_all_history">Ver todo o histórico</string>
+</resources>

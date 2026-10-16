@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<baseline version="1.0">
+    <file name="src/main/java/io/zer0/common/ErrorMessage.kt">
+        <error line="86" column="21" source="standard:class-naming" />
+        <error line="92" column="21" source="standard:class-naming" />
+        <error line="103" column="21" source="standard:class-naming" />
+        <error line="126" column="20" source="standard:class-naming" />
+        <error line="137" column="21" source="standard:class-naming" />
+        <error line="143" column="21" source="standard:class-naming" />
+        <error line="149" column="21" source="standard:class-naming" />
+        <error line="160" column="21" source="standard:class-naming" />
+        <error line="166" column="21" source="standard:class-naming" />
+        <error line="172" column="21" source="standard:class-naming" />
+        <error line="183" column="21" source="standard:class-naming" />
+        <error line="189" column="21" source="standard:class-naming" />
+    </file>
+    <file name="src/main/java/io/zer0/common/PiiEngine.kt">
+        <error line="12" column="1" source="standard:max-line-length" />
+        <error line="62" column="1" source="standard:max-line-length" />
+        <error line="86" column="1" source="standard:max-line-length" />
+        <error line="97" column="1" source="standard:max-line-length" />
+        <error line="129" column="1" source="standard:max-line-length" />
+    </file>
+    <file name="src/main/java/io/zer0/common/TextTruncation.kt">
+        <error line="69" column="69" source="standard:function-signature" />
+    </file>
+    <file name="src/test/java/io/zer0/common/ResultTest.kt">
+        <error line="195" column="49" source="standard:comment-wrapping" />
+    </file>
+</baseline>

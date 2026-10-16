@@ -1,0 +1,343 @@
+package io.zer0.muse.automation.executors
+
+import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.GestureDescription
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
+import android.graphics.Path
+import android.os.Build
+import android.util.DisplayMetrics
+import android.view.accessibility.AccessibilityNodeInfo
+import io.zer0.common.Logger
+import io.zer0.muse.accessibility.AccessibilityPathUtils
+import io.zer0.muse.automation.core.AutomationExecutor
+import io.zer0.muse.automation.core.PermissionLevel
+import io.zer0.muse.automation.core.ScreenInfo
+import io.zer0.muse.automation.core.UiNode
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
+import java.io.File
+import kotlin.coroutines.resume
+
+/**
+ * 无障碍执行器 —— 第一层 UI 自动化。
+ *
+ * 通过 [MuseAccessibilityService] 读取控件树 + dispatchGesture 注入手势。
+ * 这是三层里门槛最低的一层(用户只需在系统设置里开启无障碍开关)。
+ *
+ * 局限:
+ * - 自定义 Canvas/WebView 内的控件读不到(此时上层会降级到截屏+视觉模型)
+ * - 手势是坐标级的,需要调用方结合 [ScreenInfo] 算出坐标
+ */
+class AccessibilityExecutor(
+    private val context: Context,
+) : AutomationExecutor {
+
+    override val level = PermissionLevel.ACCESSIBILITY
+
+    private val service: MuseAccessibilityService? get() = MuseAccessibilityService.instance
+
+    override suspend fun isAvailable(): Boolean = service?.isAccessibilityServiceEnabled() == true
+
+    // ── 屏幕读取 ──────────────────────────────────────────────
+
+    @Suppress("ReturnCount", "TooGenericExceptionCaught") // Screenshot is a best-effort platform boundary.
+    override suspend fun screenshot(): ByteArray? {
+        // Android 14+ 的 AccessibilityService.takeScreenshot 不需要 MediaProjection、Shizuku 或 Root。
+        // 低版本仍返回 null,由 AutomationManager 继续尝试 Shell/Root。
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return null
+        val svc = service ?: return null
+        return withContext(Dispatchers.IO) {
+            val file = File(context.cacheDir, "a11y-shot-${System.nanoTime()}.jpg")
+            try {
+                if (!svc.takeScreenshot(file.absolutePath, "JPEG")) return@withContext null
+                file.takeIf { it.isFile }?.readBytes()
+            } catch (error: Exception) {
+                Logger.w(TAG, "accessibility screenshot failed: ${error.message}")
+                null
+            } finally {
+                runCatching { file.delete() }
+            }
+        }
+    }
+
+    override suspend fun readScreen(): ScreenInfo {
+        val svc = service ?: return ScreenInfo(source = "accessibility(unavailable)")
+        val root = svc.rootInActiveWindow ?: return ScreenInfo(
+            packageName = svc.rootInActiveWindow?.packageName?.toString(),
+            source = "accessibility(no-root)",
+        )
+        val nodes = mutableListOf<UiNode>()
+        val metrics = getScreenMetrics()
+        val pkg = try {
+            val am = context.getSystemService(Context.ACTIVITY_SERVICE) as android.app.ActivityManager
+            am.appTasks.firstOrNull()?.taskInfo?.topActivity?.packageName?.toString()
+                ?: svc.rootInActiveWindow?.packageName?.toString()
+        } catch (_: Exception) {
+            svc.rootInActiveWindow?.packageName?.toString()
+        }
+        try {
+            // B-33: collectNodes 遍历期间控件树可能被系统回收(AbandonedNodeException),
+            // 捕获后保留已收集的部分节点并记录日志,不向上抛导致整次读取失败崩溃。
+            try {
+                collectNodes(root, nodes, depth = 0)
+            } catch (e: Exception) {
+                Logger.w(TAG, "readScreen collectNodes 中断(返回部分结果): ${e.message}")
+            }
+            return ScreenInfo(
+                packageName = pkg,
+                activityName = root.className?.toString(),
+                nodes = nodes,
+                screenWidth = metrics.widthPixels,
+                screenHeight = metrics.heightPixels,
+                source = "accessibility",
+            )
+        } finally {
+            // B-33: root 需显式 recycle 释放 native 资源,防内存泄漏。
+            recycleNode(root, TAG)
+        }
+    }
+
+    override suspend fun currentPackage(): String? {
+        val svc = service ?: return null
+        return try {
+            svc.rootInActiveWindow?.packageName?.toString()
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    // ── 输入动作 ──────────────────────────────────────────────
+
+    override suspend fun tap(x: Int, y: Int): Boolean = dispatchClick(x, y)
+
+    override suspend fun longPress(x: Int, y: Int, durationMs: Long): Boolean = dispatchLongPress(x, y, durationMs)
+
+    override suspend fun swipe(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Long): Boolean = dispatchSwipe(x1, y1, x2, y2, durationMs)
+
+    override suspend fun pinch(centerX: Int, centerY: Int, startDistance: Int, endDistance: Int, durationMs: Long): Boolean =
+        dispatchPinch(centerX, centerY, startDistance, endDistance, durationMs)
+
+    override suspend fun swipePath(points: List<Pair<Int, Int>>, durationMs: Long): Boolean = dispatchSwipePath(points, durationMs)
+
+    override suspend fun inputText(text: String): Boolean {
+        val svc = service ?: return false
+        return try {
+            // Strategy 1: directly set text via ACTION_SET_TEXT on focused editable node.
+            val root = svc.rootInActiveWindow
+            val focused = root?.findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+            try {
+                if (focused != null) {
+                    val args = android.os.Bundle()
+                    args.putCharSequence(
+                        AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE,
+                        text,
+                    )
+                    val ok = focused.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+                    if (ok) return true
+                    // Fallback 2: clipboard paste injection when ACTION_SET_TEXT fails.
+                    Logger.d(TAG, "ACTION_SET_TEXT failed, falling back to clipboard paste")
+                    return pasteText(text)
+                } else {
+                    return pasteText(text)
+                }
+            } finally {
+                recycleNode(focused, TAG)
+                recycleNode(root, TAG)
+            }
+        } catch (e: Exception) {
+            Logger.w(TAG, "inputText failed: ${e.message}")
+            false
+        }
+    }
+
+    override suspend fun pressKey(keyCode: Int): Boolean {
+        // 无障碍无法直接注入 KeyEvent,降级到 Shell
+        // 但返回键/Home 键可以通过全局动作
+        return when (keyCode) {
+            4 -> service?.performGlobalAction(AccessibilityService.GLOBAL_ACTION_BACK) == true
+            3 -> service?.performGlobalAction(AccessibilityService.GLOBAL_ACTION_HOME) == true
+            else -> false
+        }
+    }
+
+    override suspend fun launchApp(packageName: String): Boolean {
+        return try {
+            val intent = context.packageManager.getLaunchIntentForPackage(packageName) ?: return false
+            intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
+            context.startActivity(intent)
+            true
+        } catch (e: Exception) {
+            Logger.w(TAG, "launchApp failed: ${e.message}")
+            false
+        }
+    }
+
+    override suspend fun openNotifications(): Boolean =
+        service?.performGlobalAction(AccessibilityService.GLOBAL_ACTION_NOTIFICATIONS) == true
+
+    override suspend fun openQuickSettings(): Boolean =
+        service?.performGlobalAction(AccessibilityService.GLOBAL_ACTION_QUICK_SETTINGS) == true
+
+    // ── 内部实现 ──────────────────────────────────────────────
+
+    private fun collectNodes(node: AccessibilityNodeInfo, out: MutableList<UiNode>, depth: Int) {
+        if (depth > MAX_TREE_DEPTH) return
+        val text = AccessibilityPathUtils.textForModel(node.text, node.isPassword)
+        val description = AccessibilityPathUtils.textForModel(node.contentDescription, node.isPassword)
+        val hasUsefulInfo = !text.isNullOrBlank() ||
+            !description.isNullOrBlank() ||
+            node.isClickable || node.isEditable
+        if (hasUsefulInfo) {
+            val rect = android.graphics.Rect()
+            node.getBoundsInScreen(rect)
+            out.add(
+                UiNode(
+                    text = text,
+                    contentDescription = description,
+                    className = node.className?.toString(),
+                    viewIdResourceName = node.viewIdResourceName,
+                    boundsLeft = rect.left,
+                    boundsTop = rect.top,
+                    boundsRight = rect.right,
+                    boundsBottom = rect.bottom,
+                    isClickable = node.isClickable,
+                    isEditable = node.isEditable,
+                    isScrollable = node.isScrollable,
+                    isChecked = if (node.isCheckable) node.isChecked else null,
+                    isEnabled = node.isEnabled,
+                ),
+            )
+        }
+        for (i in 0 until node.childCount) {
+            node.getChild(i)?.let { child ->
+                try {
+                    collectNodes(child, out, depth + 1)
+                } finally {
+                    child.recycle()
+                }
+            }
+        }
+    }
+
+    /**
+     * B-33: 安全回收节点。无障碍控件树是高动态对象,节点可能在遍历/查询期间被系统自动回收
+     * (新版本由系统托管),显式 recycle 失败仅记日志,不阻断业务返回。
+     */
+    private fun recycleNode(node: AccessibilityNodeInfo?, tag: String) {
+        if (node == null) return
+        try {
+            node.recycle()
+        } catch (e: Exception) {
+            Logger.d(tag, "node.recycle 失败(可能已被系统回收): ${e.message}")
+        }
+    }
+
+    private fun getScreenMetrics(): DisplayMetrics {
+        val wm = context.getSystemService(Context.WINDOW_SERVICE) as android.view.WindowManager
+        val dm = DisplayMetrics()
+        @Suppress("DEPRECATION")
+        wm.defaultDisplay.getRealMetrics(dm)
+        return dm
+    }
+
+    private suspend fun dispatchClick(x: Int, y: Int): Boolean {
+        val svc = service ?: return false
+        val path = Path().apply { moveTo(x.toFloat(), y.toFloat()) }
+        val stroke = GestureDescription.StrokeDescription(path, 0, 50)
+        val gesture = GestureDescription.Builder().addStroke(stroke).build()
+        return dispatchGesture(svc, gesture)
+    }
+
+    private suspend fun dispatchLongPress(x: Int, y: Int, durationMs: Long): Boolean {
+        val svc = service ?: return false
+        val path = Path().apply { moveTo(x.toFloat(), y.toFloat()) }
+        val stroke = GestureDescription.StrokeDescription(path, 0, durationMs)
+        val gesture = GestureDescription.Builder().addStroke(stroke).build()
+        return dispatchGesture(svc, gesture)
+    }
+
+    private suspend fun dispatchSwipe(x1: Int, y1: Int, x2: Int, y2: Int, durationMs: Long): Boolean {
+        val svc = service ?: return false
+        val path = Path().apply {
+            moveTo(x1.toFloat(), y1.toFloat())
+            lineTo(x2.toFloat(), y2.toFloat())
+        }
+        val stroke = GestureDescription.StrokeDescription(path, 0, durationMs)
+        val gesture = GestureDescription.Builder().addStroke(stroke).build()
+        return dispatchGesture(svc, gesture)
+    }
+
+    /** v2.x: 双指缩放 — 两指沿水平方向对称开合(同手势两条 stroke,起点时间一致)。 */
+    private suspend fun dispatchPinch(centerX: Int, centerY: Int, startDistance: Int, endDistance: Int, durationMs: Long): Boolean {
+        val svc = service ?: return false
+        val startHalf = (startDistance / 2).coerceAtLeast(1).toFloat()
+        val endHalf = (endDistance / 2).coerceAtLeast(1).toFloat()
+        val cy = centerY.toFloat()
+        val cx = centerX.toFloat()
+        val left = Path().apply {
+            moveTo(cx - startHalf, cy)
+            lineTo(cx - endHalf, cy)
+        }
+        val right = Path().apply {
+            moveTo(cx + startHalf, cy)
+            lineTo(cx + endHalf, cy)
+        }
+        val gesture = GestureDescription.Builder()
+            .addStroke(GestureDescription.StrokeDescription(left, 0, durationMs))
+            .addStroke(GestureDescription.StrokeDescription(right, 0, durationMs))
+            .build()
+        return dispatchGesture(svc, gesture)
+    }
+
+    /** v2.x: 多段滑动 — 单指沿路径点逐个 lineTo(解锁图案/复杂拖拽)。 */
+    private suspend fun dispatchSwipePath(points: List<Pair<Int, Int>>, durationMs: Long): Boolean {
+        val svc = service ?: return false
+        if (points.size < 2) return false
+        val path = Path().apply {
+            moveTo(points[0].first.toFloat(), points[0].second.toFloat())
+            for (i in 1 until points.size) {
+                lineTo(points[i].first.toFloat(), points[i].second.toFloat())
+            }
+        }
+        val stroke = GestureDescription.StrokeDescription(path, 0, durationMs)
+        val gesture = GestureDescription.Builder().addStroke(stroke).build()
+        return dispatchGesture(svc, gesture)
+    }
+
+    private suspend fun dispatchGesture(svc: MuseAccessibilityService, gesture: GestureDescription): Boolean =
+        suspendCancellableCoroutine { cont ->
+            svc.dispatchGesture(
+                gesture,
+                object : AccessibilityService.GestureResultCallback() {
+                    override fun onCompleted(g: GestureDescription?) {
+                        if (cont.isActive) cont.resume(true)
+                    }
+
+                    override fun onCancelled(g: GestureDescription?) {
+                        if (cont.isActive) cont.resume(false)
+                    }
+                },
+                null,
+            )
+        }
+
+    private fun pasteText(text: String): Boolean {
+        return try {
+            val cm = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            cm.setPrimaryClip(ClipData.newPlainText("auto_input", text))
+            // 粘贴需要 Shell 层的 input keyevent 配合 KEYCODE_PASTE,
+            // 这里只做剪贴板写入,返回 false 让上层降级
+            false
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    companion object {
+        private const val TAG = "AccessibilityExec"
+        private const val MAX_TREE_DEPTH = 30
+    }
+}

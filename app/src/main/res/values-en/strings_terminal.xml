@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="terminal_title">Terminal</string>
+    <string name="terminal_input_hint">Type a command…</string>
+    <string name="terminal_back_cd">Back</string>
+    <string name="terminal_clear_cd">Clear</string>
+    <string name="terminal_restart_cd">Restart session</string>
+    <string name="terminal_interrupt_cd">Interrupt (Ctrl-C)</string>
+    <string name="terminal_send_cd">Send</string>
+    <string name="terminal_session_exited">[Session process exited with code %1$d; tap the top-right button to restart]</string>
+    <string name="terminal_session_restarted">[Session restarted]</string>
+    <string name="terminal_probe_after_seconds">after %1$ds</string>
+</resources>

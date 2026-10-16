@@ -1,0 +1,57 @@
+{
+  "note": "CMP-11 组件收敛基线。只允许下降: 基线外的新文件或出现次数高于本文件即失败。清理存量后运行 py -3 ci/script/check_component_convergence.py --update-baseline 收紧(默认拒绝写入上升值,需 --allow-increase)。",
+  "ui_root": "app/src/main/java/io/zer0/muse/ui",
+  "symbols": [
+    "AlertDialog",
+    "AssistChip",
+    "BasicAlertDialog",
+    "Button",
+    "Card",
+    "Checkbox",
+    "CircularProgressIndicator",
+    "DropdownMenu",
+    "DropdownMenuItem",
+    "ElevatedButton",
+    "ElevatedCard",
+    "FilterChip",
+    "FloatingActionButton",
+    "IconButton",
+    "InputChip",
+    "LinearProgressIndicator",
+    "ModalBottomSheet",
+    "OutlinedButton",
+    "OutlinedCard",
+    "OutlinedTextField",
+    "RadioButton",
+    "Slider",
+    "SuggestionChip",
+    "Switch",
+    "TextButton",
+    "TextField"
+  ],
+  "totals": {
+    "files": 14,
+    "occurrences": 14,
+    "wildcard_files": 2
+  },
+  "wildcard_imports": {
+    "app/src/main/java/io/zer0/muse/ui/HomeScreen.kt": 1,
+    "app/src/main/java/io/zer0/muse/ui/InputBar.kt": 1
+  },
+  "files": {
+    "app/src/main/java/io/zer0/muse/ui/common/form/MuseBottomSheet.kt": 1,
+    "app/src/main/java/io/zer0/muse/ui/common/form/MuseDropdown.kt": 1,
+    "app/src/main/java/io/zer0/muse/ui/common/form/MuseSelectionSheet.kt": 1,
+    "app/src/main/java/io/zer0/muse/ui/common/form/MuseTextField.kt": 1,
+    "app/src/main/java/io/zer0/muse/ui/common/media/FullScreenMediaViewer.kt": 1,
+    "app/src/main/java/io/zer0/muse/ui/common/media/VoiceMessageBar.kt": 1,
+    "app/src/main/java/io/zer0/muse/ui/common/navigation/MuseTopBar.kt": 1,
+    "app/src/main/java/io/zer0/muse/ui/common/state/MuseEmptyState.kt": 1,
+    "app/src/main/java/io/zer0/muse/ui/HomeScreen.kt": 1,
+    "app/src/main/java/io/zer0/muse/ui/InputBar.kt": 1,
+    "app/src/main/java/io/zer0/muse/ui/markdown/ChartRenderer.kt": 1,
+    "app/src/main/java/io/zer0/muse/ui/markdown/MarkdownText.kt": 1,
+    "app/src/main/java/io/zer0/muse/ui/MemoryScreen.kt": 1,
+    "app/src/main/java/io/zer0/muse/ui/speech/TtsControllerWidget.kt": 1
+  }
+}

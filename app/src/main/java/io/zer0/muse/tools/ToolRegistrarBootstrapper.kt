@@ -1,0 +1,62 @@
+package io.zer0.muse.tools
+
+import io.zer0.common.Logger
+import io.zer0.muse.tools.defaultTool.UIToolsRegistrar
+
+/**
+ * 工具注册器启动引导。
+ *
+ * 各工具注册器在 Koin 中均为懒加载 single，只有被实例化时才会执行
+ * `init { registerAll() }` 并把工具写入 [ToolRegistry]。
+ * 本类在 App 启动时被注入一次，强制把所有注册器实例化，
+ * 避免工具管理页只显示 ToolRegistry 内置的少量工具。
+ *
+ * 参数数量与「未使用」豁免：本类是纯依赖注入聚合点 —— 每个构造参数存在的唯一目的
+ * 就是触发对应 Registrar 的 init 注册副作用，类本身不引用它们。LongParameterList /
+ * UnusedPrivateProperty 属设计如此，故在类级显式豁免（未来新增注册器无需刷新基线）。
+ */
+@Suppress("LongParameterList", "UnusedPrivateProperty")
+class ToolRegistrarBootstrapper(
+    private val toolRegistry: ToolRegistry,
+    encodingToolsRegistrar: EncodingToolsRegistrar,
+    coreToolsRegistrar: CoreToolsRegistrar,
+    weatherToolsRegistrar: WeatherToolsRegistrar,
+    clipboardToolsRegistrar: ClipboardToolsRegistrar,
+    networkTextToolsRegistrar: NetworkTextToolsRegistrar,
+    reminderToolsRegistrar: ReminderToolsRegistrar,
+    calendarToolsRegistrar: CalendarToolsRegistrar,
+    phoneToolsRegistrar: PhoneToolsRegistrar,
+    systemToolsRegistrar: SystemToolsRegistrar,
+    resourceToolsRegistrar: ResourceToolsRegistrar,
+    quickNoteToolsRegistrar: QuickNoteToolsRegistrar,
+    scheduledTaskToolsRegistrar: ScheduledTaskToolsRegistrar,
+    translateToolsRegistrar: TranslateToolsRegistrar,
+    ttsToolsRegistrar: TtsToolsRegistrar,
+    agentToolsRegistrar: AgentToolsRegistrar,
+    conversationSearchToolsRegistrar: ConversationSearchToolsRegistrar,
+    workspaceToolsRegistrar: WorkspaceToolsRegistrar,
+    fileToolsRegistrar: FileToolsRegistrar,
+    pdfVisionToolsRegistrar: PdfVisionToolsRegistrar,
+    shellSandboxToolRegistrar: ShellSandboxToolRegistrar,
+    uiToolsRegistrar: UIToolsRegistrar,
+    // P2-23: 媒体生成工具(图片/视频/二维码),原本由 ChatViewModel 在聊天页注册
+    mediaGenToolsRegistrar: MediaGenToolsRegistrar,
+    // v1.0.92: 消息渠道工具(外部 IM 发送)
+    channelToolsRegistrar: ChannelToolsRegistrar,
+    // v2.0: OAuth 连接器工具(connector_list / call_connector)
+    connectorToolsRegistrar: ConnectorToolsRegistrar,
+    // v2.0.1: 插件市场工具(检索 / 审批安装)
+    pluginMarketToolsRegistrar: PluginMarketToolsRegistrar,
+    // v2.x 扩展运行时(P0):内置 Node 沙盒自检(只读)
+    runtimeSelfCheckToolRegistrar: RuntimeSelfCheckToolRegistrar,
+) {
+    init {
+        Logger.i(
+            "ToolRegistrarBootstrapper",
+            "工具注册器全部初始化完成，当前注册工具数=${toolRegistry.listTools().size}",
+        )
+        // 分类覆盖校验必须放在这里 —— 所有 Registrar 的 init 已执行完,
+        // 此刻 toolRegistry 才持有全部内置工具(详见 ToolRegistry.assertBuiltInCategoryCoverage)。
+        toolRegistry.assertBuiltInCategoryCoverage()
+    }
+}

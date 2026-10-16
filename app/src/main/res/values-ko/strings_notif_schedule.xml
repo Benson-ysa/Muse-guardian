@@ -1,0 +1,144 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- ===== notification ===== -->
+    <!-- Notification channel names -->
+    <string name="notif_channel_chat_completed_name">메시지 생성 완료</string>
+    <string name="notif_channel_chat_completed_desc">백그라운드 스트리밍 생성이 완료되면 알림</string>
+    <string name="notif_channel_chat_live_update_name">세대 진행</string>
+    <string name="notif_channel_chat_live_update_desc">스트리밍 생성 중 실시간 진행 알림</string>
+    <string name="notif_channel_web_server_name">웹 서버</string>
+    <string name="notif_channel_web_server_desc">웹 서버 실행 상태 알림</string>
+    <string name="notif_channel_proactive_message_name">사전 메시지</string>
+    <string name="notif_channel_proactive_message_desc">어시스턴트가 적극적으로 메시지를 보낼 때 알림</string>
+    <!-- Notification title/content -->
+    <string name="notif_chat_completed_title">답글 완료 · %1$s</string>
+    <string name="notif_proactive_message_title">%1$s 메시지를 보냈습니다</string>
+    <string name="notif_live_progress_title">생성 중 · %1$s</string>
+    <string name="notif_live_progress_text">%1$d 문자</string>
+    <string name="notif_web_server_title">Muse 웹 서버 실행 중</string>
+    <string name="notif_web_server_text">포트 %1$d · LAN 장치에 액세스할 수 있습니다.</string>
+    <!-- v1.133: App update notification (reuses CHANNEL_CHAT_COMPLETED) -->
+    <string name="update_notif_title">새 버전 사용 가능</string>
+    <string name="update_notif_text">%1$s이 출시되었습니다. 세부정보를 보려면 탭하세요.</string>
+    <!-- v1.133: In-app update banner -->
+    <string name="update_banner_published">%1$s 출시됨</string>
+    <string name="update_banner_view_detail">세부정보 보기</string>
+    <string name="update_banner_download_apk">APK 다운로드</string>
+    <string name="update_banner_close_cd">새 버전 배너 닫기</string>
+    <string name="update_found_new">새 버전이 발견되었습니다. 상단 배너를 참조하세요.</string>
+    <string name="update_already_latest">이미 최신 상태입니다.</string>
+
+    <!-- ===== schedule ===== -->
+    <!-- Scheduled task notification channel -->
+    <string name="schedule_channel_name">예약된 작업</string>
+    <string name="schedule_channel_desc">예정된 작업에 대한 알림 기한</string>
+    <!-- Scheduled task default session name -->
+    <string name="schedule_default_session_name">예약된 작업</string>
+    <!-- Chat generation foreground service default notification title -->
+    <string name="schedule_generating_default_title">생성 중</string>
+    <!-- v1.137: Execution summary when automation condition is not met -->
+    <string name="schedule_condition_not_met">조건이 충족되지 않아 건너뛰었습니다.</string>
+
+    <!-- ===== main activity ===== -->
+    <!-- Safe mode -->
+    <string name="main_activity_safe_mode_title">Muse가 안전 모드에 있습니다</string>
+    <string name="main_activity_safe_mode_desc">지난번에 충돌이 발생했습니다.</string>
+    <string name="main_activity_crash_log_copied">충돌 로그가 클립보드에 복사되었습니다.</string>
+    <string name="main_activity_copy_crash_log">충돌 로그 복사</string>
+    <string name="main_activity_clear_flag_and_exit">플래그를 지우고 종료</string>
+    <string name="main_activity_send_crash_email">이메일로 충돌 로그 보내기</string>
+    <string name="main_activity_send_crash_email_failed">이메일 앱을 찾을 수 없습니다. 로그가 클립보드에 복사되었습니다.</string>
+    <!-- v2.0+: SafeModeScreen new copy  -->
+    <string name="safe_mode_warning_title">마지막 발사가 중단되었습니다</string>
+    <string name="safe_mode_continue_normal">정상 시작 계속</string>
+    <string name="safe_mode_view_full_log">전체 충돌 로그 보기</string>
+    <string name="safe_mode_clear_data_restart">모든 데이터를 지우고 다시 시작하세요</string>
+    <string name="safe_mode_copy_crash_info">충돌 정보 복사</string>
+    <string name="safe_mode_crash_time_label">충돌 시간</string>
+    <string name="safe_mode_stack_trace_label">스택 추적</string>
+    <string name="safe_mode_no_crash_log">충돌 로그가 기록되지 않았습니다.</string>
+    <string name="safe_mode_share_log_failed">충돌 로그를 공유하지 못했습니다.</string>
+    <!-- PIN lock screen -->
+    <string name="main_activity_locked_title">뮤즈가 잠겨있습니다</string>
+    <string name="main_activity_pin_prompt">계속하려면 PIN을 입력하세요.</string>
+    <string name="main_activity_pin_locked">잘못된 PIN 시도 횟수가 너무 많습니다. %1$d초 후에 다시 시도하세요.</string>
+    <string name="main_activity_pin_error">PIN이 잘못되었습니다. 다시 시도해 주세요.</string>
+    <string name="main_activity_exit_app">앱 종료</string>
+
+    <!-- ===== NotificationListenerScreen.kt ===== -->
+    <string name="notif_listener_screen_title">알림 수신기</string>
+    <string name="notif_bridge_title">메시지 브리지 승인</string>
+    <string name="notif_bridge_desc">활성화한 소스의 알림 본문이 대화 컨텍스트에 포함될 수 있습니다(로컬 처리만; 나머지는 계속 숨김)</string>
+    <string name="notif_listener_open_settings_failed">시스템 설정을 열 수 없습니다.</string>
+    <string name="notif_listener_auth_settings">액세스 권한 부여</string>
+    <string name="notif_listener_cleared_toast">알림 기록이 삭제되었습니다.</string>
+    <string name="notif_listener_clear_records">기록 지우기</string>
+    <string name="notif_listener_feature_title">기능 설명</string>
+    <string name="notif_listener_feature_desc">승인되면 Muse는 AI가 채팅에서 쿼리할 수 있는 이벤트 소스로 다른 앱의 알림을 감지할 수 있습니다.</string>
+    <string name="notif_listener_privacy_title">개인 정보 보호 경계</string>
+    <string name="notif_listener_privacy_desc">• 알림 내용은 로컬에만 저장됩니다(최대 50개 항목, 꽉 차면 가장 오래된 항목 삭제)\n• 시스템 UI 및 Muse의 자체 알림은 필터링됩니다\n• 알림 데이터는 어떤 서버에도 업로드되지 않습니다\n• 여기서 \"기록 지우기\"를 수행하거나 언제든지 시스템 설정에서 액세스를 취소할 수 있습니다</string>
+    <string name="notif_listener_recent_header">최근 알림(%1$d/50)</string>
+    <string name="notif_listener_empty_connected">아직 알림 기록이 없습니다\n승인되면 새 알림이 자동으로 여기에 표시됩니다.</string>
+    <string name="notif_listener_empty_disconnected">아직 승인되지 않았습니다\n먼저 위의 \"액세스 권한 부여\"를 탭하세요</string>
+    <string name="notif_listener_authorized">인정 받은</string>
+    <string name="notif_listener_unauthorized">승인되지 않음</string>
+    <string name="notif_listener_recent_count_connected">최근 알림: %1$d</string>
+    <string name="notif_listener_recent_count_disconnected">최근 알림: %1$d · 먼저 시스템 설정에서 액세스 권한을 부여하세요.</string>
+    <string name="notif_listener_refresh_cd">새로고침 상태</string>
+    <string name="safe_mode_data_recovery">데이터 복구 안내</string>
+    <string name="safe_mode_data_recovery_title">데이터 복구 안내</string>
+    <string name="safe_mode_data_recovery_desc">이번 크래시는 로컬 데이터에 영향을 주지 않으며 채팅과 설정은 그대로입니다. 클라우드 백업에서 복원하려면:재시작 후 설정 → 데이터 백업 → 클라우드에서 복원.</string>
+    <string name="safe_mode_data_recovery_ok">확인</string>
+    <string name="safe_mode_continue_normal_desc">채팅과 설정을 유지하고 Muse를 다시 엽니다</string>
+    <string name="safe_mode_view_full_log_desc">문제 진단을 위해 전체 로그를 보거나 공유합니다</string>
+    <string name="safe_mode_clear_data_restart_desc">채팅, 설정 및 로컬 파일을 삭제합니다. Muse가 정상적으로 열리지 않을 때만 사용하세요</string>
+    <string name="safe_mode_clear_data_confirm_title">모든 데이터를 삭제할까요?</string>
+    <string name="safe_mode_clear_data_confirm_desc">채팅, 설정, 아바타 및 로컬 파일이 삭제되며 되돌릴 수 없습니다. Muse가 계속 정상적으로 열리지 않을 때만 사용하세요.</string>
+    <string name="safe_mode_clear_data_confirm_action">모든 데이터 삭제</string>
+    <string name="safe_mode_copy_crash_info_desc">시간과 스택 추적을 복사하여 오류 보고에 사용합니다</string>
+    <string name="safe_mode_data_recovery_desc_short">보존되는 데이터와 백업 복원 방법을 확인합니다</string>
+    <string name="notif_auto_backup_success_title">자동 백업 성공</string>
+    <string name="notif_auto_backup_success_text">데이터가 클라우드에 백업되었습니다</string>
+    <string name="notif_auto_backup_failed_title">자동 백업 실패</string>
+    <string name="notif_auto_backup_failed_text">자동 백업이 완료되지 않았습니다. 클라우드 설정을 확인하세요</string>
+    <string name="notif_auto_backup_failed_write_text">클라우드 쓰기에 실패했습니다. 네트워크와 백업 설정을 확인하세요</string>
+    <string name="notif_auto_backup_failed_verify_text">백업은 저장됐지만 검증에 실패했습니다. 데이터가 불완전할 수 있습니다</string>
+    <string name="notif_permission_status_on">알림 권한이 활성화되었습니다</string>
+    <string name="notif_permission_status_off">알림 권한이 비활성화되었습니다</string>
+    <string name="notif_permission_guide">활성화하면 메시지 완료 및 백업 알림을 받을 수 있습니다</string>
+    <string name="notif_permission_open">활성화</string>
+    <!-- v1.0.85: release localization -->
+    <string name="notif_listener_search_hint">알림 검색</string>
+    <string name="notif_listener_all_apps">모든 앱</string>
+    <string name="notif_listener_show_all">모두 표시</string>
+    <string name="notif_listener_unread_only">읽지 않은 항목만</string>
+    <string name="notif_listener_mark_all_read">모두 읽음으로 표시</string>
+    <string name="notif_listener_export">내보내기</string>
+    <string name="notif_listener_export_success">알림 기록을 내보냈습니다</string>
+    <string name="notif_listener_export_failed">알림 기록 내보내기 실패: %1$s</string>
+    <string name="notif_listener_export_write_failed">내보내기 파일에 쓸 수 없습니다</string>
+    <string name="notif_listener_filter_empty">현재 필터와 일치하는 알림이 없습니다</string>
+    <string name="notif_listener_no_text">이 알림에는 표시할 본문이 없습니다</string>
+    <string name="notif_listener_unread_label">읽지 않음</string>
+    <string name="notif_listener_active_only">활성만</string>
+    <string name="notif_listener_show_history">기록 보기</string>
+    <string name="notif_listener_counts">총 %1$d개 · 활성 %2$d개 · 읽지 않음 %3$d개</string>
+    <string name="notif_listener_active_label">알림 창에 표시됨</string>
+    <string name="notif_listener_removed_label">삭제됨</string>
+    <string name="notif_listener_channel_label">채널: %1$s</string>
+    <string name="notif_listener_category_label">카테고리: %1$s</string>
+    <string-array name="greeting_notify_titles">
+        <item>있잖아</item>
+        <item>잊지 마세요</item>
+        <item>알려드려요</item>
+        <item>전할 말이 있어요</item>
+        <item>살짝 알려줄게요</item>
+    </string-array>
+    <string name="schedule_err_tool_id_required">도구 ID는 비워둘 수 없습니다</string>
+    <string name="schedule_err_tool_params_invalid">도구 매개변수가 유효한 JSON이 아닙니다: %1$s</string>
+    <string name="schedule_run_failed_detail">실행 실패: %1$s</string>
+    <string name="schedule_run_success_detail">실행 성공: %1$s</string>
+    <string name="schedule_tool_advanced_hint">팁: 고급 기능은 보통 AI로 설명하는 것이 더 쉽습니다</string>
+    <string name="schedule_tool_templates_title">자주 쓰는 도구 빠른 입력(탭하여 자동 입력)</string>
+    <string name="schedule_view_all_history">전체 기록 보기</string>
+</resources>

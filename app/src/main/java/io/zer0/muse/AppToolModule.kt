@@ -1,0 +1,96 @@
+package io.zer0.muse
+
+import io.zer0.muse.tools.SessionPermissionStore
+import io.zer0.muse.tools.ToolConfigStore
+import io.zer0.muse.tools.ToolRegistry
+import org.koin.android.ext.koin.androidContext
+import org.koin.dsl.module
+
+/**
+ * P2-3 拆域：ToolRegistry 与工具注册器、权限存储、浏览器自动化注册独立模块。
+ */
+val appToolModule = module {
+
+    // Phase 5-H: 工具注册表(简化版 MCP 框架)
+    // Phase 8.8: 传入 context 用于 Clipboard/UsageStats/Calendar 系统服务
+    single { ToolRegistry(androidContext(), get()) }
+
+    // P2-6: BrowserManager 浏览器自动化(Headless WebView,供 AI 工具调用)
+    // 注:ToolRegistry 与 UI(浏览器状态胶囊)共享同一实例,AI 操作实时可看
+    // v1.0.92: 消息渠道(外部 IM 桥接) — 管理器 + 发送工具注册器
+    single { io.zer0.muse.channel.ChannelManager(androidContext()) }
+    single { io.zer0.muse.tools.ChannelToolsRegistrar(get(), get()) }
+    // v2.0: 渠道自动回复(入站消息 → 跑一轮 → 回发到来源)
+    single { io.zer0.muse.channel.ChannelAutoReply(get(), get(), get(), androidContext(), get(), get(), get(), get()) }
+    // v2.0: ClawBot(iLink)长轮询接收器
+    single { io.zer0.muse.channel.WeClawReceiver(get(), androidContext(), get()) }
+    // v2.0.1: QQ 机器人 WebSocket Gateway 接收器(免公网)
+    single { io.zer0.muse.channel.QqReceiver(get(), androidContext(), get()) }
+    // v2.0.1: 飞书长连接接收器(pbbp2 over WebSocket,免公网)
+    single { io.zer0.muse.channel.FeishuReceiver(get(), androidContext(), get()) }
+    // v2.0: Telegram 长轮询接收器
+    single { io.zer0.muse.channel.TelegramReceiver(get(), androidContext(), get()) }
+    // v2.0: 钉钉 Stream 接收器
+    single { io.zer0.muse.channel.DingtalkReceiver(get(), androidContext(), get()) }
+    // P1-3b 拆域: 文本/编码工具注册器(URL/Base64/哈希/UUID/随机数,从 ToolRegistry 抽出)
+    single { io.zer0.muse.tools.EncodingToolsRegistrar(androidContext(), get()) }
+    // v2.0: OAuth 连接器工具(connector_list / call_connector)
+    single { io.zer0.muse.connector.ConnectorStore(androidContext()) }
+    single { io.zer0.muse.tools.ConnectorToolsRegistrar(get(), get()) }
+    // P1-3b 拆域: 核心基础工具注册器(get_current_time/calculator/echo)
+    single { io.zer0.muse.tools.CoreToolsRegistrar(androidContext(), get()) }
+    // P1-3b 拆域: 天气工具注册器(get_weather)
+    single { io.zer0.muse.tools.WeatherToolsRegistrar(androidContext(), get()) }
+    // P1-3b 拆域: 剪贴板工具注册器(clipboard_read/write)
+    single { io.zer0.muse.tools.ClipboardToolsRegistrar(androidContext(), get()) }
+    // P1-3b 拆域: 网络/文本工具注册器(ping/dns/公网IP/json_pretty/密码)
+    single { io.zer0.muse.tools.NetworkTextToolsRegistrar(androidContext(), get()) }
+    // P1-3b 拆域: 定时提醒工具注册器(schedule/cancel/list_reminders + Guardian adjust_wake_reminder)
+    single { io.zer0.muse.tools.ReminderToolsRegistrar(androidContext(), get(), guardianTimeline = get()) }
+    // P1-3b 拆域: 日历工具注册器(calendar_today/add_calendar_event)
+    single { io.zer0.muse.tools.CalendarToolsRegistrar(androidContext(), get()) }
+    // P1-3b 拆域: 手机端工具注册器(12 个)
+    single { io.zer0.muse.tools.PhoneToolsRegistrar(androidContext(), get()) }
+    // P1-3b 拆域: 系统/设备工具注册器(24 个)
+    single { io.zer0.muse.tools.SystemToolsRegistrar(androidContext(), get()) }
+    // P1-3b 拆域: 资源库 + 快速记录工具注册器
+    single { io.zer0.muse.tools.ResourceToolsRegistrar(androidContext(), get()) }
+    single { io.zer0.muse.tools.QuickNoteToolsRegistrar(androidContext(), get()) }
+    // P1-3b 拆域: 定时任务 + 翻译工具注册器
+    single { io.zer0.muse.tools.ScheduledTaskToolsRegistrar(androidContext(), get()) }
+    single { io.zer0.muse.tools.TranslateToolsRegistrar(get()) }
+    // P1-3b 拆域: TTS 工具注册器(speak_text)
+    single { io.zer0.muse.tools.TtsToolsRegistrar(androidContext(), get()) }
+
+    // v1.137: 快速记录存储,供自动化任务和 UI 共享同一实例
+    single { io.zer0.muse.tools.quicknote.QuickNoteStore(androidContext()) }
+
+    // P3: 会话级工具权限模式持久化
+    single { SessionPermissionStore(androidContext()) }
+
+    // v1.0.20: 单工具审批策略持久化(DataStore)
+    // 供 ToolsSettingsPage(koinInject)与 ToolPermissionResolver 共享同一实例
+    // 修复 NoDefinitionFoundException:此前 ToolsSettingsPage 用 koinInject() 取 ToolConfigStore,
+    // 但 Koin 中未注册,导致点击"为每个工具设置是否批准"按钮进入页面时 Compose 重组崩溃
+    single { ToolConfigStore(androidContext()) }
+
+    // P2-6: BrowserManager 浏览器自动化(Headless WebView,供 AI 工具调用)
+    // 注:ToolRegistry 与 UI(浏览器状态胶囊)共享同一实例,AI 操作实时可看
+    single { io.zer0.muse.tools.BrowserManager(androidContext()) }
+
+    // P2-21: 浏览器注册表 — 转发到全局共享 BrowserManager(与 ToolRegistry/UI 胶囊同实例),
+    // 消除「会话级 registry vs 全局单例」的双实例状态分叉
+    single { io.zer0.muse.tools.BrowserManagerRegistry(androidContext(), get()) }
+
+    // v2.0.1: 插件市场工具(检索 + 审批安装) — 与插件管理页共享市场组件(见 AppKoinModule)
+    single<io.zer0.muse.data.plugin.market.PluginMarketToolGateway> {
+        io.zer0.muse.data.plugin.market.PluginMarketToolService(
+            context = androidContext(),
+            pluginManager = get(),
+            marketSettings = get(),
+            trustRoots = get(),
+            repository = get(),
+        )
+    }
+    single { io.zer0.muse.tools.PluginMarketToolsRegistrar(get(), get()) }
+}

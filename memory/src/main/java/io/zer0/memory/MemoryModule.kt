@@ -1,0 +1,139 @@
+package io.zer0.memory
+
+import androidx.room.Room
+import io.zer0.memory.compile.MemoryCompiler
+import io.zer0.memory.deep.DeepMemoryProcessor
+import io.zer0.memory.fact.FactDb
+import io.zer0.memory.fact.FactStore
+import io.zer0.memory.summary.MEMORY_DB_VERSION
+import io.zer0.memory.summary.MemoryDb
+import io.zer0.memory.summary.MemoryDbArchiveRecovery
+import io.zer0.memory.summary.MemoryDbDowngradeGuard
+import io.zer0.memory.summary.SessionSummaryManager
+import io.zer0.memory.ticker.MemoryTicker
+import kotlinx.coroutines.CoroutineScope
+import org.koin.android.ext.koin.androidContext
+import org.koin.core.module.Module
+import org.koin.dsl.module
+
+/**
+ * memory 模块的 Koin 装配。
+ *
+ * 依赖关系:
+ *  - Room: MemoryDb(摘要/状态/编译产物) + FactDb(FTS5 元事实)
+ *  - [io.zer0.memory.llm.MemoryLlmClient] 由 app 模块提供实现(委托给 ChatService)
+ *  - [CoroutineScope] 由 app 模块提供(application scope,ticker 后台任务用)
+ *
+ * 注意: [MemoryTicker] 由 app 模块注册(需要读 SettingsRepository 的 memory 开关),
+ * 这里只注册数据层 + 核心服务。
+ */
+val memoryModule: Module = module {
+
+    // ── Room 数据库 ──
+    single {
+        val context = androidContext()
+        MemoryDbDowngradeGuard.archiveIfNewer(
+            context = context,
+            databaseName = MEMORY_DB_NAME,
+            currentVersion = MEMORY_DB_VERSION,
+        )
+        Room.databaseBuilder(context, MemoryDb::class.java, MEMORY_DB_NAME)
+            // v2: session summary 增加 space_id，只做加法迁移，保留旧数据。
+            // v2.x: 新增 context_checkpoints（会话压缩检查点），同样是纯增表。
+            .addMigrations(
+                io.zer0.memory.summary.MemoryDb.MIGRATION_1_2,
+                io.zer0.memory.summary.MemoryDb.MIGRATION_2_3,
+                io.zer0.memory.summary.MemoryDb.MIGRATION_3_4,
+                io.zer0.memory.summary.MemoryDb.MIGRATION_4_5,
+            )
+            // 仅允许降级时重建；打开前 guard 已归档更高版本库及 WAL sidecars。
+            .fallbackToDestructiveMigrationOnDowngrade(dropAllTables = true)
+            .build()
+    }
+    // Explicit recovery entry for rows preserved in a newer-version archive after downgrade.
+    single { MemoryDbArchiveRecovery(androidContext(), get()) }
+
+    // 会话上下文检查点的读取与有效性判定（供上下文组装方注入）
+    single { io.zer0.memory.summary.ContextCheckpointReader(get()) }
+
+    // v0.22: per-assistant facts.db 提供者(按 assistantId 创建/缓存独立 FactDb)
+    // v12: 透传 LLM 去重判定器(同实体模糊候选交给大模型判断)
+    // 注意: 不注入 FactRevisionDao(内部从 db 取),避免 Koin 循环依赖
+    single { io.zer0.memory.fact.FactDbProvider(androidContext(), get<io.zer0.memory.fact.FactDedupJudge>()) }
+
+    // v1.78 (M12): 全局 FactDb 复用 FactDbProvider 的 "default" 实例
+    // 避免 FactDb.create 与 FactDbProvider 各建一个 Room 实例指向同一 facts.db 文件
+    single {
+        get<io.zer0.memory.fact.FactDbProvider>().getFactDb("default")
+    }
+
+    // ── DAO ──
+    single { get<MemoryDb>().sessionSummaryDao() }
+    single { get<MemoryDb>().contextCheckpointDao() }
+    single { get<MemoryDb>().dailyStateDao() }
+    single { get<MemoryDb>().compiledSectionDao() }
+    single { get<MemoryDb>().scopedCompiledSectionDao() }
+    single { get<FactDb>().factDao() }
+    // v13 (T4-1): 事实修订记录 DAO
+    single { get<FactDb>().factRevisionDao() }
+    // v1.0.52 P2-2: 多 Space 隔离 DAO
+    single { get<FactDb>().memorySpaceDao() }
+    // v1.0.52 P2-3: 记忆知识图谱边 DAO
+    single { get<FactDb>().memoryLinkDao() }
+
+    // ── 核心服务 ──
+    single { SessionSummaryManager(get(), get()) } // dao + llmClient
+    // v6: 记忆编译产物同时输出到文件系统(memory.md + daily/)
+    // 审查修复 (2.0 C-03): 移除下方重复注册(同 key 单例,后者恒覆盖前者,属死装配)
+    single { io.zer0.memory.compile.MemoryFileWriter(androidContext().filesDir) }
+    // S-04/v15: MemoryCompiler resolves per-assistant FactStore tombstones; the shared JSON file is legacy read-only.
+    // v12: 注入 LLM 去重判定器(由 app 模块提供实现,默认 Noop 不调 LLM)
+    single {
+        MemoryCompiler(
+            sectionDao = get(),
+            llmClient = get(),
+            fileWriter = get(),
+            factStore = get(),
+            scopedSectionDao = get(),
+            factDbProvider = get(),
+            compileContext = io.zer0.memory.compile.MemoryCompileContext(),
+        )
+    } // legacy sectionDao + llmClient + fileWriter + factStore + scoped DAO
+    single {
+        FactStore(
+            get(),
+            get(),
+            java.io.File(androidContext().filesDir, "fact_tombstones.json"),
+            get<io.zer0.memory.fact.FactDedupJudge>(),
+            get(),
+            assistantId = "default",
+            clearLegacyTombstonesOnReset = true,
+        )
+    }
+    single { DeepMemoryProcessor(get<io.zer0.memory.fact.FactDbProvider>(), get()) } // factDbProvider + llmClient
+
+    // v12 (T3-1): 记忆反思任务 — 每日整理(回填实体键/合并重复/矛盾检测/晋升)
+    // P2-32: 注入矛盾清单落库(不再只打日志,记忆中心可读可清)
+    single {
+        io.zer0.memory.reflection.MemoryContradictionStore(
+            java.io.File(androidContext().filesDir, "memory_contradictions.json"),
+        )
+    }
+    single {
+        io.zer0.memory.reflection.MemoryReflectionRunner(
+            factStore = get(),
+            contradictionSink = { scope, spaceId, pairs ->
+                get<io.zer0.memory.reflection.MemoryContradictionStore>()
+                    .save(scope, spaceId, pairs.map { it.first.fact to it.second.fact })
+            },
+        )
+    }
+
+    // v1.0.52 P2-2: 记忆空间仓库(Space CRUD + 事实迁移)
+    single { io.zer0.memory.space.MemorySpaceRepository(get()) }
+
+    // 置顶记忆存储
+    single { io.zer0.memory.pin.PinnedMemoryStore(java.io.File(androidContext().filesDir, "pinned_memory")) }
+}
+
+private const val MEMORY_DB_NAME = "memory.db"

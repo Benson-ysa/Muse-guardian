@@ -1,0 +1,89 @@
+package io.zer0.ai
+
+import io.zer0.ai.image.AgnesImageProvider
+import io.zer0.ai.image.GeminiImageProvider
+import io.zer0.ai.image.ImageProviderRegistry
+import io.zer0.ai.image.ImageService
+import io.zer0.ai.image.OpenAIImageProvider
+import io.zer0.ai.video.AgnesVideoProvider
+import io.zer0.ai.video.GenericOpenAiVideoProvider
+import io.zer0.ai.video.KlingVideoProvider
+import io.zer0.ai.video.VideoGenerationService
+import io.zer0.ai.video.VideoProviderRegistry
+import okhttp3.OkHttpClient
+import org.koin.core.module.Module
+import org.koin.core.qualifier.named
+import org.koin.dsl.module
+
+/**
+ * ai 模块的 Koin 装配。
+ *
+ * [ProviderConfigStore] 由 app 模块提供实现(基于 DataStore),
+ * [OkHttpClient] 也由 app 模块注册(用 named("chat") qualifier,与 web search client 区分),
+ * 因此这里只声明 [ChatService] / [ImageService] / [VideoGenerationService]。
+ *
+ * v1.0.18: 图片生成改为 Provider 抽象 — 注册 [ImageProviderRegistry] 与各 [io.zer0.ai.image.ImageProvider]
+ * (Agnes / OpenAI),[ImageService] 通过 registry 按 [io.zer0.ai.core.ProviderConfig] 自动选择适配器。
+ */
+val aiModule: Module = module {
+    single { ChatService(get()) }
+
+    // v1.0.18: 图片生成 Provider 抽象层
+    // G4: 参考图 SSRF 校验器经 Koin 注入(app 模块 SsrfBridgeModule 注册
+    // RefImageUrlValidator → SsrfGuard.refImageUrlValidator);未注册时回退 null(旧行为)。
+    single {
+        AgnesImageProvider(
+            client = get(named("chat")),
+            referenceImageUrlValidator = getOrNull<RefImageUrlValidator>(),
+        )
+    }
+    single {
+        OpenAIImageProvider(
+            client = get(named("chat")),
+            referenceImageUrlValidator = getOrNull<RefImageUrlValidator>(),
+        )
+    }
+    // B14-2: Gemini 独立图片 Provider(原生 generateContent 图片输出)
+    single {
+        GeminiImageProvider(
+            client = get(named("chat")),
+            referenceImageUrlValidator = getOrNull<RefImageUrlValidator>(),
+        )
+    }
+    single {
+        ImageProviderRegistry().apply {
+            register(get<AgnesImageProvider>())
+            register(get<OpenAIImageProvider>())
+            register(get<GeminiImageProvider>())
+        }
+    }
+    single { ImageService(get(), get()) } // configStore + registry
+
+    // P2-8: 视频生成服务 — 注入 named("chat") OkHttpClient(已配 30s connect / 300s read 超时,
+    // 满足提交 30s + 轮询 5min 的超时要求)
+    // v1.137: 视频生成重构 — 注册 [VideoProviderRegistry],按 specId/host 路由到具体 Provider,
+    // 不再按 providerId 硬匹配(修复 preset_kling ≠ kling 的路由 bug)。
+    // 各 Provider 实现 VideoProvider 接口,统一 submit/poll 协议。
+    single { KlingVideoProvider(get(named("chat"))) }
+    single { AgnesVideoProvider(get(named("chat"))) }
+    single { GenericOpenAiVideoProvider(get(named("chat"))) }
+    single {
+        VideoProviderRegistry(genericProvider = get<GenericOpenAiVideoProvider>()).apply {
+            register(get<KlingVideoProvider>())
+            register(get<AgnesVideoProvider>())
+        }
+    }
+    single { VideoGenerationService(get()) }
+}
+
+/**
+ * G4: 参考图下载前的 SSRF 校验器 — http/https URL 经 app 层 SsrfGuard 判定
+ * (命中内网/回环/保留地址返回 false 需拒绝),其余 scheme(data:/file:) 恒 true 放行。
+ *
+ * app 模块 SsrfBridgeModule 将 [SsrfGuard.refImageUrlValidator] 注册为此类型;
+ * 未注册时 AgnesImageProvider 拿到 null,回退旧行为(直接下载)。
+ */
+fun interface RefImageUrlValidator {
+    /** 返回 true 表示该 URL 可以发起下载;false 应拒绝。 */
+    fun isAllowed(url: String): Boolean
+}

@@ -1,0 +1,159 @@
+package io.zer0.muse.data.schedule
+
+import androidx.room.ColumnInfo
+import androidx.room.Dao
+import androidx.room.Insert
+import androidx.room.OnConflictStrategy
+import androidx.room.Query
+import androidx.room.Transaction
+import kotlinx.coroutines.flow.Flow
+
+/**
+ * v1.137: 链式任务选择时的轻量投影。
+ */
+data class TaskIdName(
+    @ColumnInfo(name = "id") val id: String,
+    @ColumnInfo(name = "name") val name: String,
+)
+
+@Dao
+interface ScheduledTaskDao {
+    @Query("SELECT * FROM scheduled_tasks ORDER BY next_run_at ASC")
+    fun observeAll(): Flow<List<ScheduledTaskEntity>>
+
+    @Query("SELECT * FROM scheduled_tasks WHERE enabled = 1 AND next_run_at <= :timeMillis ORDER BY next_run_at ASC LIMIT 10")
+    suspend fun getDueTasks(timeMillis: Long): List<ScheduledTaskEntity>
+
+    @Query("SELECT * FROM scheduled_tasks WHERE id = :id")
+    suspend fun getById(id: String): ScheduledTaskEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsert(task: ScheduledTaskEntity)
+
+    @Query("DELETE FROM scheduled_tasks WHERE id = :id")
+    suspend fun delete(id: String)
+
+    /**
+     * B-12: 抢占式领取到期任务(CAS,compare-and-set)。
+     *
+     * 仅当该任务的 next_run_at 仍等于调用方读取到的期望值(即仍"到期未领取")时,
+     * 才把 next_run_at 原子推进为 [claimNextRun](哨兵,远未来)以摘除其"到期"身份,
+     * 并写入 [claimedAt] 作为领取标记,返回受影响行数
+     * (1 = 本执行者领取成功;0 = 已被其他执行者抢先领取,应跳过)。
+     *
+     * 关键:必须同步推进 next_run_at(而不只写 last_run_at),否则并发执行者 B 的
+     * CAS 仍看到 next_run_at == 原到期值而重复领取,导致重复 AI 调用 / 通知。
+     * 领取成功后执行流程会在结束时调用 [recordExecutionAndScheduleNext] 把 next_run_at
+     * 重置为真实的下次执行时间。next_run_at 临时为远未来哨兵期间,任何到期扫描
+     * ([getDueTasks])与再领取均不会命中,实现进程内与跨进程(Worker)并发安全。
+     *
+     * 故意不含 enabled 约束:轮询/Worker 已通过 [getDueTasks] 过滤 enabled=1;
+     * UI "立即执行"允许对已禁用任务手动触发一次,故领取不复查 enabled。
+     *
+     * 危险:若执行中途异常导致最终重置未执行(仅 DB 写失败场景),任务会停在哨兵值
+     * 不再触发 —— 相比重复执行,单次暂停是更安全的选择(宁可漏一次也不重复副作用)。
+     *
+     * @param id 任务 id
+     * @param expectedNextRunAt 调用方从 DB 读到的 next_run_at 快照(CAS 期望值)
+     * @param claimedAt 领取时间戳,写入 last_run_at 与 updated_at
+     * @param claimNextRun 领取时临时推进的 next_run_at 哨兵值(远未来),由调用方传入
+     */
+    @Query(
+        "UPDATE scheduled_tasks SET next_run_at = :claimNextRun, last_run_at = :claimedAt, updated_at = :claimedAt " +
+            "WHERE id = :id AND next_run_at = :expectedNextRunAt",
+    )
+    suspend fun claimTask(id: String, expectedNextRunAt: Long, claimedAt: Long, claimNextRun: Long): Int
+
+    @Query("UPDATE scheduled_tasks SET enabled = :enabled, updated_at = :now WHERE id = :id")
+    suspend fun setEnabled(id: String, enabled: Boolean, now: Long = System.currentTimeMillis())
+
+    @Query("UPDATE scheduled_tasks SET next_run_at = :nextRunAt, last_run_at = :lastRunAt, updated_at = :lastRunAt WHERE id = :id")
+    suspend fun updateRunState(id: String, nextRunAt: Long, lastRunAt: Long)
+
+    /**
+     * B-26: 哨兵看门狗 —— 回收"领取后事务失败、卡死在领取哨兵值"的过期任务。
+     *
+     * 领取([claimTask])会把 next_run_at 临时推进为远未来哨兵以摘除"到期"身份;若之后
+     * [recordExecutionAndScheduleNext] 事务失败回滚,next_run_at 永远停在哨兵值,到期扫描
+     * 永远命中不了。这里把"next_run_at=哨兵 且 updated_at 已过阈值"的任务重置 next_run_at
+     * 为 now(并刷新 updated_at),由下一轮轮询重新纳入到期执行。
+     *
+     * 防误重置:
+     *  - updated_at < staleBefore 过滤:正在执行中的任务其 updated_at 是刚领取的时间,未过阈值
+     *  - enabled = 1 过滤:避免复活用户已手动禁用的任务
+     *
+     * @param sentinel 领取哨兵值(通常为 Long.MAX_VALUE)
+     * @param staleBefore 过期判定时间戳(now - 看门狗阈值),只回收此前未释放的任务
+     * @param now 重置到的目标时间戳
+     * @return 受影响行数(回收的任务数)
+     */
+    @Query(
+        "UPDATE scheduled_tasks SET next_run_at = :now, updated_at = :now " +
+            "WHERE next_run_at = :sentinel AND enabled = 1 AND updated_at < :staleBefore",
+    )
+    suspend fun recoverStuckClaim(sentinel: Long, staleBefore: Long, now: Long): Int
+
+    /**
+     * v1.134 P2-1: 更新任务的专用会话 ID(会话聚合模式)。
+     *
+     * 首次执行时创建专用会话后调用此方法持久化,后续执行复用同一会话。
+     */
+    @Query("UPDATE scheduled_tasks SET dedicated_session_id = :sessionId, updated_at = :now WHERE id = :id")
+    suspend fun updateDedicatedSessionId(id: String, sessionId: String, now: Long = System.currentTimeMillis())
+
+    /**
+     * H-SC1: 原子地记录执行历史并更新下次执行时间。
+     *
+     * 将 execution insert 与 next_run_at/last_run_at update 放在同一事务内,
+     * 避免崩溃后只写入历史但未推进 next_run_at 导致重复执行。
+     *
+     * @param execution 执行历史记录
+     * @param taskId 任务 id
+     * @param nextRunAt 下次执行时间戳;<=0 表示无下次(once/非法 cron),将禁用任务
+     * @param lastRunAt 本次执行时间戳(写入 last_run_at)
+     */
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertExecution(execution: ScheduledTaskExecutionEntity)
+
+    @Query("SELECT * FROM scheduled_tasks")
+    suspend fun getAll(): List<ScheduledTaskEntity>
+
+    @Query("DELETE FROM scheduled_tasks")
+    suspend fun deleteAll()
+
+    /**
+     * v1.137: 把一组任务的下次执行时间设置为现在,触发链式任务在下一轮轮询中执行。
+     */
+    @Query("UPDATE scheduled_tasks SET next_run_at = :now, updated_at = :now WHERE id IN (:ids)")
+    suspend fun triggerNextTasks(ids: List<String>, now: Long = System.currentTimeMillis())
+
+    /**
+     * v1.0.17: 更新任务的重试次数(执行失败重试策略)。
+     */
+    @Query("UPDATE scheduled_tasks SET retry_count = :retryCount WHERE id = :id")
+    suspend fun updateRetryCount(id: String, retryCount: Int)
+
+    /**
+     * v1.137: 查询可作为链式后续的任务候选(排除当前任务自身)。
+     */
+    @Query("SELECT id, name FROM scheduled_tasks WHERE id != :excludeId ORDER BY name ASC")
+    suspend fun listChainCandidates(excludeId: String): List<TaskIdName>
+
+    @Transaction
+    suspend fun recordExecutionAndScheduleNext(
+        execution: ScheduledTaskExecutionEntity,
+        taskId: String,
+        nextRunAt: Long,
+        lastRunAt: Long,
+        retryCount: Int,
+    ) {
+        insertExecution(execution)
+        if (nextRunAt > 0) {
+            updateRunState(taskId, nextRunAt, lastRunAt)
+        } else {
+            // 无下次执行时间(once / 非法 cron),禁用任务避免每分钟重复触发
+            setEnabled(taskId, false, lastRunAt)
+        }
+        updateRetryCount(taskId, retryCount)
+    }
+}

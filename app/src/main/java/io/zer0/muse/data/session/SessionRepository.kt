@@ -1,0 +1,1918 @@
+package io.zer0.muse.data.session
+
+import android.content.Context
+import androidx.room.withTransaction
+import io.zer0.ai.core.MessageRole
+import io.zer0.ai.core.RagCitation
+import io.zer0.ai.core.UIMessage
+import io.zer0.common.ErrorMessage
+import io.zer0.common.Logger
+import io.zer0.common.resultOf
+import io.zer0.muse.R
+import io.zer0.muse.data.audit.AuditLogger
+import io.zer0.muse.data.chat.orderConversationMessages
+import io.zer0.muse.data.chat.rewrite.ConversationEventDraft
+import io.zer0.muse.data.chat.rewrite.ConversationEventType
+import io.zer0.muse.data.chat.rewrite.ConversationProjector
+import io.zer0.muse.data.chat.rewrite.ConversationRebuildFlagStore
+import io.zer0.muse.data.chat.rewrite.MessageCommitRequest
+import io.zer0.muse.data.chat.rewrite.MessageCommitResult
+import io.zer0.muse.tools.SessionPermissionStore
+import io.zer0.muse.transformer.InternalMarkupSanitizer
+import io.zer0.muse.transformer.MoodSkinParser
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.mapLatest
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.serializer
+import kotlinx.serialization.json.Json
+import kotlin.uuid.Uuid
+
+/**
+ * 会话仓库:封装 SessionDao + MessageDao,提供领域模型 API。
+ *
+ * - 会话列表 / 创建 / 删除 / 切换
+ * - 消息持久化(发送时写库,流式增量更新 assistant,编辑/重生成截断)
+ * - [MessageEntity] ↔ [UIMessage] 双向转换
+ *
+ * H-SESS1: 跨表操作(messages + messages_fts + sessions)统一用 [database.withTransaction]
+ * 包裹,保证崩溃后数据一致;[database] 由 Koin 注入(见 AppKoinModule)。
+ *
+ * ── i18n 改造示范(v1.90 收口,已完成 5 处)──────────────────────────────
+ * 本类作为 i18n 架构骨架的示范改造点,展示如何把硬编码日志 / catch 消息替换为
+ * [ErrorMessage] 子类。示范改造点 1..5 已全部落地(见各 `// i18n 示范改造点 N` 标注),
+ * 后续其余待迁移点可按本模式逐步推进:
+ *   1. catch / resultOf.onError 中:用 `Logger.w(TAG, ErrorMessage.X.toLogString(), t)`
+ *      替换裸中英文消息([toLogString] 输出 [code] + 英文兜底,可日志可埋点)
+ *   2. 上抛给 UI 的错误:返回 `io.zer0.common.Result.Error` 包裹 [ErrorMessage]
+ *   3. UI 层用 [io.zer0.muse.ui.toLocalizedString] 翻译为当前 locale 字符串
+ * ──────────────────────────────────────────────────────────────────────
+ */
+class SessionRepository(
+    private val sessionDao: SessionDao,
+    private val messageDao: MessageDao,
+    private val database: MuseDb,
+    private val context: Context,
+    private val messageImageStore: MessageImageStore,
+    /** v1.135-A: 视觉辅助缓存清理(会话删除时清理 sidecar)。 */
+    private val visionCache: io.zer0.muse.vision.VisionCache? = null,
+    /** P3: 会话权限模式清理(会话删除时清理持久化设置)。 */
+    private val sessionPermissionStore: SessionPermissionStore? = null,
+    /** P2-4: 审计日志记录器(会话删除等用户操作)。 */
+    private val auditLogger: AuditLogger? = null,
+) {
+
+    private val json = Json { ignoreUnknownKeys = true }
+    private val messageFtsDao: MessageFtsDao get() = database.messageFtsDao()
+    private val urlListSerializer = ListSerializer(String.serializer())
+
+    /** v1.133: RAG 引用列表序列化器(持久化到 messages.ragCitationsJson)。 */
+    private val ragCitationListSerializer = ListSerializer(RagCitation.serializer())
+
+    /**
+     * v2.0: Room 单例在备份恢复后可能短暂保留已关闭的 SQLite 连接。
+     * 只对明确的 closed 错误做一次重开重试,避免普通数据库错误被重复执行;
+     * 重试前通过 openHelper.writableDatabase 触发同一 Room 实例重新打开。
+     */
+    private suspend fun <T> withDatabaseRecovery(operation: String, block: suspend () -> T): T {
+        try {
+            return block()
+        } catch (e: Exception) {
+            if (!isClosedDatabaseError(e)) throw e
+            Logger.w(TAG, "$operation 遇到已关闭数据库连接,尝试重开后重试", e)
+            withContext(Dispatchers.IO) { database.openHelper.writableDatabase }
+            delay(50L)
+            return block()
+        }
+    }
+
+    private fun isClosedDatabaseError(error: Throwable): Boolean {
+        val message = generateSequence(error) { it.cause }
+            .joinToString(" ") { it.message.orEmpty() }
+            .lowercase()
+        return "connection is closed" in message ||
+            "database is closed" in message ||
+            "database not open" in message ||
+            "cannot perform this operation because there is no current transaction" in message
+    }
+
+    companion object {
+        private const val TAG = "SessionRepo"
+
+        /** H-SESS3: observeBySession 默认加载条数,与分页加载配合避免 OOM。 */
+        private const val OBSERVE_LIMIT = 200
+
+        /** 会话预览(lastMessagePreview)最大长度。 */
+        private const val MESSAGE_PREVIEW_LENGTH = 50
+
+        /** 首条 user 消息自动命名时取内容前缀长度。 */
+        private const val AUTO_TITLE_LENGTH = 20
+
+        /** 搜索片段匹配位置前后保留字数。 */
+        private const val SNIPPET_RADIUS = 30
+
+        /** 搜索片段无匹配时回退取前缀长度。 */
+        private const val SNIPPET_FALLBACK_LENGTH = 60
+
+        /** C-23: FTS 内容一致性抽查条数。 */
+        private const val FTS_SAMPLE_COUNT = 10
+
+        /** C-23: 内容抽查时每个样本用于构造 MATCH 探测的 token 数量上限。 */
+        private const val FTS_PROBE_TOKEN_LIMIT = 3
+
+        /** Keep each Room `IN` query below SQLite's bind-argument limit. */
+        private const val SESSION_ID_QUERY_BATCH_SIZE = 900
+    }
+
+    /**
+     * 观察未归档会话(置顶优先,再按 updatedAt 降序)。主列表用。
+     * v1.28: 排除 Agent Tab 会话(isAgentSession=0),Agent 日常聊天不污染任务列表。
+     */
+    fun observeSessions(): Flow<List<SessionEntity>> = sessionDao.observeTaskSessions()
+
+    /** 观察全部会话,供备份/选择性导出等数据管理入口使用。 */
+    fun observeAllSessions(): Flow<List<SessionEntity>> = sessionDao.observeAll()
+
+    /** 按 id 获取会话(通知深链等一次性导航场景使用)。 */
+    suspend fun getSessionById(sessionId: String): SessionEntity? = sessionDao.getById(sessionId)
+
+    /**
+     * v2.5.3 (P3-2): 写入会话级配置快照。仅在首次生成时拍摄一次（已有快照则不覆盖）。
+     *
+     * @return true 表示本次写入生效；false 表示会话已有快照（保持“当时配置”）或写入失败。
+     */
+    suspend fun saveConfigSnapshotIfAbsent(sessionId: String, snapshot: SessionConfigSnapshot): Boolean {
+        val existing = resultOf { sessionDao.getById(sessionId) }.getOrNull()
+        val encoded = SessionConfigSnapshot.encode(snapshot)
+        val alreadyCaptured = existing == null || !existing.configSnapshotJson.isNullOrBlank()
+        return if (alreadyCaptured || encoded == null) {
+            false
+        } else {
+            resultOf { sessionDao.setConfigSnapshot(sessionId, encoded) }.isSuccess
+        }
+    }
+
+    /** v2.5.3 (P3-2): 读取会话级配置快照；未拍摄/坏数据返回 null。 */
+    suspend fun getConfigSnapshot(sessionId: String): SessionConfigSnapshot? =
+        SessionConfigSnapshot.decode(resultOf { sessionDao.getById(sessionId) }.getOrNull()?.configSnapshotJson)
+
+    /** 按 id 批量获取会话,保留请求顺序并忽略重复/空 id。 */
+    suspend fun getSessionsByIds(sessionIds: Collection<String>): List<SessionEntity> = withContext(Dispatchers.IO) {
+        val uniqueIds = sessionIds.filter { it.isNotBlank() }.distinct()
+        if (uniqueIds.isEmpty()) return@withContext emptyList()
+
+        val sessions = mutableListOf<SessionEntity>()
+        for (batch in uniqueIds.chunked(SESSION_ID_QUERY_BATCH_SIZE)) {
+            sessions += sessionDao.getByIds(batch)
+        }
+        val byId = sessions.associateBy { it.id }
+        uniqueIds.mapNotNull(byId::get)
+    }
+
+    /** v0.45: 观察已归档会话(按 updatedAt 降序)。归档列表用。 */
+    fun observeArchived(): Flow<List<SessionEntity>> = sessionDao.observeArchived()
+
+    /** v0.45: 切换会话归档状态。 */
+    suspend fun setArchived(sessionId: String, archived: Boolean) {
+        sessionDao.setArchived(sessionId, archived)
+    }
+
+    /** B7-03: 更新会话已读位置。 */
+    suspend fun updateLastReadMessage(sessionId: String, messageId: String, readCount: Int) {
+        sessionDao.updateLastReadMessage(sessionId, messageId, readCount)
+    }
+
+    /** B7-05: 置顶会话拖拽排序持久化。 */
+    suspend fun reorderPinnedSessions(ids: List<String>) {
+        ids.forEachIndexed { index, id -> sessionDao.updateSortOrder(id, index) }
+    }
+
+    /** B8-01: 更新会话级主动消息排期(null=清除排期)。 */
+    suspend fun updateProactiveNextTriggerAt(id: String, nextTriggerAt: Long?) {
+        sessionDao.updateProactiveNextTriggerAt(id, nextTriggerAt)
+    }
+
+    // ── v2.0: 软删除 ──
+
+    /**
+     * v2.0: 软删除会话。
+     *
+     * 软删除必须同时清理 outbox、generation checkpoint 和新链路残留，
+     * 否则应用重启时恢复任务可能再次向已删除会话写入消息。
+     */
+    suspend fun softDeleteSession(id: String) {
+        val now = System.currentTimeMillis()
+        withContext(Dispatchers.IO) {
+            database.withTransaction {
+                sessionDao.softDelete(id, now)
+                database.messageOutboxDao().deleteBySession(id)
+                database.generationCheckpointDao().deleteBySession(id)
+                // H-SESS-2: 软删除时同步清理 FTS 索引,避免已删除消息出现在搜索结果中
+                syncFtsDeleteBySession(id)
+                // 事件、回合、parts 和分支头属于可审计/可恢复数据，软删除时保留；
+                // 恢复入口会再次检查 deletedAt，只有硬删除事务才由 FK 级联清理。
+            }
+        }
+        auditLogger?.log(
+            category = "user_action",
+            action = "soft_delete_session",
+            target = id,
+        )
+    }
+
+    /** v2.0: 恢复软删除的会话。 */
+    suspend fun restoreSession(id: String) {
+        sessionDao.restore(id)
+    }
+
+    /** v2.0: 观察 7 天内软删除的会话。 */
+    fun observeDeletedSessions(): Flow<List<SessionEntity>> {
+        val cutoff = System.currentTimeMillis() - 7L * 24 * 60 * 60 * 1000
+        return sessionDao.observeDeleted(cutoff)
+    }
+
+    /** v2.0: 永久过期清理(7 天前的软删除会话)。 */
+    suspend fun purgeOldDeletedSessions() {
+        withContext(Dispatchers.IO) {
+            val messageIds = database.withTransaction {
+                val cutoff = System.currentTimeMillis() - 7L * 24 * 60 * 60 * 1000
+                val deletedMessageIds = messageDao.getMessageIdsForExpiredSessions(cutoff)
+                syncFtsClear()
+                sessionDao.permanentlyDeleteOldSessions(cutoff)
+                deletedMessageIds
+            }
+            deleteMessageImages(messageIds)
+        }
+    }
+
+    /** v2.0: 清空全部会话(硬删除,替代原 deleteAll 用于数据管理页)。 */
+    suspend fun hardDeleteAllSessions() {
+        withContext(Dispatchers.IO) {
+            val messageIds = database.withTransaction {
+                val deletedMessageIds = messageDao.getAllMessageIds()
+                syncFtsClear()
+                sessionDao.deleteAll()
+                deletedMessageIds
+            }
+            deleteMessageImages(messageIds)
+            auditLogger?.log(
+                category = "user_action",
+                action = "delete_all_sessions",
+            )
+        }
+    }
+
+    /** 观察会话总数(统计面板用)。 */
+    fun observeSessionCount(): Flow<Int> = sessionDao.observeCount()
+
+    /** 观察消息总数(统计面板用)。 */
+    fun observeMessageCount(): Flow<Int> = messageDao.observeCount()
+
+    /** v2.0: 一次性获取会话总数。 */
+    suspend fun getSessionCount(): Int = sessionDao.count()
+
+    /** v2.0: 一次性获取消息总数。 */
+    suspend fun getTotalMessageCount(): Int = messageDao.countMessages()
+
+    /**
+     * 创建新会话。返回会话 id。标题默认"新会话"。
+     * @param warmupPending v2.x 导入预热:外部导入/备份恢复的会话置 true,首轮以全量历史构建上下文。
+     */
+    suspend fun createSession(assistantId: String = "default", warmupPending: Boolean = false): String {
+        val id = Uuid.random().toString()
+        val now = System.currentTimeMillis()
+        sessionDao.insert(
+            SessionEntity(
+                id = id,
+                title = context.getString(R.string.session_repo_default_title),
+                createdAt = now,
+                updatedAt = now,
+                assistantId = assistantId,
+                warmupPending = warmupPending,
+            ),
+        )
+        return id
+    }
+
+    /** v1.28: 创建 Agent Tab 专用会话(独立于任务会话,不在任务列表显示)。 */
+    suspend fun createAgentSession(assistantId: String = "default"): String {
+        val id = Uuid.random().toString()
+        val now = System.currentTimeMillis()
+        sessionDao.insert(
+            SessionEntity(
+                id = id,
+                title = "Agent",
+                createdAt = now,
+                updatedAt = now,
+                assistantId = assistantId,
+                isAgentSession = true,
+            ),
+        )
+        return id
+    }
+
+    /** v1.138: 创建小手机私信空间会话(仅在小手机「消息」Tab 显示)。 */
+    suspend fun createMiniPhoneSession(assistantId: String): String {
+        val id = Uuid.random().toString()
+        val now = System.currentTimeMillis()
+        sessionDao.insert(
+            SessionEntity(
+                id = id,
+                title = context.getString(R.string.session_repo_default_title),
+                createdAt = now,
+                updatedAt = now,
+                assistantId = assistantId,
+                isMiniPhone = true,
+            ),
+        )
+        return id
+    }
+
+    /** v1.138: 观察小手机私信空间会话流(仅 isMiniPhone=true,未软删除)。 */
+    fun observeMiniPhoneSessions(): Flow<List<SessionEntity>> = sessionDao.observeMiniPhoneSessions()
+
+    /** v1.138: 一次性取小手机私信空间会话列表(按 updatedAt 倒序)。 */
+    suspend fun getMiniPhoneSessions(): List<SessionEntity> = sessionDao.getMiniPhoneSessions()
+
+    /** v1.28: 获取最近的 Agent 会话(用于自动恢复)。 */
+    suspend fun getLatestAgentSession(): SessionEntity? = sessionDao.getLatestAgentSession()
+
+    /** v1.0.54: 按助手查最近 Agent 会话。 */
+    suspend fun getRecentAgentByAssistant(assistantId: String, limit: Int): List<SessionEntity> =
+        sessionDao.getRecentAgentByAssistant(assistantId, limit)
+
+    /** v1.0.72: 设置会话"不参考记忆"标志。 */
+    suspend fun setSessionIgnoreMemory(sessionId: String, ignore: Boolean) {
+        withContext(Dispatchers.IO) {
+            resultOf { sessionDao.setIgnoreMemory(sessionId, ignore) }
+                .onError { msg, t -> Logger.w(TAG, "setSessionIgnoreMemory 失败: $msg", t) }
+        }
+    }
+
+    /**
+     * v1.58: 从源会话的某条消息处分叉,创建新会话并复制到该消息为止的全部历史。
+     *
+     * - 复用源会话的 assistantId / folderId
+     * - 消息重新生成 id(避免主键冲突),保留原 createdAt 顺序
+     * - 标题改为"分叉自 {源标题}"
+     *
+     * @return 新会话 id;源会话或锚点消息不存在时返回 null。
+     */
+    suspend fun forkSession(sourceSessionId: String, untilMessageId: String): String? {
+        // H-SESS1: 跨表(sessions + messages + messages_fts)复制,用事务包裹,
+        // 崩溃时整体回滚,避免分叉会话消息/FTS 索引不完整。
+        return withContext(Dispatchers.IO) {
+            database.withTransaction {
+                val sourceSession = sessionDao.getById(sourceSessionId) ?: return@withTransaction null
+                val anchor = messageDao.getById(sourceSessionId, untilMessageId) ?: return@withTransaction null
+                val newId = Uuid.random().toString()
+                val now = System.currentTimeMillis()
+                sessionDao.insert(
+                    SessionEntity(
+                        id = newId,
+                        title = context.getString(
+                            R.string.session_repo_fork_title,
+                            sourceSession.title.ifBlank {
+                                context.getString(R.string.session_repo_default_title)
+                            },
+                        ),
+                        createdAt = now,
+                        updatedAt = now,
+                        assistantId = sourceSession.assistantId,
+                        folderId = sourceSession.folderId,
+                        parentSessionId = sourceSessionId,
+                    ),
+                )
+                sessionDao.incrementChildCount(sourceSessionId)
+                // 复制到锚点为止的全部消息(含锚点),完整重映射消息、父消息和变体组引用。
+                // 不走 UIMessage 转换，避免丢失附件、工具轮、收藏、反应和旧变体字段。
+                val anchorOrder = if (anchor.commitSeq > 0) anchor.commitSeq else anchor.seq
+                val messages =
+                    messageDao.getUpToBySession(
+                        sessionId = sourceSessionId,
+                        untilOrder = anchorOrder,
+                        untilCreatedAt = anchor.createdAt,
+                        untilMessageId = anchor.id,
+                    )
+                val messageIdMap = messages.associate { it.id to Uuid.random().toString() }
+                val groupIdMap = messages.mapNotNull { it.variantGroupId }.distinct().associateWith { Uuid.random().toString() }
+                val parentGroupIdMap = messages.mapNotNull { it.parentGroupId }.distinct().associateWith { Uuid.random().toString() }
+                val remapped = messages.mapIndexed { index, msg ->
+                    msg.copy(
+                        id = messageIdMap.getValue(msg.id),
+                        sessionId = newId,
+                        seq = index.toLong() + 1,
+                        commitSeq = index.toLong() + 1,
+                        parentMessageId = msg.parentMessageId?.let(messageIdMap::get),
+                        variantGroupId = msg.variantGroupId?.let(groupIdMap::get),
+                        parentGroupId = msg.parentGroupId?.let(parentGroupIdMap::get),
+                        deletedAt = null,
+                    )
+                }
+                remapped.forEach { msg ->
+                    messageDao.upsert(msg)
+                    resultOf {
+                        syncFtsDelete(msg.id)
+                        syncFtsInsert(msg.id, msg.content)
+                    }.onError { _, t ->
+                        Logger.w(TAG, "forkSession FTS 写入失败: ${t?.message ?: ""}", t)
+                    }
+                }
+                sessionDao.setMessageCount(newId, remapped.size)
+                val last = remapped.lastOrNull()
+                if (last != null) {
+                    sessionDao.updatePreviewOnly(
+                        id = newId,
+                        preview = previewText(last.content),
+                        now = now,
+                    )
+                    database.sessionBranchHeadDao().upsert(
+                        SessionBranchHeadEntity(
+                            sessionId = newId,
+                            headMessageId = last.id,
+                            nextCommitSeq = remapped.size.toLong() + 1,
+                            projectionVersion = 1,
+                            updatedAt = now,
+                        ),
+                    )
+                }
+                newId
+            }
+        }
+    }
+
+    /** v1.28: 观察任务会话(排除 Agent Tab 会话)。 */
+    fun observeTaskSessions(): Flow<List<SessionEntity>> = sessionDao.observeTaskSessions()
+
+    /** 删除会话(级联删消息 + FTS 索引)。 */
+    suspend fun deleteSession(id: String) {
+        // Phase 10.3: 先删 FTS 索引(依赖 messages 表子查询,必须在 messages 被级联删之前)
+        // H-SESS1: 跨表(FTS + sessions)用事务包裹,保证一致性
+        withContext(Dispatchers.IO) {
+            val messageIds = database.withTransaction {
+                val deletedMessageIds = messageDao.getMessageIdsBySessionId(id)
+                syncFtsDeleteBySession(id)
+                sessionDao.deleteById(id)
+                deletedMessageIds
+            }
+            deleteMessageImages(messageIds)
+            // v1.135-A: 清理该会话的视觉辅助缓存 sidecar,避免孤儿文件
+            // i18n 示范改造点 1:原硬编码中文 "清理视觉缓存失败: $id" 改为
+            // ErrorMessage.StorageError.IO_ERROR + sessionId 作为日志 metadata。
+            // Locale 无关,toLogString() 输出 "[ERR:storage_io_error] Local storage read/write failed"
+            resultOf { visionCache?.clearSession(id) }
+                .onError { _, t ->
+                    Logger.w(
+                        TAG,
+                        "${ErrorMessage.StorageError.IO_ERROR.toLogString()} [sessionId=$id]",
+                        t,
+                    )
+                }
+            // P3: 清理该会话的权限模式设置
+            // i18n 示范改造点 2:原硬编码中文 "清理会话权限模式失败: $id" 改为
+            // ErrorMessage.StorageError.IO_ERROR,与上条同 code 不同 metadata 区分场景。
+            resultOf { sessionPermissionStore?.clearMode(id) }
+                .onError { _, t ->
+                    Logger.w(
+                        TAG,
+                        "${ErrorMessage.StorageError.IO_ERROR.toLogString()} [sessionId=$id, scope=permission]",
+                        t,
+                    )
+                }
+            // P2-4: 审计日志 — 删除会话
+            auditLogger?.log(
+                category = "user_action",
+                action = "delete_session",
+                target = id,
+            )
+        }
+    }
+
+    /** 重命名会话。 */
+    suspend fun renameSession(id: String, title: String) {
+        // H-SESS2: 原子 UPDATE,避免读-改-写并发丢失更新
+        sessionDao.updateTitle(id, title, System.currentTimeMillis())
+    }
+
+    /** Phase 8.2: 切换会话绑定的 Assistant。 */
+    suspend fun setSessionAssistant(sessionId: String, assistantId: String) {
+        sessionDao.setAssistantId(sessionId, assistantId)
+    }
+
+    /** Phase 8.2: 切换会话置顶状态。 */
+    suspend fun setSessionPinned(sessionId: String, pinned: Boolean) {
+        sessionDao.setPinned(sessionId, pinned)
+    }
+
+    /** Phase 9.1 (M13): 切换会话所属文件夹(null = 移到未分组)。 */
+    suspend fun setSessionFolder(sessionId: String, folderId: String?) {
+        sessionDao.setFolderId(sessionId, folderId)
+    }
+
+    /** Phase 8.2: 取会话绑定的 Assistant id(无则默认 'default')。 */
+    suspend fun getAssistantId(sessionId: String): String {
+        return sessionDao.getById(sessionId)?.assistantId ?: "default"
+    }
+
+    /** Phase 8.3: 切换消息收藏状态(跨会话收藏面板通过 observeAllFavorites 聚合)。 */
+    suspend fun setMessageFavorite(messageId: String, favorite: Boolean) {
+        messageDao.setFavorite(messageId, favorite)
+    }
+
+    /** 功能1: 设置消息表情回应(null = 取消回应)。 */
+    suspend fun setMessageReaction(messageId: String, reaction: String?) {
+        messageDao.setReaction(messageId, reaction)
+    }
+
+    /** v1.104 U7: 设置收藏分组标签(null = 移到未分组)。 */
+    suspend fun setMessageFavoriteTag(messageId: String, tag: String?) {
+        messageDao.setMessageFavoriteTag(messageId, tag)
+    }
+
+    /** v1.104 U7: 观察所有已命名的收藏分组标签(去 NULL / 去重 / 升序)。 */
+    fun observeAllFavoriteTags(): Flow<List<String>> {
+        return messageDao.observeAllFavoriteTags()
+    }
+
+    /** v1.48: 按 id 删除单条消息(长按菜单"删除消息")。同时清理 FTS 索引。 */
+    suspend fun deleteMessage(messageId: String) {
+        // H-SESS1: 跨表(FTS + messages)用事务包裹,保证 FTS 与消息同步删除
+        withContext(Dispatchers.IO) {
+            // v1.0.80 (T-4): 级联收集要删除的消息 id(防环 BFS)。
+            // 删除 user 消息时其 assistant 子回复(parentGroupId/parentMessageId 指向该 user)
+            // 若不级联删除,切回会话时 build 会把这些孤儿回复兜底挂到最后,
+            // 表现为"旧消息突然变成最新"(用户反馈)。
+            val toDelete = mutableListOf<String>()
+            val visited = mutableSetOf<String>()
+            val queue = ArrayDeque<String>()
+            queue.add(messageId)
+            while (queue.isNotEmpty()) {
+                val id = queue.removeFirst()
+                if (!visited.add(id)) continue
+                toDelete += id
+                messageDao.getChildrenByParentId(id).forEach { child ->
+                    if (child.id !in visited) queue.add(child.id)
+                }
+            }
+            database.withTransaction {
+                toDelete.forEach { deleteMessageRow(it) }
+            }
+            // v1.134 P1-2: 清理被删消息的图片文件,避免孤儿文件占用存储
+            // i18n 示范改造点 3:原硬编码英文 "deleteMessage images cleanup failed: ${...}"
+            // 改为 ErrorMessage.StorageError.IO_ERROR.toLogString(),消除裸字符串。
+            toDelete.forEach { id ->
+                resultOf { messageImageStore.deleteByMessageId(id) }
+                    .onError { _, t ->
+                        Logger.w(
+                            TAG,
+                            "${ErrorMessage.StorageError.IO_ERROR.toLogString()} [messageId=$id, scope=images]",
+                            t,
+                        )
+                    }
+            }
+        }
+    }
+
+    /** 删除单条消息行(FTS + messages + 检查点 + 冗余计数 + 预览),调用方负责事务。 */
+    private suspend fun deleteMessageRow(messageId: String) {
+        // v1.107 冗余: 先查出 sessionId,用于维护冗余计数
+        val entity = messageDao.getByMessageId(messageId) ?: return
+        syncFtsDelete(messageId)
+        messageDao.deleteById(messageId)
+        // v1.0.80 (M-1): 同步删除生成检查点 — 用户删除生成中断残留的消息后,
+        // 若检查点仍在 DB,重启时 recoverInterruptedGenerations 会把该消息
+        // "重建"复活(消息不存在且无更新消息时走重建分支)。删消息即删检查点,
+        // 从源头阻止删除的消息在重启后复活。
+        database.generationCheckpointDao().deleteByAssistantMessageId(messageId)
+        database.generationCheckpointDao().deleteByUserMessageId(messageId)
+        // v1.107 冗余: 递减 sessions.messageCount
+        resultOf { sessionDao.incrementMessageCount(entity.sessionId, -1) }
+            .onError { _, t -> Logger.w(TAG, "decrementMessageCount failed: ${t?.message ?: ""}") }
+        // v1.0.80 (T-4): 删除后同步会话 preview — 若删的是最后一条消息,
+        // 会话列表预览应回退到新的最后一条,否则仍显示已删消息文本。
+        resultOf {
+            val newLast = messageDao.getLastBySession(entity.sessionId)
+            sessionDao.updatePreview(
+                id = entity.sessionId,
+                preview = newLast?.let { previewText(it.content) } ?: "",
+                now = System.currentTimeMillis(),
+            )
+        }.onError { _, t -> Logger.w(TAG, "updatePreview after delete failed: ${t?.message ?: ""}") }
+    }
+
+    /** Phase 8.3: 观察跨会话的全部收藏消息(收藏面板用)。 */
+    fun observeAllFavorites(): Flow<List<UIMessage>> {
+        return messageDao.observeAllFavorites()
+            .map { entities -> entities.map { it.toUIMessage() } }
+            .distinctUntilChanged()
+    }
+
+    /** 观察指定会话的消息列表(转 UIMessage)。 */
+    fun observeMessages(sessionId: String): Flow<List<UIMessage>> {
+        // H-SESS3: 限最近 OBSERVE_LIMIT 条,避免长会话全量加载 OOM;更早历史走分页加载
+        return messageDao.observeRecentBySession(sessionId, OBSERVE_LIMIT)
+            .mapLatest { entities -> projectMessagesForRead(entities) }
+            .distinctUntilChanged()
+    }
+
+    /**
+     * v1.53-A1: 分页加载 — 取指定会话最近 limit 条消息(按 createdAt 升序)。
+     *
+     * DAO 返回降序(最新在前),这里 reversed() 转为升序,便于直接渲染。
+     * 用于初始加载,避免一次性加载全部消息导致卡顿/OOM。
+     */
+    suspend fun getRecentMessages(sessionId: String, limit: Int): List<UIMessage> {
+        return projectMessagesForRead(messageDao.getRecentBySession(sessionId, limit).reversed())
+    }
+
+    /** 计划卡恢复用:读取会话中已持久化的工具展示消息,不受聊天首屏分页限制。 */
+    suspend fun getToolCallMessages(sessionId: String): List<UIMessage> = withContext(Dispatchers.IO) {
+        messageDao.getToolCallMessagesBySession(sessionId).map { it.toUIMessage() }
+    }
+
+    /** 每日总结用:读取指定本地日历区间内的用户消息。 */
+    suspend fun getUserMessagesBetween(fromCreatedAt: Long, toCreatedAt: Long, limit: Int): List<UIMessage> = withContext(Dispatchers.IO) {
+        messageDao.getUserMessagesBetween(fromCreatedAt, toCreatedAt, limit).map { it.toUIMessage() }
+    }
+
+    /**
+     * v1.53-A1: 分页加载 — 取有效序列早于 beforeSeq 的 limit 条消息(升序)。
+     *
+     * 用于上滑加载更多:以当前列表最早一条消息的有效序列为锚点,取更早的历史。
+     * 返回升序,可直接前置拼接到现有 messages 列表。
+     */
+    suspend fun getOlderMessages(sessionId: String, beforeSeq: Long, limit: Int): List<UIMessage> {
+        return projectMessagesForRead(messageDao.getOlderBySession(sessionId, beforeSeq, limit).reversed())
+    }
+
+    /**
+     * v1.0.72: 取指定时间之后(含)的用户消息(升序,限量)。
+     * 今日总结 Worker 用:汇总当天用户说了什么,作为 LLM 生成素材。
+     */
+    suspend fun getUserMessagesSince(fromCreatedAt: Long, limit: Int): List<UIMessage> {
+        return messageDao.getUserMessagesSince(fromCreatedAt, limit).map { it.toUIMessage() }
+    }
+
+    /**
+     * v1.0.51: 一次性获取指定会话的【全量】消息(按 createdAt 升序),供存量记忆迁移 backfill 用。
+     *
+     * 与 [observeMessages] / [getRecentMessages] 的差异:不走分页 limit,加载完整历史。
+     * backfill 需要全量 messages 喂给 SessionSummaryManager.rollingSummary 重建摘要。
+     * 用 Flow.first() 拿一次性快照,不持续观察。
+     */
+    suspend fun getAllMessagesForBackfill(sessionId: String): List<UIMessage> = withContext(Dispatchers.IO) {
+        messageDao.observeBySession(sessionId).first().map { it.toUIMessage() }
+    }
+
+    /**
+     * v2.x 导入预热:一次性读取会话全部有效消息(升序,排除软删除)。
+     *
+     * 与 [getRecentMessages] 的窗口加载不同,此处不走 limit —— 预热轮需要把导入的
+     * 完整历史交给 token 预算截断(见 WarmupHistory),而不是先按条数砍掉。
+     */
+    suspend fun getAllMessagesForWarmup(sessionId: String): List<UIMessage> = withContext(Dispatchers.IO) {
+        messageDao.observeBySession(sessionId).first()
+            .filter { it.deletedAt == null }
+            .map { it.toUIMessage() }
+    }
+
+    /** v2.x 导入预热:首轮成功回复后清除标记(幂等;清除失败不阻断主流程)。 */
+    suspend fun clearWarmupPending(sessionId: String) {
+        resultOf { sessionDao.setWarmupPending(sessionId, false) }
+            .onError { msg, _ -> Logger.w(TAG, "clearWarmupPending failed: $msg") }
+    }
+
+    /**
+     * v1.0.51: 一次性获取所有未归档未删除的会话(含 Agent 会话),供存量记忆迁移遍历用。
+     *
+     * 用 Flow.first() 拿一次性快照,不持续观察。backfill 只关心启动时刻的 session 列表。
+     */
+    suspend fun getAllActiveSessionsForBackfill(): List<SessionEntity> = withContext(Dispatchers.IO) {
+        sessionDao.observeActive().first()
+    }
+
+    /**
+     * v1.0.52: 获取指定助手最近 N 条会话(供 Recent Chats Reference 注入 system prompt)。
+     *
+     * 排除已归档/软删除/Agent Tab 会话,按 updatedAt DESC 限制条数。
+     * 调用方(SystemPromptAssembler.buildRecentChatsSection)用标题 + lastMessagePreview
+     * 构造简洁的最近对话列表,让 LLM 感知用户近期上下文,但不作为指令执行。
+     */
+    suspend fun getRecentByAssistant(assistantId: String, limit: Int): List<SessionEntity> = withContext(Dispatchers.IO) {
+        sessionDao.getRecentByAssistant(assistantId, limit)
+    }
+
+    /** v1.53-A1: 会话消息总数(分页判断 hasMoreHistory 用)。 */
+    suspend fun getMessageCount(sessionId: String): Int = messageDao.countBySession(sessionId)
+
+    /** 持久化一条消息,返回其 id。同时更新会话的 updatedAt + lastMessagePreview + FTS 索引。 */
+    suspend fun appendMessage(sessionId: String, message: UIMessage): String {
+        // H-SESS1: 跨表(messages + FTS + sessions)用事务包裹,保证一致性
+        return withDatabaseRecovery("appendMessage") {
+            withContext(Dispatchers.IO) {
+                database.withTransaction {
+                    appendMessageInternal(sessionId, message)
+                }
+            }
+        }
+    }
+
+    /** 增量写入单个工具轮结果，供工具执行完成后立即落盘。 */
+    suspend fun upsertToolRound(round: ToolRoundEntity) {
+        withContext(Dispatchers.IO) {
+            database.toolRoundDao().upsert(round)
+        }
+    }
+
+    /**
+     * 新链路一次性提交消息、parts、工具轮、分支头和 turn 完成状态。
+     *
+     * 同一 turn 的第二次提交在事务入口返回 AlreadyCommitted；任何写入异常都会回滚
+     * turn、消息和分支头，避免出现“已完成但正文未落盘”的半提交状态。
+     */
+    suspend fun commitConversationMessage(request: MessageCommitRequest): MessageCommitResult = withContext(Dispatchers.IO) {
+        database.withTransaction {
+            val session = sessionDao.getById(request.sessionId)
+                ?: return@withTransaction MessageCommitResult.Rejected
+            if (session.deletedAt != null) return@withTransaction MessageCommitResult.Rejected
+            val turn = database.conversationTurnDao().getById(request.turnId)
+                ?: return@withTransaction MessageCommitResult.Rejected
+            if (turn.finishedAt != null) return@withTransaction MessageCommitResult.AlreadyCommitted
+            val finished = database.conversationTurnDao().finishIfOpen(
+                turnId = request.turnId,
+                phase = "COMPLETED",
+                finishedAt = System.currentTimeMillis(),
+            )
+            if (finished != 1) return@withTransaction MessageCommitResult.AlreadyCommitted
+
+            val existing = messageDao.getById(request.sessionId, request.message.id.toString())
+            val branch = database.sessionBranchHeadDao().get(request.sessionId)
+            val nextCommitSeq = branch?.nextCommitSeq
+                ?.coerceAtLeast(messageDao.getMaxSeq(request.sessionId) + 1)
+                ?: (messageDao.getMaxSeq(request.sessionId) + 1)
+            var entity = request.message.toEntity(request.sessionId)
+            entity = if (existing != null) {
+                entity.copy(
+                    seq = existing.seq,
+                    commitSeq = existing.commitSeq,
+                    createdAt = existing.createdAt,
+                    deletedAt = existing.deletedAt,
+                )
+            } else {
+                entity.copy(
+                    seq = if (entity.seq > 0) entity.seq else messageDao.getMaxSeq(request.sessionId) + 1,
+                    commitSeq = if (entity.commitSeq > 0) entity.commitSeq else nextCommitSeq,
+                    parentMessageId = entity.parentMessageId ?: turn.inputUserMessageId,
+                )
+            }
+            messageDao.upsert(entity)
+            resultOf {
+                syncFtsDelete(entity.id)
+                syncFtsInsert(entity.id, entity.content)
+            }.onError { _, t -> Logger.w(TAG, "MessageCommit FTS 写入失败: ${t?.message ?: ""}", t) }
+
+            if (request.parts.isNotEmpty()) {
+                database.messagePartDao().deleteByMessage(entity.id)
+                database.messagePartDao().upsertAll(
+                    request.parts.map { it.copy(messageId = entity.id) },
+                )
+            }
+            if (request.toolRounds.isNotEmpty()) {
+                database.toolRoundDao().upsertAll(
+                    request.toolRounds.map { it.copy(turnId = request.turnId) },
+                )
+            }
+            if (existing == null) sessionDao.incrementMessageCount(request.sessionId, 1)
+            updateSessionPreview(request.sessionId, request.message)
+
+            val now = System.currentTimeMillis()
+            val branchHead = SessionBranchHeadEntity(
+                sessionId = request.sessionId,
+                headMessageId = entity.id,
+                nextCommitSeq = entity.commitSeq + 1,
+                projectionVersion = (branch?.projectionVersion ?: 0) + 1,
+                updatedAt = now,
+            )
+            database.sessionBranchHeadDao().upsert(branchHead)
+            val event = ConversationEventDraft(
+                sessionId = request.sessionId,
+                turnId = request.turnId,
+                type = ConversationEventType.TURN_FINISHED,
+                streamId = turn.streamId,
+                generationSerial = turn.generationSerial,
+                payloadJson = "{\"messageId\":\"${entity.id}\",\"contentLength\":${entity.content.length},\"contentHash\":\"${io.zer0.muse.data.chat.rewrite.sha256(
+                    entity.content,
+                )}\"}",
+            )
+            database.conversationEventDao().insert(
+                event.toEntity(
+                    eventSeq = database.conversationEventDao().nextEventSeq(request.sessionId),
+                    eventId = Uuid.random().toString(),
+                ),
+            )
+            database.generationCheckpointDao().deleteByAssistantMessageId(request.assistantMessageId)
+            database.generationCheckpointDao().deleteByUserMessageId(request.userMessageId)
+            MessageCommitResult.Committed
+        }
+    }
+
+    /**
+     * appendMessage 的非事务版本,供已在事务内的调用方(如 [forkSession])复用,
+     * 避免嵌套事务的 savepoint 开销。
+     */
+    private suspend fun appendMessageInternal(sessionId: String, message: UIMessage): String {
+        var entity = message.toEntity(sessionId)
+        // v1.0.90 (S-5): 用户消息同样分配 seq — 此前 appendMessageInternal 直接 upsert,
+        // entity.seq 恒为 0,导致用户消息 seq=0、assistant seq=1、多会话 seq 冲突。
+        // 与 upsertMessage 统一分配逻辑。
+        val existing = messageDao.getById(sessionId, entity.id)
+        val branchHead = if (ConversationRebuildFlagStore.current.useCommitSeq) {
+            database.sessionBranchHeadDao().get(sessionId)
+        } else {
+            null
+        }
+        if (existing != null) {
+            if (entity.seq == 0L) entity = entity.copy(seq = existing.seq)
+            if (entity.commitSeq == 0L) entity = entity.copy(commitSeq = existing.commitSeq)
+            if (existing.createdAt != entity.createdAt) entity = entity.copy(createdAt = existing.createdAt)
+        } else {
+            if (entity.seq == 0L) {
+                entity = entity.copy(seq = messageDao.getMaxSeq(sessionId) + 1)
+            }
+            if (ConversationRebuildFlagStore.current.useCommitSeq && entity.commitSeq == 0L) {
+                val next = branchHead?.nextCommitSeq
+                    ?.coerceAtLeast(messageDao.getMaxSeq(sessionId) + 1)
+                    ?: (messageDao.getMaxSeq(sessionId) + 1)
+                entity = entity.copy(commitSeq = next)
+            }
+        }
+        messageDao.upsert(entity)
+        if (ConversationRebuildFlagStore.current.useCommitSeq && existing == null) {
+            val now = System.currentTimeMillis()
+            database.sessionBranchHeadDao().upsert(
+                SessionBranchHeadEntity(
+                    sessionId = sessionId,
+                    headMessageId = entity.id,
+                    nextCommitSeq = entity.commitSeq + 1,
+                    projectionVersion = (branchHead?.projectionVersion ?: 0) + 1,
+                    updatedAt = now,
+                ),
+            )
+        }
+        // Phase 10.3: 同步 FTS 索引(toNgram 预处理中文 2-gram)
+        // v1.63: 加前置 deleteFts 防御,避免未来误用 appendMessage 更新已存在 id 时 FTS 重复
+        // i18n 示范改造点 4:原硬编码英文 "FTS insert failed: ..." 改为 ErrorMessage。
+        // 注:此处不上抛 ErrorMessage(FTS 是派生数据,失败可被 ensureFtsIndexConsistent 自愈),
+        // 仅用 ErrorMessage 标准化日志 code,便于跨模块统计 FTS 故障率。
+        resultOf {
+            syncFtsDelete(entity.id)
+            syncFtsInsert(entity.id, entity.content)
+        }.onError { _, t ->
+            Logger.w(
+                TAG,
+                "${ErrorMessage.StorageError.IO_ERROR.toLogString()} [messageId=${entity.id}, scope=fts_insert]",
+                t,
+            )
+        }
+        if (existing == null) {
+            updateSessionPreview(sessionId, message)
+        }
+        // v1.107 冗余: 仅新消息递增 messageCount；恢复/重试同一 messageId 的 upsert
+        // 不能重复计数，否则 outbox 恢复会让会话计数逐次膨胀。
+        if (existing == null) {
+            resultOf { sessionDao.incrementMessageCount(sessionId, 1) }
+                .onError { _, t -> Logger.w(TAG, "incrementMessageCount failed: ${t?.message ?: ""}") }
+        }
+        return entity.id
+    }
+
+    // ── v1.0.15: 消息发送 outbox(持久化发送队列)──────────────────────────
+    // 解决"用户刚点击发送就退出 App,进程被系统杀死导致消息丢失"的问题。
+    // outbox 记录在 enqueueSend 时同步写入,消费端启动 launchStream 后删除;
+    // App 启动时扫描残留记录重新投递。
+
+    /**
+     * 追加一条对话影子事件。
+     *
+     * eventSeq 在 session 事务内分配；软删除会话拒绝追加，避免恢复窗口重新写入。
+     */
+    suspend fun recordConversationEvent(event: ConversationEventDraft): Boolean = withContext(Dispatchers.IO) {
+        database.withTransaction {
+            val session = sessionDao.getById(event.sessionId)
+            if (session == null || session.deletedAt != null) return@withTransaction false
+            val eventDao = database.conversationEventDao()
+            val eventId = event.deterministicEventId()
+            if (eventDao.getByEventId(eventId) != null) return@withTransaction true
+            val eventSeq = eventDao.nextEventSeq(event.sessionId)
+            val entity = event.toEntity(eventSeq, eventId)
+            eventDao.insert(entity) != -1L
+        }
+    }
+
+    /** 写入或更新新链路的持久化回合状态。 */
+    suspend fun upsertConversationTurn(turn: ConversationTurnEntity) {
+        withContext(Dispatchers.IO) {
+            database.conversationTurnDao().upsert(turn)
+        }
+    }
+
+    /** 幂等完成新链路回合；已完成回合不会被重复 finalize 覆盖。 */
+    suspend fun finishConversationTurn(turnId: String, phase: String = "COMPLETED") {
+        withContext(Dispatchers.IO) {
+            database.conversationTurnDao().finishIfOpen(
+                turnId = turnId,
+                phase = phase,
+                finishedAt = System.currentTimeMillis(),
+            )
+        }
+    }
+
+    /** 同步写入 outbox(供 enqueueSend 在主线程 runBlocking 调用,保证落盘)。 */
+    suspend fun insertOutbox(entity: MessageOutboxEntity) {
+        database.messageOutboxDao().upsert(entity)
+    }
+
+    /** 消费端成功启动 launchStream 后删除 outbox(消息已投递,不再需要恢复)。 */
+    suspend fun deleteOutbox(id: String) {
+        database.messageOutboxDao().deleteById(id)
+    }
+
+    /** App 启动时扫描所有未完成 outbox 记录(按创建时间升序)。 */
+    suspend fun getPendingOutbox(): List<MessageOutboxEntity> {
+        return database.messageOutboxDao().getAll()
+    }
+
+    /** 读取目标会话待生成请求，切回会话时用于重新投递。 */
+    suspend fun getPendingOutbox(sessionId: String): List<MessageOutboxEntity> {
+        return database.messageOutboxDao().getBySessionId(sessionId)
+    }
+
+    /** 检查指定消息 id 是否已持久化到 messages 表(恢复时避免重复 appendMessage)。 */
+    suspend fun messageExists(sessionId: String, messageId: String): Boolean {
+        return messageDao.getById(sessionId, messageId) != null
+    }
+
+    // ── B5-01: 流式生成检查点(生成 outbox)───────────────────────────────
+
+    /** 写入/更新流式生成检查点。 */
+    suspend fun upsertGenerationCheckpoint(
+        sessionId: String,
+        userMessageId: String,
+        assistantMessageId: String,
+        content: String,
+        createdAt: Long,
+    ) {
+        withDatabaseRecovery("upsertGenerationCheckpoint") {
+            withContext(Dispatchers.IO) {
+                database.generationCheckpointDao().upsert(
+                    GenerationCheckpointEntity(
+                        assistantMessageId = assistantMessageId,
+                        sessionId = sessionId,
+                        userMessageId = userMessageId,
+                        content = content,
+                        createdAt = createdAt,
+                        updatedAt = System.currentTimeMillis(),
+                    ),
+                )
+            }
+        }
+    }
+
+    /**
+     * 首个检查点提交时原子消费发送 outbox。
+     * 崩溃只能看到“二者都存在”或“检查点存在且 outbox 已移除”，不会在检查点写入后留下可重放 outbox。
+     */
+    suspend fun upsertGenerationCheckpointAndDeleteOutbox(
+        sessionId: String,
+        userMessageId: String,
+        assistantMessageId: String,
+        content: String,
+        createdAt: Long,
+        outboxId: String,
+    ) {
+        withDatabaseRecovery("upsertGenerationCheckpointAndDeleteOutbox") {
+            withContext(Dispatchers.IO) {
+                database.withTransaction {
+                    database.messageOutboxDao().deleteById(outboxId)
+                    database.generationCheckpointDao().upsert(
+                        GenerationCheckpointEntity(
+                            assistantMessageId = assistantMessageId,
+                            sessionId = sessionId,
+                            userMessageId = userMessageId,
+                            content = content,
+                            createdAt = createdAt,
+                            updatedAt = System.currentTimeMillis(),
+                        ),
+                    )
+                }
+            }
+        }
+    }
+
+    /** 是否已有生成检查点；启动恢复时用于阻止 checkpoint + outbox 双重投递。 */
+    suspend fun hasGenerationCheckpointForUserMessage(userMessageId: String): Boolean =
+        withContext(Dispatchers.IO) { database.generationCheckpointDao().countByUserMessageId(userMessageId) > 0 }
+
+    /** 生成正常结束后删除检查点。 */
+    suspend fun deleteGenerationCheckpoint(assistantMessageId: String) {
+        withContext(Dispatchers.IO) {
+            database.generationCheckpointDao().deleteByAssistantMessageId(assistantMessageId)
+        }
+    }
+
+    /**
+     * B-23: 按用户消息删除本轮全部检查点。
+     * 多轮工具循环每轮写一条检查点(不同 assistantMessageId),收尾只删最后一轮
+     * 会残留中间轮次 — 重启后 recoverInterruptedGenerations 会给已完成轮次追加
+     * [已中断]。按 userMessageId 批量清理覆盖全部轮次。
+     */
+    suspend fun deleteGenerationCheckpointsByUserMessageId(userMessageId: String) {
+        withContext(Dispatchers.IO) {
+            database.generationCheckpointDao().deleteByUserMessageId(userMessageId)
+        }
+    }
+
+    /** 截断/重新生成时删除该时间点之后的检查点,避免恢复出已废弃的回复。 */
+    suspend fun deleteGenerationCheckpointsBefore(sessionId: String, fromCreatedAt: Long) {
+        withContext(Dispatchers.IO) {
+            database.generationCheckpointDao().deleteBySessionAndCreatedAtFrom(sessionId, fromCreatedAt)
+        }
+    }
+
+    /**
+     * 审查修复 (2.0 C-14/C-20/B-01): 按"会话 + 精确 createdAt"删除本代生成的全部检查点。
+     * 同一代生成的所有轮次共享同一 createdAt(streamStartedAt),精确匹配只清理本代:
+     * 并发 regenerate 的检查点 createdAt 不同不会被误删;无 USER 消息时也能清全(不退化单条)。
+     */
+    suspend fun deleteGenerationCheckpoints(sessionId: String, createdAt: Long) {
+        withContext(Dispatchers.IO) {
+            database.generationCheckpointDao().deleteBySessionAndCreatedAt(sessionId, createdAt)
+        }
+    }
+
+    /** 读取全部未完成生成检查点。 */
+    suspend fun getPendingGenerationCheckpoints(): List<GenerationCheckpointEntity> =
+        withContext(Dispatchers.IO) { database.generationCheckpointDao().getAllPending() }
+
+    /**
+     * B5-01: 应用启动时恢复被强杀的中断生成。
+     *
+     * 每条残留检查点:
+     * - 消息已存在:补齐最新内容分片并追加 [已中断] 标记
+     * - 消息不存在且无更新助手消息:重建 assistant 消息
+     * - 消息不存在但有更新助手消息(已被重新生成):视为过期检查点并删除
+     */
+    suspend fun recoverInterruptedGenerations() {
+        withContext(Dispatchers.IO) {
+            val pending = runCatching { database.generationCheckpointDao().getAllPending() }
+                .getOrElse { e ->
+                    Logger.w(TAG, "读取生成检查点失败", e)
+                    return@withContext
+                }
+            for (cp in pending) {
+                try {
+                    val session = sessionDao.getById(cp.sessionId)
+                    if (session == null || session.deletedAt != null) {
+                        // 软删除会话禁止恢复写入；清理残留 checkpoint 但不动历史消息。
+                        database.generationCheckpointDao().deleteByAssistantMessageId(cp.assistantMessageId)
+                        continue
+                    }
+                    val existing = messageDao.getByMessageId(cp.assistantMessageId)
+                    // v1.0.80 (M-2): 消息已存在且内容完整(>= 检查点长度)时直接跳过,
+                    // 不再追加 [已中断] 标记。此前只要检查点 pending 就补标,
+                    // 已完成的消息在重启后会被误标 [已中断],造成"重进内容混乱"
+                    // (完整回复 + 多余中断标记)。
+                    if (existing != null && existing.content.length >= cp.content.length) {
+                        // 内容已覆盖检查点：正常完成但删除 checkpoint 失败时，
+                        // 也必须清掉残留，避免每次启动重复扫描同一条记录。
+                        database.generationCheckpointDao().deleteByAssistantMessageId(cp.assistantMessageId)
+                        continue
+                    }
+                    val marker = "[已中断]"
+                    val base = when {
+                        existing != null && existing.content.length >= cp.content.length -> existing.content
+                        else -> cp.content
+                    }
+                    val content = when {
+                        base.contains(marker) -> base
+                        base.isBlank() -> marker
+                        else -> base + "\n\n" + marker
+                    }
+                    val ui: UIMessage? = when {
+                        existing != null -> existing.toUIMessage().copy(content = content)
+                        database.generationCheckpointDao().countNewerAssistantMessages(cp.sessionId, cp.updatedAt) > 0 -> {
+                            database.generationCheckpointDao().deleteByAssistantMessageId(cp.assistantMessageId)
+                            null
+                        }
+                        else -> {
+                            val id = runCatching { Uuid.parse(cp.assistantMessageId) }.getOrElse {
+                                Logger.w(TAG, "generation checkpoint assistantMessageId 非 UUID: " + cp.assistantMessageId)
+                                Uuid.random()
+                            }
+                            UIMessage(
+                                id = id,
+                                role = MessageRole.ASSISTANT,
+                                content = content,
+                                createdAt = cp.createdAt,
+                            )
+                        }
+                    }
+                    if (ui != null) {
+                        upsertMessage(cp.sessionId, ui)
+                    }
+                } catch (e: Exception) {
+                    Logger.w(TAG, "恢复中断生成失败: " + cp.assistantMessageId, e)
+                }
+            }
+            if (pending.isNotEmpty()) {
+                Logger.i(TAG, "中断生成恢复完成: " + pending.size + " 条检查点")
+            }
+        }
+    }
+
+    /**
+     * 流式更新 assistant 消息(多次 upsert 同一 id)。每次先删后插保证 FTS 索引幂等。
+     *
+     * v1.97 (P1-2): 新增 [skipFts] 参数。流式周期性落盘(builder 还在增长)时传 true,
+     * 跳过 toNgram + deleteFts + insertFts 的 CPU/IO 开销(长文本 toNgram 可达数十毫秒)。
+     * FTS 是派生数据,流式结束后最终落盘或下次启动 ensureFtsIndexConsistent 会补齐。
+     * 非流式路径(最终落盘 / 中断落盘 / 工具消息 / 引用消息)用默认 false,保证 FTS 同步。
+     */
+    suspend fun upsertMessage(sessionId: String, message: UIMessage, skipFts: Boolean = false) {
+        withDatabaseRecovery("upsertMessage") {
+            // H-SESS1: 跨表(messages + FTS + sessions)用事务包裹,保证流式更新一致性
+            withContext(Dispatchers.IO) {
+                database.withTransaction {
+                    var entity = message.toEntity(sessionId)
+                    // v1.0.85 (T-1): 同 id 更新保留首次 createdAt — REPLACE 语义会覆盖整行,
+                    // 若流式/中断恢复/编辑的 UIMessage 用默认 createdAt(当前时间),
+                    // 会把消息时序刷到"现在",导致排序错乱(早消息跑到会话末尾)。
+                    // 查询旧行,存在且 createdAt 不同时保留旧值,维持原始时序。
+                    val existing = messageDao.getById(sessionId, entity.id)
+                    if (existing != null) {
+                        if (existing.createdAt != entity.createdAt) {
+                            entity = entity.copy(createdAt = existing.createdAt)
+                        }
+                        // v92: 同 id 更新保留首次 seq(REPLACE 不改变消息的稳定序号)
+                        if (entity.seq == 0L) {
+                            entity = entity.copy(seq = existing.seq)
+                        }
+                        // commitSeq 与 seq 一样属于消息身份的一部分；REPLACE 更新时不能清零，
+                        // 否则新链路消息会退回旧排序分支，导致历史消息位置漂移。
+                        if (entity.commitSeq == 0L) {
+                            entity = entity.copy(commitSeq = existing.commitSeq)
+                        }
+                        // v1.0.88 (R-2): 变体身份字段兜底 — 工具轮/中断恢复/周期性落盘构建的
+                        // UIMessage 常丢 variantGroupId 等字段,REPLACE 覆盖后变体身份丢失,
+                        // 重进会话树重建时消息挂错位置(重叠/错位)。新值缺失时用旧行兜底;
+                        // 新变体(variantGroupId 非空)不受影响。
+                        if (entity.variantGroupId == null && existing.variantGroupId != null) {
+                            entity = entity.copy(
+                                variantGroupId = existing.variantGroupId,
+                                variantIndex = existing.variantIndex,
+                                variantCount = existing.variantCount,
+                                parentGroupId = existing.parentGroupId,
+                            )
+                        }
+                    } else if (entity.seq == 0L) {
+                        // v92: 新消息分配会话内单调 seq = max+1(首次插入时固定,后续更新保留)
+                        entity = entity.copy(seq = messageDao.getMaxSeq(sessionId) + 1)
+                    }
+                    messageDao.upsert(entity)
+                    // Phase 10.3: 同步 FTS(删后插,避免重复索引项)
+                    // v1.97 (P1-2): skipFts=true 时跳过,避免流式周期性落盘反复重建 FTS
+                    if (!skipFts) {
+                        resultOf {
+                            syncFtsDelete(entity.id)
+                            syncFtsInsert(entity.id, entity.content)
+                        }.onError { _, t -> Logger.w(TAG, "FTS upsert sync failed: ${t?.message ?: ""}") }
+                    }
+                    if (message.role == MessageRole.ASSISTANT && message.content.isNotEmpty()) {
+                        updateSessionPreview(sessionId, message)
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * 编辑助手消息:直接更新指定消息的内容,并同步 FTS 索引。
+     */
+    suspend fun updateMessageContent(sessionId: String, messageId: Uuid, content: String) {
+        // H-SESS1: 跨表(messages + FTS + sessions)用事务包裹
+        withContext(Dispatchers.IO) {
+            database.withTransaction {
+                val message = messageDao.getById(sessionId, messageId.toString()) ?: return@withTransaction
+                val updated = message.copy(content = content, reasoning = null)
+                messageDao.upsert(updated)
+                // Phase 10.3: 同步 FTS 索引(删后插,避免重复索引项)
+                resultOf {
+                    syncFtsDelete(message.id)
+                    syncFtsInsert(message.id, content)
+                }.onError { _, t -> Logger.w(TAG, "FTS update failed: ${t?.message ?: ""}") }
+                // 更新会话预览为最新的消息内容
+                updateSessionPreview(sessionId, updated.toUIMessage())
+            }
+        }
+    }
+
+    /** 截断会话:删除 createdAt >= fromCreatedAt 的消息(编辑/重生成用)。同步删 FTS 索引。 */
+    suspend fun truncateFrom(sessionId: String, fromCreatedAt: Long) {
+        // H-SESS1: 跨表(FTS + messages)用事务包裹
+        withContext(Dispatchers.IO) {
+            database.withTransaction {
+                truncateFromInternal(sessionId, fromCreatedAt)
+            }
+        }
+    }
+
+    /** truncateFrom 的非事务版本,供已在事务内的调用方(如 [deleteLastMessage])复用。 */
+    private suspend fun truncateFromInternal(sessionId: String, fromCreatedAt: Long) {
+        // Phase 10.3: 先删 FTS(依赖 messages 子查询,必须在 messages 删除之前)
+        syncFtsDeleteBySessionAndCreatedAt(sessionId, fromCreatedAt)
+        messageDao.deleteFromCreatedAt(sessionId, fromCreatedAt)
+        database.generationCheckpointDao().deleteBySessionAndCreatedAtFrom(sessionId, fromCreatedAt)
+        // B-13: 截断后重算该会话最新消息预览与冗余计数(空则置空预览 + 计数 0),
+        // 与 deleteMessageRow 的 updatePreview/递增计数行为对齐,防止会话列表残留旧预览/计数。
+        val newLast = messageDao.getLastBySession(sessionId)
+        sessionDao.updatePreview(
+            id = sessionId,
+            preview = newLast?.let { previewText(it.content) } ?: "",
+            now = System.currentTimeMillis(),
+        )
+        sessionDao.setMessageCount(sessionId, messageDao.countBySession(sessionId))
+    }
+
+    /** 删除会话内最后一条 assistant 消息(重生成用)。同步删 FTS 索引。 */
+    suspend fun deleteLastMessage(sessionId: String) {
+        // H-SESS1/H-SESS2: 跨表(messages + FTS + sessions)读-改-写,用事务包裹保证一致;
+        // 预览更新改用原子 UPDATE(无读-改-写)。
+        withContext(Dispatchers.IO) {
+            database.withTransaction {
+                messageDao.getLastBySession(sessionId)?.let { last ->
+                    // 复用 truncateFromInternal(含 FTS 同步),避免漏删索引
+                    truncateFromInternal(sessionId, last.createdAt)
+                }
+                // 更新 preview 为新的最后一条(原子 UPDATE,无读-改-写)
+                val newLast = messageDao.getLastBySession(sessionId)
+                sessionDao.updatePreview(
+                    id = sessionId,
+                    preview = newLast?.let { previewText(it.content) } ?: "",
+                    now = System.currentTimeMillis(),
+                )
+            }
+        }
+    }
+
+    /** 取会话最后一条消息(一次性,非 Flow)。 */
+    suspend fun getLastMessage(sessionId: String): UIMessage? {
+        return messageDao.getLastBySession(sessionId)?.toUIMessage()
+    }
+
+    private suspend fun syncFtsDelete(messageId: String) {
+        if (!MessageFtsRuntime.useFts5) messageFtsDao.deleteFts(messageId)
+    }
+
+    private suspend fun syncFtsDeleteBySession(sessionId: String) {
+        if (!MessageFtsRuntime.useFts5) messageFtsDao.deleteFtsBySession(sessionId)
+    }
+
+    private fun deleteMessageImages(messageIds: List<String>) {
+        messageIds.forEach { messageImageStore.deleteByMessageId(it) }
+    }
+
+    private suspend fun syncFtsDeleteBySessionAndCreatedAt(sessionId: String, fromCreatedAt: Long) {
+        if (!MessageFtsRuntime.useFts5) messageFtsDao.deleteFtsBySessionAndCreatedAt(sessionId, fromCreatedAt)
+    }
+
+    private suspend fun syncFtsClear() {
+        if (!MessageFtsRuntime.useFts5) messageFtsDao.clearFts()
+    }
+
+    private suspend fun syncFtsInsert(messageId: String, content: String) {
+        if (!MessageFtsRuntime.useFts5) messageFtsDao.insertFts(messageId, MessageFtsManager.toNgram(content))
+    }
+
+    private suspend fun searchFtsByMode(matchQuery: String): List<MessageSearchJoin> =
+        if (MessageFtsRuntime.useFts5) messageFtsDao.searchFts5(matchQuery) else messageFtsDao.searchFts(matchQuery)
+
+    private suspend fun searchFtsByModeInSession(
+        matchQuery: String,
+        sessionId: String,
+        limit: Int,
+    ): List<MessageSearchJoin> =
+        if (MessageFtsRuntime.useFts5) {
+            messageFtsDao.searchFts5InSession(matchQuery, sessionId, limit)
+        } else {
+            messageFtsDao.searchFtsInSession(matchQuery, sessionId, limit)
+        }
+
+    /**
+     * 全文搜索消息(跨会话)。返回结果含会话标题 + 基于原文的内容片段。
+     *
+     * 路由(FTS 优先,LIKE 仅兜底,选择规则见 [shouldUseLikeFallback]):
+     * - FTS 可用时走 MATCH([MessageFtsManager] 按当前引擎转 FTS5 原文 / FTS4 ngram 查询词)
+     * - LIKE 覆盖 FTS 覆盖不到的边界(无可索引 token / 单字)与 FTS 查询异常
+     * - 两条路径都 JOIN messages + sessions 一次查出,不再逐条补查 session(B4-01 消除 N+1)
+     * - 片段统一由 [buildSnippet] 基于原文 content 构建,与匹配语义对齐
+     */
+    suspend fun searchMessages(query: String): List<SearchResult> = withContext(Dispatchers.IO) {
+        searchMessagesInternal(query)
+    }
+
+    /**
+     * Search original USER/ASSISTANT text within one session.
+     *
+     * This is intentionally separate from the cross-session search API: recall
+     * injected into a prompt must never borrow a similarly matching message
+     * from another conversation.
+     */
+    suspend fun searchMessagesInSession(
+        sessionId: String,
+        query: String,
+        limit: Int = 8,
+    ): List<SearchResult> = withContext(Dispatchers.IO) {
+        val trimmed = query.trim()
+        if (sessionId.isBlank() || trimmed.isBlank() || limit <= 0) return@withContext emptyList()
+        val boundedLimit = limit.coerceIn(1, 50)
+        val joins =
+            if (shouldUseLikeFallback(trimmed)) {
+                searchLikeAndJoinInSession(sessionId, trimmed, boundedLimit)
+            } else {
+                when (val result = resultOf {
+                    searchFtsByModeInSession(
+                        matchQuery = ftsMatchQuery(trimmed),
+                        sessionId = sessionId,
+                        limit = boundedLimit,
+                    )
+                }) {
+                    is io.zer0.common.Result.Success -> result.data
+                    is io.zer0.common.Result.Error -> {
+                        Logger.w(
+                            TAG,
+                            "${ErrorMessage.StorageError.IO_ERROR.toLogString()} " +
+                                "[scope=session_fts_search, fallback=LIKE, raw=${result.message}]",
+                        )
+                        searchLikeAndJoinInSession(sessionId, trimmed, boundedLimit)
+                    }
+                }
+            }
+        return@withContext joins.map { join ->
+            SearchResult(
+                messageId = join.messageId,
+                sessionId = join.sessionId,
+                sessionTitle = join.sessionTitle,
+                contentSnippet = buildSnippet(join.content, trimmed),
+                role = join.role,
+                createdAt = join.createdAt,
+                content = join.content,
+            )
+        }
+    }
+
+    /**
+     * 搜索核心实现:[searchMessages] 与 [searchMessageContentFlow] 共用的唯一入口,保证
+     * 两条搜索链路的命中集合、排序与片段语义一致(避免 FTS / LIKE 两份实现漂移)。
+     */
+    private suspend fun searchMessagesInternal(query: String): List<SearchResult> {
+        // 注意:流式 upsertMessage(skipFts=true)周期性落盘后 FTS 可能滞后,
+        // 最终落盘(skipFts=false)或下次启动 ensureFtsIndexConsistent 会补齐。
+        val trimmed = query.trim()
+        if (trimmed.isBlank()) return emptyList()
+
+        val joins: List<MessageSearchJoin> = if (shouldUseLikeFallback(trimmed)) {
+            searchLikeAndJoin(trimmed)
+        } else {
+            // H-SESS1: FTS 查询异常时回退 LIKE;用 resultOf 正确重抛 CancellationException
+            // i18n 示范改造点 5:原硬编码英文 "FTS search failed, fallback to LIKE: ..."
+            // 改为 ErrorMessage.StorageError.IO_ERROR + raw message 作为补充 debug 信息。
+            // FTS 失败已有 LIKE 兜底,不上抛 ErrorMessage,仅标准化日志 code 便于监控告警聚合。
+            when (val r = resultOf { searchFtsByMode(ftsMatchQuery(trimmed)) }) {
+                is io.zer0.common.Result.Success -> r.data
+                is io.zer0.common.Result.Error -> {
+                    Logger.w(
+                        TAG,
+                        "${ErrorMessage.StorageError.IO_ERROR.toLogString()} [scope=fts_search, fallback=LIKE, raw=${r.message}]",
+                    )
+                    searchLikeAndJoin(trimmed)
+                }
+            }
+        }
+
+        return joins.map { join ->
+            SearchResult(
+                messageId = join.messageId,
+                sessionId = join.sessionId,
+                sessionTitle = join.sessionTitle,
+                contentSnippet = buildSnippet(join.content, trimmed),
+                role = join.role,
+                createdAt = join.createdAt,
+                // 任务 2:携带原文供 UI 提取前后 2 句上下文 + 关键词高亮
+                content = join.content,
+            )
+        }
+    }
+
+    /** 按当前 FTS 引擎生成 MATCH 查询词(FTS5 原文 unicode61 / FTS4 ngram)。 */
+    private fun ftsMatchQuery(trimmed: String): String =
+        if (MessageFtsRuntime.useFts5) MessageFtsManager.toFts5MatchQuery(trimmed) else MessageFtsManager.toMatchQuery(trimmed)
+
+    /**
+     * 判断该 query 是否应跳过 FTS 直接走 LIKE 子串匹配。
+     *
+     * 两种 FTS 引擎都无法可靠覆盖、必须回退 LIKE 的边界:
+     *  - 无可索引 token:query 不含任何中英文/数字字符(如 "!!!"、"~~"),ngram 与 unicode61
+     *    都切不出 token,MATCH 必为空集;
+     *  - 单字 query:中文单字不是 FTS4 ngram 的独立 token(只有游程末字会保留),FTS5 unicode61
+     *    又把连续 CJK 并成一个 token,单字 MATCH 会漏召回;英文单字母在 FTS 里是整词匹配而非子串。
+     * 这两种情况用 LIKE 的"包含即命中"语义才与用户预期一致。
+     */
+    private fun shouldUseLikeFallback(trimmed: String): Boolean {
+        if (trimmed.length == 1) return true
+        return MessageFtsManager.toNgram(trimmed).isBlank()
+    }
+
+    /**
+     * LIKE 兜底路径:JOIN messages + sessions 批查(单条 SQL 取回会话标题)。
+     *
+     * B4-01:已消除原"逐条查 session 补标题"的 N+1;本路径仅在 [shouldUseLikeFallback]
+     * 命中或 FTS 查询异常时触发,且有 LIMIT 上界,正常搜索几乎不落此分支。
+     */
+    private suspend fun searchLikeAndJoin(query: String): List<MessageSearchJoin> =
+        messageDao.searchMessageContentLike(buildLikePattern(query), 50)
+
+    private suspend fun searchLikeAndJoinInSession(
+        sessionId: String,
+        query: String,
+        limit: Int,
+    ): List<MessageSearchJoin> =
+        messageDao.searchMessageContentLikeInSession(sessionId, buildLikePattern(query), limit)
+
+    /**
+     * v2.x: 消息内容搜索 Flow 版本(供 SearchViewModel 监听)。
+     *
+     * 直接复用 [searchMessagesInternal](与 [searchMessages] 同一条实现),因此两条搜索
+     * 入口的命中集合、排序与片段语义完全一致;片段统一由 [buildSnippet] 基于原文生成
+     * (FTS5 不再返回带 `[ ]` 标记的 SQL snippet,UI / 命令面板可直接展示)。
+     *
+     * 调用方:SearchViewModel 的 searchMessageContent() 一次性 collect 后存入 StateFlow。
+     *
+     * @param query 用户输入的搜索关键词(未转义)
+     * @return [SearchResult] 的 Flow(单次 emit,空查询返回空列表)
+     */
+    fun searchMessageContentFlow(query: String): Flow<List<SearchResult>> = flow {
+        emit(searchMessagesInternal(query))
+    }.flowOn(Dispatchers.IO)
+
+    /** M-SESS2: 构造 LIKE 模式串,转义通配符 \ % _ 后包成 %...%。 */
+    private fun buildLikePattern(query: String): String {
+        val escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        return "%$escaped%"
+    }
+
+    /**
+     * Phase 10.3 (C-23 强化): 检查 FTS 索引一致性,不一致则全量 rebuild。
+     *
+     * 触发场景:
+     * - v8→v9 迁移后(messages_fts 空表,需首次全量索引)
+     * - 外部修改 messages 表(备份导入后)
+     * - 索引损坏(FTS 查询异常后下次启动自愈)
+     *
+     * 判定分两层:
+     * 1. 行数比较:msgCount == ftsCount(messages 与 messages_fts 是否同一基量)。
+     * 2. 内容抽查(C-23):行数相等不代表内容一致 —— 编辑/重生成导致消息内容更新而
+     *    FTS 同步失败时,行数可能不变但索引里仍是旧内容。此时抽样最近
+     *    [FTS_SAMPLE_COUNT] 条消息,用其当前文本构造 MATCH 探测,FTS 能命中该
+     *    messageId 视为一致,否则判为不一致并触发 rebuild。
+     *
+     * messages_fts 两个实现(FTS4 仅 message_id+content_ngram、FTS5 external content
+     * 仅 rowid+content)都不存 updated_at 时间列,messages 表也无 updatedAt,故无法
+     * 直接比 MAX(updatedAt);选抽样内容校验(改动小、启动时 N 次有界 MATCH,不引入
+     * 全量扫描性能问题)。
+     *
+     * 由 [ChatViewModel] init 在 app 启动时异步调用,IO 线程执行。
+     * 万级消息 rebuild 约数百毫秒,不阻塞 UI。
+     */
+    suspend fun ensureFtsIndexConsistent() = withContext(Dispatchers.IO) {
+        val msgCount = resultOf { messageDao.countMessages() }.getOrNull() ?: -1
+        val ftsCount = resultOf { messageFtsDao.countFts() }.getOrNull() ?: -1
+        if (msgCount < 0 || ftsCount < 0) {
+            Logger.w(TAG, "FTS count check failed: msg=$msgCount fts=$ftsCount")
+            return@withContext
+        }
+        if (msgCount != ftsCount) {
+            Logger.i(TAG, "FTS index inconsistent (row count): msg=$msgCount fts=$ftsCount, rebuilding...")
+            rebuildFtsIndex()
+            return@withContext
+        }
+        // C-23: 行数相等后追加内容抽查,捕获"内容更新而 FTS 未同步且行数不变"的漂移。
+        val staleSampleIds = ftsSampleIdsStale()
+        if (staleSampleIds.isEmpty()) {
+            Logger.d(TAG, "FTS index consistent: $ftsCount rows, content spot-check OK")
+        } else {
+            Logger.i(
+                TAG,
+                "FTS content spot-check failed for ${staleSampleIds.size} sample(s) " +
+                    "(e.g. ${staleSampleIds.first()}), rebuilding...",
+            )
+            rebuildFtsIndex()
+        }
+    }
+
+    /**
+     * C-23: 返回内容与 FTS 索引不一致的样本 messageId 列表(空白内容样本不参与判定)。
+     */
+    private suspend fun ftsSampleIdsStale(): List<String> {
+        val samples = resultOf { messageDao.getFtsSample(FTS_SAMPLE_COUNT) }
+            .onError { msg, t ->
+                // 语义上近似"数据库读取瞬时失败",不应据此误判不一致重建全量索引;
+                // 记日志,返回空(本次抽查跳过)。
+                Logger.w(TAG, "FTS sample fetch failed, skipping content check: $msg", t)
+            }
+            .getOrNull() ?: return emptyList()
+        val stale = mutableListOf<String>()
+        for (row in samples) {
+            if (row.content.isNotBlank() && !ftsMatchesMessage(row)) {
+                stale.add(row.id)
+            }
+        }
+        return stale
+    }
+
+    /**
+     * C-23: 判断单个样本在当前 FTS 模式下能否以其文本命中自身。
+     *
+     * 用样本最新内容的 token 子集构造 MATCH 探测,FTS 返回结果里含该 messageId 说明
+     * 索引内容与该消息一致;否则视为索引仍为旧内容(漂移)。
+     */
+    private suspend fun ftsMatchesMessage(sample: FtsRebuildRow): Boolean {
+        val probe = buildFtsContentProbe(sample.content)
+        if (probe.isBlank()) return true
+        return when (val r = resultOf { searchFtsByMode(probe) }) {
+            is io.zer0.common.Result.Success -> r.data.any { it.messageId == sample.id }
+            is io.zer0.common.Result.Error -> {
+                // FTS 查询异常不能证明该样本漂移(且查询错误路径本身已有 LIKE 兜底);
+                // 记日志跳过,不据此误重建,避免一次瞬时错误打爆全量索引。
+                Logger.w(TAG, "FTS probe search failed for ${sample.id}: ${r.message}")
+                true
+            }
+        }
+    }
+
+    /**
+     * C-23: 由样本内容构造 FTS MATCH 探测串(取 [FTS_PROBE_TOKEN_LIMIT] 个不重复 token)。
+     *
+     * 用整段内容的全部 token 做 AND 会对"仅一处 token 变化"的消息产生高灵敏度但高
+     * 假阴性;取少量代表 token 即可稳定命中已同步的索引,同时对旧内容足够不命中。
+     */
+    private fun buildFtsContentProbe(content: String): String {
+        if (MessageFtsRuntime.useFts5) {
+            // FTS5 unicode61 按空白切词原文索引:直接对词做短语包装。
+            val terms = content.trim().split(Regex("\\s+")).filter { it.isNotBlank() }.distinct()
+            return terms.take(FTS_PROBE_TOKEN_LIMIT)
+                .joinToString(" ") { "\"${it.replace("\"", "\"\"")}\"" }
+        }
+        // FTS4 ngram 索引:对当前内容做 2-gram,取前几个不重复 token(token 已含引号转义)。
+        val tokens = MessageFtsManager.toNgram(content)
+            .split(' ')
+            .filter { it.isNotBlank() }
+            .distinct()
+        return tokens.take(FTS_PROBE_TOKEN_LIMIT)
+            .joinToString(" ") { "\"${it.replace("\"", "")}\"" }
+    }
+
+    /**
+     * Phase 10.3: 全量重建 FTS 索引。清空后遍历 messages 重新插入(toNgram 转换)。
+     *
+     * v1.114: 将 clearFts + 逐条 insert 包裹在 `database.withTransaction` 中,避免重建期间
+     * FTS 查询返回不一致结果(清空后、插入完成前查询会返回空或不完整数据)。每条 insert 仍用
+     * resultOf 容错,单条失败不影响其他条目,事务正常提交。
+     * 调用方应在 IO 线程。
+     */
+    suspend fun rebuildFtsIndex() = withContext(Dispatchers.IO) {
+        // v1.114: 事务包裹,保证 clearFts + insert 原子可见性,避免重建期间查询不一致
+        database.withTransaction {
+            if (MessageFtsRuntime.useFts5) {
+                messageFtsDao.rebuildFts5()
+                Logger.i(TAG, "FTS5 rebuild done")
+            } else {
+                messageFtsDao.clearFts()
+                val rows = messageDao.getAllForFtsRebuild()
+                var ok = 0
+                rows.forEach { row ->
+                    resultOf {
+                        messageFtsDao.insertFts(row.id, MessageFtsManager.toNgram(row.content))
+                        ok++
+                    }.onError { _, t ->
+                        Logger.w(TAG, "FTS rebuild insert failed for ${row.id}: ${t?.message ?: ""}")
+                    }
+                }
+                Logger.i(TAG, "FTS rebuild done: $ok/${rows.size} messages indexed")
+            }
+        }
+    }
+
+    /**
+     * 构建搜索片段:命中位置前后 [SNIPPET_RADIUS] 字,两端按需补 "…"。
+     *
+     * 与 FTS 匹配语义对齐:FTS4 ngram 命中不保证原文存在连续的 query 子串(只要求 query
+     * 的各个 2-gram token 命中),此时用首个命中的 query token 定位,保证片段落在真实命中
+     * 处,而不是无匹配时直接退化成前缀。LIKE 路径必然能精确命中,行为不变。
+     */
+    private fun buildSnippet(content: String, query: String): String {
+        val (matchStart, matchLength) = locateSnippetMatch(content, query)
+        if (matchStart < 0) return content.take(SNIPPET_FALLBACK_LENGTH)
+        val start = (matchStart - SNIPPET_RADIUS).coerceAtLeast(0)
+        val end = (matchStart + matchLength + SNIPPET_RADIUS).coerceAtMost(content.length)
+        val prefix = if (start > 0) "…" else ""
+        val suffix = if (end < content.length) "…" else ""
+        return prefix + content.substring(start, end) + suffix
+    }
+
+    /**
+     * 定位片段锚点,返回 (起始下标, 匹配长度);找不到返回 (-1, 0)。
+     *
+     * 1. 优先精确子串(大小写不敏感):LIKE 路径必然命中,输出与旧实现一致;
+     * 2. 否则用 query 的 ngram token 里在原文中出现且位置最靠前的一个作为锚点,
+     *    对齐 FTS 的 token 匹配语义(取最早出现的 token 保证片段尽量靠前)。
+     */
+    private fun locateSnippetMatch(content: String, query: String): Pair<Int, Int> {
+        val exact = content.indexOf(query, ignoreCase = true)
+        if (exact >= 0) return exact to query.length
+        if (query.isBlank()) return -1 to 0
+        var bestStart = -1
+        var bestLength = 0
+        val tokens = MessageFtsManager.toNgram(query).split(' ').filter { it.isNotBlank() }
+        for (token in tokens) {
+            val idx = content.indexOf(token, ignoreCase = true)
+            if (idx >= 0 && (bestStart < 0 || idx < bestStart)) {
+                bestStart = idx
+                bestLength = token.length
+            }
+        }
+        return bestStart to bestLength
+    }
+
+    /**
+     * 更新会话预览 + updatedAt。
+     *
+     * 不再用首条消息前缀自动命名标题,标题保持默认值"新会话",
+     * 改由 UI 退出对话时调用 [io.zer0.muse.ui.ChatViewModel.autoTitleOnExit] 触发 AI 摘要命名。
+     */
+    private suspend fun updateSessionPreview(sessionId: String, message: UIMessage) {
+        val preview = previewText(message.content)
+        sessionDao.updatePreviewOnly(
+            id = sessionId,
+            preview = preview,
+            now = System.currentTimeMillis(),
+        )
+    }
+
+    // ── 转换工具 ──────────────────────────────────────────────────────────
+
+    /** 新 projection 读路径：旧消息无 parts 时从 legacy 字段派生，保持全部旧字段。 */
+    private suspend fun projectMessagesForRead(entities: List<MessageEntity>): List<UIMessage> {
+        if (!ConversationRebuildFlagStore.current.useMessageProjection || entities.isEmpty()) {
+            return orderConversationMessages(entities.map { it.toUIMessage() })
+        }
+        val ids = entities.map { it.id }
+        val parts = database.messagePartDao().getByMessages(ids)
+        val projection = ConversationProjector.project(
+            messages = entities,
+            parts = parts,
+            useCommitSeq = ConversationRebuildFlagStore.current.useCommitSeq,
+        )
+        val byId = entities.associateBy { it.id }
+        return orderConversationMessages(
+            projection.messages.mapNotNull { projected ->
+                byId[projected.id]?.toUIMessage()?.copy(
+                    content = projected.content,
+                    reasoning = projected.reasoning,
+                )
+            },
+        )
+    }
+
+    /** 会话列表/系统提示只显示正文，隐藏 mood、mod、think 等内部块。 */
+    private fun previewText(content: String): String =
+        InternalMarkupSanitizer.stripForDisplay(content).take(MESSAGE_PREVIEW_LENGTH).ifBlank { "…" }
+
+    /** MessageEntity → UIMessage。 */
+    private fun MessageEntity.toUIMessage(): UIMessage {
+        // B6-02: 历史消息清洗 — 兼容旧数据里尚未剥离的 <moodfx> 标签
+        val parsedMoodSkin = MoodSkinParser.extract(content, moodSkin)
+        return UIMessage(
+            // Phase 8.5 修复: 非 UUID 格式的 id 不崩溃(数据导入/旧版本兼容),回退到随机 UUID
+            id = runCatching { Uuid.parse(id) }.getOrElse {
+                Logger.w(TAG, "invalid message id (not UUID): $id")
+                Uuid.random()
+            },
+            role = runCatching { MessageRole.valueOf(role) }.getOrDefault(MessageRole.USER),
+            content = parsedMoodSkin.second,
+            reasoning = reasoning,
+            thinkingSignature = thinkingSignature,
+            thinkingEncryptedContent = thinkingEncryptedContent,
+            modelId = modelId,
+            createdAt = createdAt,
+            seq = seq,
+            commitSeq = commitSeq,
+            imageUrls = parseImageUrls(imageUrlsJson),
+            favorite = favorite,
+            favoriteTag = favoriteTag,
+            citationUrls = parseImageUrls(citationUrlsJson),
+            ragCitations = parseRagCitations(ragCitationsJson),
+            imageBase64List = messageImageStore.toBase64List(parseImageUrls(imageBase64Json)),
+            // 审计修复 (S-02): 视频生成结果 URL 往返(此前只存内存,重启丢失)
+            videoFileUri = videoFileUri,
+            artifactIds = parseImageUrls(artifactIdsJson),
+            moodSkin = parsedMoodSkin.first ?: moodSkin,
+            mood = mood,
+            reflection = reflection,
+            reaction = reaction,
+            variantGroupId = variantGroupId,
+            variantIndex = variantIndex,
+            variantCount = variantCount,
+            parentGroupId = parentGroupId,
+            // v1.0.72: 工具调用卡片信息恢复(重启后 ToolCallCard 正常显示)
+            toolCallInfo = toolCallInfoJson?.let { json ->
+                runCatching {
+                    io.zer0.common.AppJson.decodeFromString(io.zer0.ai.core.ToolCallInfo.serializer(), json)
+                }.getOrNull()
+            },
+            // A5: 生成元数据往返(旧数据为 null,UI 回退本地估算)
+            durationMs = durationMs,
+            promptTokens = promptTokens,
+            completionTokens = completionTokens,
+            reasoningTokens = reasoningTokens,
+            cachedTokens = cachedTokens,
+            // H11: 译文消息的源消息 id(原文对照折叠)
+            translationSourceId = translationSourceId,
+            // v2.4.6: 译文映射往返(语言名 → 译文)
+            translations = parseTranslations(translationsJson),
+        )
+    }
+
+    /** UIMessage → MessageEntity。 */
+    private fun UIMessage.toEntity(sessionId: String): MessageEntity = MessageEntity(
+        id = id.toString(),
+        sessionId = sessionId,
+        role = role.name,
+        content = content,
+        reasoning = reasoning,
+        thinkingSignature = thinkingSignature,
+        thinkingEncryptedContent = thinkingEncryptedContent,
+        modelId = modelId,
+        createdAt = createdAt,
+        seq = 0L,
+        commitSeq = 0L,
+        imageUrlsJson = encodeImageUrls(imageUrls),
+        favorite = favorite,
+        // v1.104 U7: 收藏分组标签往返(默认 NULL,未分组)
+        favoriteTag = favoriteTag,
+        citationUrlsJson = encodeImageUrls(citationUrls),
+        // v1.133: RAG 引用列表持久化往返
+        ragCitationsJson = encodeRagCitations(ragCitations),
+        // Phase 8.6: 多模态图片 base64 列表
+        // v1.134 P1-2: MessageImageStore 把大图片 base64 落盘到 filesDir/muse_images/,
+        // DB 只存 "file://xxx" 路径,避免 messages 表行体积膨胀;
+        // 短数据(< 1024 字符)仍存 base64,旧数据读取时无 "file://" 前缀直接返回
+        imageBase64Json = encodeImageUrls(messageImageStore.toPersistable(id.toString(), imageBase64List)),
+        // 审计修复 (S-02): 视频生成结果 URL 往返
+        videoFileUri = videoFileUri,
+        // v1.43: Artifact id 列表
+        artifactIdsJson = encodeImageUrls(artifactIds),
+        // v1.103: MOOD / reflection 持久化(之前 toEntity 丢弃导致切页后消失)
+        moodSkin = moodSkin,
+        mood = mood,
+        reflection = reflection,
+        // 功能1: 消息表情回应往返
+        reaction = reaction,
+        // v1.0.30: 变体信息持久化
+        variantGroupId = variantGroupId,
+        variantIndex = variantIndex,
+        variantCount = variantCount,
+        parentGroupId = parentGroupId,
+        parentMessageId = parentMessageId,
+        // v1.0.72: 工具调用卡片信息持久化(重启后 ToolCallCard 正常显示)
+        toolCallInfoJson = toolCallInfo?.let {
+            runCatching { io.zer0.common.AppJson.encodeToString(io.zer0.ai.core.ToolCallInfo.serializer(), it) }.getOrNull()
+        },
+        // A5: 生成元数据持久化(provider 实测优先,缺失为 null)
+        durationMs = durationMs,
+        promptTokens = promptTokens,
+        completionTokens = completionTokens,
+        reasoningTokens = reasoningTokens,
+        cachedTokens = cachedTokens,
+        // H11: 译文消息的源消息 id(原文对照折叠)
+        translationSourceId = translationSourceId,
+        // v2.4.6: 译文映射持久化
+        translationsJson = encodeTranslations(translations),
+    )
+
+    /** v1.0.30: 按 id 获取消息（变体查询用）。 */
+    suspend fun getMessageById(messageId: String): MessageEntity? = withContext(Dispatchers.IO) { messageDao.getByMessageId(messageId) }
+
+    /**
+     * 审查修复 (2.0 B-02): 按 id 读取消息并转为 UI 消息 — 中断恢复时若内存 builder 无内容
+     * (切会话后停止),回退读取 DB 中本轮消息(流式中周期性落盘已写入部分内容)。
+     */
+    suspend fun getMessageAsUiMessage(messageId: String): UIMessage? =
+        withContext(Dispatchers.IO) { messageDao.getByMessageId(messageId)?.toUIMessage() }
+
+    /**
+     * 审查修复 (2.0 B-04): 把媒体 URL 列表转为可持久化形式 — 长 base64 data URI 经
+     * [MessageImageStore] 落盘为 file:// 路径,DB 只存短路径,避免 MB 级 base64 塞进
+     * messages 行(此前 execGenerateImage/QrCode 的 data URI 直写 imageUrlsJson)。
+     * http(s) 短 URL 原样返回。文件名带内容哈希后缀,同消息并行写入互不覆盖。
+     */
+    suspend fun toPersistableImageUrls(messageId: String, urls: List<String>): List<String> =
+        withContext(Dispatchers.IO) { messageImageStore.toPersistable(messageId, urls) }
+
+    /**
+     * 审查修复 (2.0 A-04): 为已落库的消息附加媒体字段 — 切会话后后台生成仍在跑,
+     * exec* 的媒体无法写入当前 UI 的 _messages(消息属于原会话),本方法直接对 DB
+     * 中该消息(工具轮占位,已由 persistAssistantToolMsg 落库)合并内容/图片/视频,
+     * 用户切回原会话时从 DB 恢复即可看到。内容幂等合并(已含则不重复拼接)。
+     */
+    suspend fun attachMediaToMessage(
+        sessionId: String?,
+        messageId: Uuid,
+        content: String,
+        imageUrls: List<String>? = null,
+        videoFileUri: String? = null,
+    ) {
+        if (sessionId.isNullOrBlank()) return
+        withContext(Dispatchers.IO) {
+            database.withTransaction {
+                val existing = messageDao.getByMessageId(messageId.toString()) ?: return@withTransaction
+                val mergedContent = when {
+                    existing.content.isBlank() -> content
+                    existing.content.contains(content) -> existing.content
+                    else -> existing.content + "\n\n" + content
+                }
+                val updated = existing.copy(
+                    content = mergedContent,
+                    imageUrlsJson = if (imageUrls != null) {
+                        encodeImageUrls((parseImageUrls(existing.imageUrlsJson) + imageUrls).distinct())
+                    } else {
+                        existing.imageUrlsJson
+                    },
+                    videoFileUri = videoFileUri ?: existing.videoFileUri,
+                )
+                messageDao.upsert(updated)
+                resultOf {
+                    syncFtsDelete(updated.id)
+                    syncFtsInsert(updated.id, updated.content)
+                }.onError { _, t -> Logger.w(TAG, "attachMediaToMessage FTS sync failed: ${t?.message ?: ""}") }
+            }
+        }
+    }
+
+    /** v1.0.30: 获取同变体组所有消息。 */
+    suspend fun getVariants(groupId: String): List<MessageEntity> = withContext(Dispatchers.IO) { messageDao.getVariants(groupId) }
+
+    /** v1.0.30: 更新变体组计数。 */
+    suspend fun updateVariantCount(groupId: String, count: Int) {
+        withContext(Dispatchers.IO) { messageDao.updateVariantCount(groupId, count) }
+    }
+
+    /** v1.0.30: 直接 upsert MessageEntity（变体字段更新用）。 */
+    suspend fun upsertMessageEntity(entity: MessageEntity) {
+        withContext(Dispatchers.IO) { messageDao.upsert(entity) }
+    }
+
+    private fun encodeImageUrls(urls: List<String>): String = // v1.100: 空列表短路,避免周期性落盘(每 300 字符)时对 4 个空字段
+        // 各做一次 JSON 序列化(虽然开销小,但高频累积)
+        if (urls.isEmpty()) "[]" else runCatching { json.encodeToString(urlListSerializer, urls) }.getOrDefault("[]")
+
+    private fun parseImageUrls(s: String): List<String> =
+        runCatching { json.decodeFromString(urlListSerializer, s) }.getOrDefault(emptyList())
+
+    /** v1.133: 序列化 RAG 引用列表(空列表短路,避免高频落盘开销)。 */
+    private fun encodeRagCitations(citations: List<RagCitation>): String =
+        if (citations.isEmpty()) "[]" else runCatching { json.encodeToString(ragCitationListSerializer, citations) }.getOrDefault("[]")
+
+    private fun parseRagCitations(s: String): List<RagCitation> =
+        runCatching { json.decodeFromString(ragCitationListSerializer, s) }.getOrDefault(emptyList())
+
+    /** v2.4.6: 译文映射序列化(语言名 → 译文)。空映射存 "{}"。 */
+    private val translationMapSerializer: kotlinx.serialization.KSerializer<Map<String, String>> =
+        kotlinx.serialization.builtins.MapSerializer(
+            kotlin.String.serializer(),
+            kotlin.String.serializer(),
+        )
+    private fun encodeTranslations(translations: Map<String, String>): String {
+        if (translations.isEmpty()) return "{}"
+        return runCatching { json.encodeToString(translationMapSerializer, translations) }.getOrDefault("{}")
+    }
+
+    private fun parseTranslations(s: String): Map<String, String> =
+        runCatching { json.decodeFromString(translationMapSerializer, s) }.getOrDefault(emptyMap())
+}

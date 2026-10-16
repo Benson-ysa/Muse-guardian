@@ -1,0 +1,232 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- ===== ToolsScreen.kt ===== -->
+    <!-- Title and intro -->
+    <string name="tools_screen_title">AI Tools</string>
+    <string name="tools_intro_what">Tools are capabilities the AI can call, such as reading notifications, calculating, executing code, etc.</string>
+    <string name="tool_exec_empty_result">Tool %1$s completed, but returned no displayable content.</string>
+    <string name="tools_intro_manage">In Assistant detail page → Extensions → Tools, you can enable/disable tools per assistant. High-risk tools (e.g. code execution) require user confirmation before invocation.</string>
+
+    <!-- Stats -->
+    <string name="tools_stats_count">%1$d tools · %2$d high-risk</string>
+
+    <!-- Built-in plugins -->
+    <string name="tools_plugins_section">Built-in plugins</string>
+    <string name="tools_plugins_desc">Plugins are coarser-grained capability sets that declare required permissions and activation timing. Below is the list of app-preset built-in plugins, for understanding the boundary of AI capabilities.</string>
+
+    <!-- Risk level badges -->
+    <string name="tools_risk_safe">Safe</string>
+    <string name="tools_risk_normal">Normal</string>
+    <string name="tools_risk_high">High</string>
+
+    <!-- Tool detail dialog -->
+    <string name="tools_detail_category_label">Category: %1$s</string>
+    <string name="tools_detail_params">Parameters</string>
+    <string name="tools_detail_sandbox_title">Sandbox security limits</string>
+    <string name="tools_detail_sandbox_content">• Based on WebView V8 engine, isolated from system pages\n• fetch / XHR / WebSocket disabled, no network access\n• blockNetworkLoads intercepts all network requests\n• Default timeout 10 seconds to avoid infinite loops\n• User confirmation required before invocation (high-risk tool permission)</string>
+
+    <!-- Parameter row -->
+    <string name="tools_param_required">Required</string>
+
+    <!-- Tool categories -->
+    <string name="tools_category_built_in">Built-in tools</string>
+    <string name="tools_category_local">Local tools</string>
+    <string name="tools_category_mcp">MCP tools</string>
+
+    <!-- Plugin capability captions -->
+    <string name="tools_permissions_label">Permissions: </string>
+    <string name="tools_activation_label">Activation: </string>
+
+    <!-- ===== v1.0.20: ToolsSettingsPage.kt (Tool Approval Management) ===== -->
+    <!-- Title and search -->
+    <string name="tools_settings_title">Tool Approval</string>
+    <string name="tools_settings_search_hint">Search tool name or description</string>
+
+    <!-- Stats (N tools · always-allow X · ask Y · always-deny Z) -->
+    <string name="tools_settings_stats">%1$d tools · always-allow %2$d · ask %3$d · always-deny %4$d</string>
+
+    <!-- Risk level group titles -->
+    <string name="tools_settings_section_safe">Safe Tools (read-only / query)</string>
+    <string name="tools_settings_section_normal">Normal Tools (local side effects)</string>
+    <string name="tools_settings_section_high">High-Risk Tools (irreversible / sensitive)</string>
+
+    <!-- Empty state -->
+    <string name="tools_settings_empty">No matching tools found</string>
+
+    <!-- Footer policy explanation -->
+    <string name="tools_settings_footer_section">Policy Explanation</string>
+    <string name="tools_settings_policy_always_allow">Always Allow</string>
+    <string name="tools_settings_policy_always_allow_desc">Tool calls are auto-approved; no approval card is shown</string>
+    <string name="tools_settings_policy_ask">Ask Every Time</string>
+    <string name="tools_settings_policy_ask_desc">An approval card is shown before invocation; you decide whether to approve or deny</string>
+    <string name="tools_settings_policy_always_deny">Always Deny</string>
+    <string name="tools_settings_policy_always_deny_desc">The tool is disabled; the AI cannot invoke it</string>
+
+    <!-- Short labels for the per-tool segmented control -->
+    <string name="tools_settings_policy_always_allow_short">Allow</string>
+    <string name="tools_settings_policy_ask_short">Ask</string>
+    <string name="tools_settings_policy_always_deny_short">Deny</string>
+    <string name="tools_empty_title">No registered tools</string>
+    <string name="tools_empty_subtitle">Check your plugins or MCP configuration, then reopen this page.</string>
+
+    <!-- I18N-01 batch1: ToolCallVisuals 摘要/标签 -->
+    <string name="tool_summary_add_calendar_event">Added a calendar event</string>
+    <string name="tool_summary_add_contact">Added a contact</string>
+    <string name="tool_summary_calculator">Calculated</string>
+    <string name="tool_summary_calendar_today">Checked the calendar</string>
+    <string name="tool_summary_cancel_reminder">Cancelled a reminder</string>
+    <string name="tool_summary_clipboard_read">Read clipboard</string>
+    <string name="tool_summary_clipboard_write">Wrote to clipboard</string>
+    <string name="tool_summary_cover_generation">Generated a cover</string>
+    <string name="tool_summary_current_status">Checked status</string>
+    <string name="tool_summary_delegate_agent">Delegated to a sub-agent</string>
+    <string name="tool_summary_dns_lookup">DNS lookup</string>
+    <string name="tool_summary_download">Downloaded a file</string>
+    <string name="tool_summary_execute_code">Ran code</string>
+    <string name="tool_summary_execute_javascript">Ran a script</string>
+    <string name="tool_summary_execute_shell">Ran a command</string>
+    <string name="tool_summary_generate_image">Generated an image</string>
+    <string name="tool_summary_generate_password">Generated a password</string>
+    <string name="tool_summary_generate_video">Generated a video</string>
+    <string name="tool_summary_get_battery_info">Checked battery</string>
+    <string name="tool_summary_get_contacts_list">Read contacts</string>
+    <string name="tool_summary_get_cpu_info">Checked CPU</string>
+    <string name="tool_summary_get_current_time">Checked the time</string>
+    <string name="tool_summary_get_device_info">Read device info</string>
+    <string name="tool_summary_get_location">Got location</string>
+    <string name="tool_summary_get_memory_info">Checked memory</string>
+    <string name="tool_summary_get_network_info">Checked network</string>
+    <string name="tool_summary_get_public_ip">Checked public IP</string>
+    <string name="tool_summary_get_recent_notifications">Read notifications</string>
+    <string name="tool_summary_get_storage_info">Checked storage</string>
+    <string name="tool_summary_get_weather">Checked the weather</string>
+    <string name="tool_summary_hash_text">Hashed text</string>
+    <string name="tool_summary_json_pretty">Formatted JSON</string>
+    <string name="tool_summary_list_files">Listed files</string>
+    <string name="tool_summary_list_installed_apps">Listed apps</string>
+    <string name="tool_summary_list_reminders">Listed reminders</string>
+    <string name="tool_summary_make_phone_call">Made a phone call</string>
+    <string name="tool_summary_notify">Sent a notification</string>
+    <string name="tool_summary_open_app">Opened an app</string>
+    <string name="tool_summary_open_maps">Opened maps</string>
+    <string name="tool_summary_open_url">Opened a webpage</string>
+    <string name="tool_summary_pin_memory">Pinned a memory</string>
+    <string name="tool_summary_ping_host">Pinged a host</string>
+    <string name="tool_summary_plugin_market_install">Installed a plugin</string>
+    <string name="tool_summary_plugin_market_search">Searched the plugin market</string>
+    <string name="tool_summary_plugin_market_uninstall">Uninstalled a plugin</string>
+    <string name="tool_summary_plugin_market_set_enabled">Toggled a plugin</string>
+    <string name="tool_summary_find_tools">Searched the tool library</string>
+    <string name="tool_summary_device_shell">Ran a device command</string>
+    <string name="tool_summary_terminal_exec">Ran a terminal command</string>
+    <string name="tool_summary_termux_exec">Ran a Termux command</string>
+    <string name="tool_summary_proactive_message_wish">Saved a proactive message</string>
+    <string name="tool_summary_quick_note_add">Created a quick note</string>
+    <string name="tool_summary_quick_note_delete">Deleted a quick note</string>
+    <string name="tool_summary_quick_note_get">Read a quick note</string>
+    <string name="tool_summary_quick_note_list">Listed quick notes</string>
+    <string name="tool_summary_quick_note_pin">Pinned a quick note</string>
+    <string name="tool_summary_quick_note_update">Updated a quick note</string>
+    <string name="tool_summary_read_file">Read a file</string>
+    <string name="tool_summary_recall_experience">Recalled an experience</string>
+    <string name="tool_summary_record_experience">Recorded an experience</string>
+    <string name="tool_summary_resource_add">Added a resource</string>
+    <string name="tool_summary_resource_delete">Deleted a resource</string>
+    <string name="tool_summary_resource_get">Read a resource</string>
+    <string name="tool_summary_resource_list">Listed resources</string>
+    <string name="tool_summary_resource_search">Searched resources</string>
+    <string name="tool_summary_run_command">Ran a command</string>
+    <string name="tool_summary_schedule_reminder">Set a reminder</string>
+    <string name="tool_summary_search_memory">Searched memory</string>
+    <string name="tool_summary_send_email">Sent an email</string>
+    <string name="tool_summary_send_sms">Sent an SMS</string>
+    <string name="tool_summary_set_alarm">Set an alarm</string>
+    <string name="tool_summary_set_timer">Started a timer</string>
+    <string name="tool_summary_share_text">Shared text</string>
+    <string name="tool_summary_show_card">Showed a card</string>
+    <string name="tool_summary_speak_text">Read text aloud</string>
+    <string name="tool_summary_subagent_close">Closed a subtask</string>
+    <string name="tool_summary_subagent_run">Ran a subtask</string>
+    <string name="tool_summary_subagent_task">Started a subtask</string>
+    <string name="tool_summary_take_photo">Took a photo</string>
+    <string name="tool_summary_todo_write">Updated a to-do</string>
+    <string name="tool_summary_translate">Translated</string>
+    <string name="tool_summary_unpin_memory">Unpinned a memory</string>
+    <string name="tool_summary_web_search">Searched the web</string>
+    <string name="tool_summary_workspace_write">Wrote to workspace</string>
+    <string name="tool_summary_write_file">Wrote a file</string>
+    <string name="tool_summary_prefix_browser">Operated the browser</string>
+    <string name="tool_summary_prefix_channel">Managed a channel</string>
+    <string name="tool_summary_prefix_clipboard">Operated the clipboard</string>
+    <string name="tool_summary_prefix_mcp">Called an MCP tool</string>
+    <string name="tool_summary_prefix_quick_note">Managed a quick note</string>
+    <string name="tool_summary_prefix_resource">Managed a resource</string>
+    <string name="tool_summary_prefix_scheduled_task">Managed a scheduled task</string>
+    <string name="tool_summary_prefix_subagent">Managed a subtask</string>
+    <string name="tool_summary_prefix_workspace">Operated the workspace</string>
+    <string name="tool_terminal_interrupted">Interrupted</string>
+    <string name="tool_summary_default_success">Called a tool</string>
+    <string name="tool_terminal_timeout">Stopped due to timeout</string>
+    <string name="tool_summary_default_fail">Tool call failed</string>
+    <string name="tool_summary_failed">%1$s failed</string>
+    <string name="tool_label_calculator">Calculator</string>
+    <string name="tool_label_calendar_today">View calendar</string>
+    <string name="tool_label_clipboard_read">Read clipboard</string>
+    <string name="tool_label_clipboard_write">Write clipboard</string>
+    <string name="tool_label_delegate_agent">Delegate sub-agent</string>
+    <string name="tool_label_dns_lookup">DNS lookup</string>
+    <string name="tool_label_execute_code">Run code</string>
+    <string name="tool_label_execute_javascript">Run script</string>
+    <string name="tool_label_execute_shell">Shell command</string>
+    <string name="tool_label_generate_image">Generate image</string>
+    <string name="tool_label_generate_video">Generate video</string>
+    <string name="tool_label_get_current_time">Current time</string>
+    <string name="tool_label_get_device_info">Device info</string>
+    <string name="tool_label_get_location">Get location</string>
+    <string name="tool_label_get_weather">Weather</string>
+    <string name="tool_label_list_files">List files</string>
+    <string name="tool_label_list_installed_apps">App list</string>
+    <string name="tool_label_make_phone_call">Make a call</string>
+    <string name="tool_label_mcp_tool">MCP tool</string>
+    <string name="tool_label_notify">Send notification</string>
+    <string name="tool_label_open_app">Open app</string>
+    <string name="tool_label_open_url">Open webpage</string>
+    <string name="tool_label_ping_host">Ping</string>
+    <string name="tool_label_plugin_market_install">Install plugin</string>
+    <string name="tool_label_plugin_market_search">Plugin market search</string>
+    <string name="tool_label_plugin_market_uninstall">Uninstall plugin</string>
+    <string name="tool_label_plugin_market_set_enabled">Toggle plugin</string>
+    <string name="tool_label_find_tools">Find tools</string>
+    <string name="tool_label_device_shell">Device command</string>
+    <string name="tool_label_terminal_exec">Terminal command</string>
+    <string name="tool_label_termux_exec">Termux command</string>
+    <string name="tool_label_quick_note_add">New quick note</string>
+    <string name="tool_label_quick_note_list">Quick notes</string>
+    <string name="tool_label_read_file">Read file</string>
+    <string name="tool_label_schedule_reminder">Reminder</string>
+    <string name="tool_label_search_memory">Memory search</string>
+    <string name="tool_label_send_sms">Send SMS</string>
+    <string name="tool_label_set_alarm">Alarm</string>
+    <string name="tool_label_set_timer">Timer</string>
+    <string name="tool_label_show_card">Show card</string>
+    <string name="tool_label_speak_text">Read aloud</string>
+    <string name="tool_label_subagent_task">Subtask</string>
+    <string name="tool_label_translate">Translate</string>
+    <string name="tool_label_web_search">Web search</string>
+    <string name="tool_label_write_file">Write file</string>
+    <string name="tool_label_workspace_write">Workspace write</string>
+    <!-- P4: tool trace collapsed-state status text (from P2-22) -->
+    <string name="tool_trace_running">Running…</string>
+    <string name="tool_trace_empty">Empty result</string>
+    <!-- P4: plugin market / trust management error text (from P0-9/P2-28) -->
+    <string name="plugin_market_load_failed">Failed to load catalog</string>
+    <string name="plugin_market_state_invalid">Catalog state is stale. Please refresh.</string>
+    <string name="plugin_download_failed">Failed to download plugin</string>
+    <string name="plugin_review_failed">Plugin package review failed</string>
+    <string name="plugin_install_failed">Install failed</string>
+    <string name="plugin_json_too_large">Provider plugin JSON exceeds the size limit (%1$dKB)</string>
+    <string name="plugin_file_read_failed">Could not read the selected file</string>
+    <string name="plugin_public_key_invalid">Invalid public key</string>
+    <string name="plugin_rollback_failed">Rollback failed</string>
+    <string name="tool_target_all_tools">all tools</string>
+</resources>

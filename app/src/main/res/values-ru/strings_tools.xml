@@ -1,0 +1,230 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- ===== ToolsScreen.kt ===== -->
+    <!-- Title and intro -->
+    <string name="tools_screen_title">Инструменты искусственного интеллекта</string>
+    <string name="tools_intro_what">Инструменты — это возможности, которые ИИ может использовать, например, чтение уведомлений, вычисления, выполнение кода и т. д.</string>
+    <string name="tool_exec_empty_result">Инструмент %1$s завершён, но не вернул отображаемого содержимого.</string>
+    <string name="tools_intro_manage">На странице сведений о помощнике → Расширения → Инструменты вы можете включать/отключать инструменты для каждого помощника.</string>
+
+    <!-- Stats -->
+    <string name="tools_stats_count">%1$d инструменты · %2$d высокий риск</string>
+
+    <!-- Built-in plugins -->
+    <string name="tools_plugins_section">Встроенные плагины</string>
+    <string name="tools_plugins_desc">Плагины — это более детальные наборы возможностей, которые объявляют необходимые разрешения и время активации.</string>
+
+    <!-- Risk level badges -->
+    <string name="tools_risk_safe">Безопасный</string>
+    <string name="tools_risk_normal">Нормальный</string>
+    <string name="tools_risk_high">Высокий</string>
+
+    <!-- Tool detail dialog -->
+    <string name="tools_detail_category_label">Категория: %1$s</string>
+    <string name="tools_detail_params">Параметры</string>
+    <string name="tools_detail_sandbox_title">Ограничения безопасности песочницы</string>
+    <string name="tools_detail_sandbox_content">• На основе механизма WebView V8, изолированного от системных страниц\n• выборка / XHR / WebSocket отключена, нет доступа к сети\n• блокировкаNetworkLoads перехватывает все сетевые запросы\n• Тайм-аут по умолчанию 10 секунд, чтобы избежать бесконечных циклов\n• Перед вызовом требуется подтверждение пользователя (инструмент высокого риска)</string>
+
+    <!-- Parameter row -->
+    <string name="tools_param_required">Необходимый</string>
+
+    <!-- Tool categories -->
+    <string name="tools_category_built_in">Встроенные инструменты</string>
+    <string name="tools_category_local">Локальные инструменты</string>
+    <string name="tools_category_mcp">Инструменты MCP</string>
+
+    <!-- Plugin capability captions -->
+    <string name="tools_permissions_label">Разрешения:</string>
+    <string name="tools_activation_label">Активация:</string>
+
+    <!-- ===== v1.0.20: ToolsSettingsPage.kt (Tool Approval Management) ===== -->
+    <!-- Title and search -->
+    <string name="tools_settings_title">Одобрение инструментов</string>
+    <string name="tools_settings_search_hint">Название или описание инструмента поиска</string>
+
+    <!-- Stats (N tools · always-allow X · ask Y · always-deny Z) -->
+    <string name="tools_settings_stats">%1$d инструменты · всегда разрешать %2$d · спрашивать %3$d · всегда запрещать %4$d</string>
+
+    <!-- Risk level group titles -->
+    <string name="tools_settings_section_safe">Безопасные инструменты (только чтение/запрос)</string>
+    <string name="tools_settings_section_normal">Обычные средства (местные побочные эффекты)</string>
+    <string name="tools_settings_section_high">Инструменты высокого риска (необратимые/чувствительные)</string>
+
+    <!-- Empty state -->
+    <string name="tools_settings_empty">Подходящие инструменты не найдены</string>
+
+    <!-- Footer policy explanation -->
+    <string name="tools_settings_footer_section">Объяснение политики</string>
+    <string name="tools_settings_policy_always_allow">Всегда разрешать</string>
+    <string name="tools_settings_policy_always_allow_desc">Вызовы инструментов одобряются автоматически;</string>
+    <string name="tools_settings_policy_ask">Спрашивайте каждый раз</string>
+    <string name="tools_settings_policy_ask_desc">Карточка одобрения отображается перед вызовом;</string>
+    <string name="tools_settings_policy_always_deny">Всегда отрицать</string>
+    <string name="tools_settings_policy_always_deny_desc">Инструмент отключен;</string>
+
+    <!-- Short labels for the per-tool segmented control -->
+    <string name="tools_settings_policy_always_allow_short">Позволять</string>
+    <string name="tools_settings_policy_ask_short">Просить</string>
+    <string name="tools_settings_policy_always_deny_short">Отрицать</string>
+    <string name="tools_empty_title">Нет зарегистрированных инструментов</string>
+    <string name="tools_empty_subtitle">Проверьте настройки плагинов или MCP и снова откройте эту страницу.</string>
+
+    <!-- I18N-01 batch2: ToolCallVisuals 摘要/标签 -->
+    <string name="tool_summary_add_calendar_event">Добавил событие в календарь</string>
+    <string name="tool_summary_add_contact">Добавил контакт</string>
+    <string name="tool_summary_calculator">Вычислил</string>
+    <string name="tool_summary_calendar_today">Проверил календарь</string>
+    <string name="tool_summary_cancel_reminder">Отменил напоминание</string>
+    <string name="tool_summary_clipboard_read">Прочитал буфер обмена</string>
+    <string name="tool_summary_clipboard_write">Записал в буфер обмена</string>
+    <string name="tool_summary_cover_generation">Сгенерировал обложку</string>
+    <string name="tool_summary_current_status">Проверил статус</string>
+    <string name="tool_summary_delegate_agent">Делегировал субагенту</string>
+    <string name="tool_summary_dns_lookup">DNS-запрос</string>
+    <string name="tool_summary_download">Скачал файл</string>
+    <string name="tool_summary_execute_code">Выполнил код</string>
+    <string name="tool_summary_execute_javascript">Выполнил скрипт</string>
+    <string name="tool_summary_execute_shell">Выполнил команду</string>
+    <string name="tool_summary_generate_image">Сгенерировал изображение</string>
+    <string name="tool_summary_generate_password">Сгенерировал пароль</string>
+    <string name="tool_summary_generate_video">Сгенерировал видео</string>
+    <string name="tool_summary_get_battery_info">Проверил батарею</string>
+    <string name="tool_summary_get_contacts_list">Прочитал контакты</string>
+    <string name="tool_summary_get_cpu_info">Проверил CPU</string>
+    <string name="tool_summary_get_current_time">Проверил время</string>
+    <string name="tool_summary_get_device_info">Прочитал информацию об устройстве</string>
+    <string name="tool_summary_get_location">Получил местоположение</string>
+    <string name="tool_summary_get_memory_info">Проверил память</string>
+    <string name="tool_summary_get_network_info">Проверил сеть</string>
+    <string name="tool_summary_get_public_ip">Проверил публичный IP</string>
+    <string name="tool_summary_get_recent_notifications">Прочитал уведомления</string>
+    <string name="tool_summary_get_storage_info">Проверил хранилище</string>
+    <string name="tool_summary_get_weather">Проверил погоду</string>
+    <string name="tool_summary_hash_text">Вычислил хэш</string>
+    <string name="tool_summary_json_pretty">Отформатировал JSON</string>
+    <string name="tool_summary_list_files">Перечислил файлы</string>
+    <string name="tool_summary_list_installed_apps">Перечислил приложения</string>
+    <string name="tool_summary_list_reminders">Перечислил напоминания</string>
+    <string name="tool_summary_make_phone_call">Совершил звонок</string>
+    <string name="tool_summary_notify">Отправил уведомление</string>
+    <string name="tool_summary_open_app">Открыл приложение</string>
+    <string name="tool_summary_open_maps">Открыл карты</string>
+    <string name="tool_summary_open_url">Открыл веб-страницу</string>
+    <string name="tool_summary_pin_memory">Закрепил воспоминание</string>
+    <string name="tool_summary_ping_host">Проверил доступность хоста</string>
+    <string name="tool_summary_plugin_market_install">Установил плагин</string>
+    <string name="tool_summary_plugin_market_search">Искал в магазине плагинов</string>
+    <string name="tool_summary_plugin_market_uninstall">Удалил плагин</string>
+    <string name="tool_summary_plugin_market_set_enabled">Включил или отключил плагин</string>
+    <string name="tool_summary_find_tools">Искал в библиотеке инструментов</string>
+    <string name="tool_summary_device_shell">Выполнил команду устройства</string>
+    <string name="tool_summary_terminal_exec">Выполнил команду терминала</string>
+    <string name="tool_summary_termux_exec">Выполнил команду Termux</string>
+    <string name="tool_summary_proactive_message_wish">Сохранил проактивное сообщение</string>
+    <string name="tool_summary_quick_note_add">Создал быструю заметку</string>
+    <string name="tool_summary_quick_note_delete">Удалил быструю заметку</string>
+    <string name="tool_summary_quick_note_get">Прочитал быструю заметку</string>
+    <string name="tool_summary_quick_note_list">Перечислил быстрые заметки</string>
+    <string name="tool_summary_quick_note_pin">Закрепил быструю заметку</string>
+    <string name="tool_summary_quick_note_update">Обновил быструю заметку</string>
+    <string name="tool_summary_read_file">Прочитал файл</string>
+    <string name="tool_summary_recall_experience">Вспомнил опыт</string>
+    <string name="tool_summary_record_experience">Записал опыт</string>
+    <string name="tool_summary_resource_add">Добавил ресурс</string>
+    <string name="tool_summary_resource_delete">Удалил ресурс</string>
+    <string name="tool_summary_resource_get">Прочитал ресурс</string>
+    <string name="tool_summary_resource_list">Перечислил ресурсы</string>
+    <string name="tool_summary_resource_search">Нашёл ресурсы</string>
+    <string name="tool_summary_run_command">Выполнил команду</string>
+    <string name="tool_summary_schedule_reminder">Установил напоминание</string>
+    <string name="tool_summary_search_memory">Выполнил поиск в памяти</string>
+    <string name="tool_summary_send_email">Отправил письмо</string>
+    <string name="tool_summary_send_sms">Отправил SMS</string>
+    <string name="tool_summary_set_alarm">Установил будильник</string>
+    <string name="tool_summary_set_timer">Запустил таймер</string>
+    <string name="tool_summary_share_text">Поделился текстом</string>
+    <string name="tool_summary_show_card">Показал карточку</string>
+    <string name="tool_summary_speak_text">Озвучил текст</string>
+    <string name="tool_summary_subagent_close">Закрыл подзадачу</string>
+    <string name="tool_summary_subagent_run">Выполнил подзадачу</string>
+    <string name="tool_summary_subagent_task">Запустил подзадачу</string>
+    <string name="tool_summary_take_photo">Сделал фото</string>
+    <string name="tool_summary_todo_write">Обновил задачу</string>
+    <string name="tool_summary_translate">Перевёл</string>
+    <string name="tool_summary_unpin_memory">Открепил воспоминание</string>
+    <string name="tool_summary_web_search">Выполнил поиск в интернете</string>
+    <string name="tool_summary_workspace_write">Записал в рабочую область</string>
+    <string name="tool_summary_write_file">Записал файл</string>
+    <string name="tool_summary_prefix_browser">Управлял браузером</string>
+    <string name="tool_summary_prefix_channel">Управлял каналом</string>
+    <string name="tool_summary_prefix_clipboard">Работал с буфером обмена</string>
+    <string name="tool_summary_prefix_mcp">Вызвал инструмент MCP</string>
+    <string name="tool_summary_prefix_quick_note">Управлял быстрой заметкой</string>
+    <string name="tool_summary_prefix_resource">Управлял ресурсом</string>
+    <string name="tool_summary_prefix_scheduled_task">Управлял запланированной задачей</string>
+    <string name="tool_summary_prefix_subagent">Управлял подзадачей</string>
+    <string name="tool_summary_prefix_workspace">Управлял рабочей областью</string>
+    <string name="tool_summary_default_success">Вызвал инструмент</string>
+    <string name="tool_summary_default_fail">Сбой вызова инструмента</string>
+<string name="tool_summary_failed">Сбой: %1$s</string>
+    <string name="tool_terminal_timeout">Остановлено по таймауту</string>
+    <string name="tool_terminal_interrupted">Прервано</string>
+    <string name="tool_label_calculator">Калькулятор</string>
+    <string name="tool_label_calendar_today">Просмотр календаря</string>
+    <string name="tool_label_clipboard_read">Читать буфер обмена</string>
+    <string name="tool_label_clipboard_write">Записать в буфер обмена</string>
+    <string name="tool_label_delegate_agent">Делегировать субагенту</string>
+    <string name="tool_label_dns_lookup">DNS-запрос</string>
+    <string name="tool_label_execute_code">Выполнить код</string>
+    <string name="tool_label_execute_javascript">Выполнить скрипт</string>
+    <string name="tool_label_execute_shell">Команда Shell</string>
+    <string name="tool_label_generate_image">Генерация изображения</string>
+    <string name="tool_label_generate_video">Генерация видео</string>
+    <string name="tool_label_get_current_time">Текущее время</string>
+    <string name="tool_label_get_device_info">Информация об устройстве</string>
+    <string name="tool_label_get_location">Получить местоположение</string>
+    <string name="tool_label_get_weather">Погода</string>
+    <string name="tool_label_list_files">Список файлов</string>
+    <string name="tool_label_list_installed_apps">Список приложений</string>
+    <string name="tool_label_make_phone_call">Совершить звонок</string>
+    <string name="tool_label_mcp_tool">Инструмент MCP</string>
+    <string name="tool_label_notify">Отправить уведомление</string>
+    <string name="tool_label_open_app">Открыть приложение</string>
+    <string name="tool_label_open_url">Открыть страницу</string>
+    <string name="tool_label_ping_host">Ping</string>
+    <string name="tool_label_plugin_market_install">Установить плагин</string>
+    <string name="tool_label_plugin_market_search">Магазин плагинов</string>
+    <string name="tool_label_plugin_market_uninstall">Удалить плагин</string>
+    <string name="tool_label_plugin_market_set_enabled">Включить/отключить плагин</string>
+    <string name="tool_label_find_tools">Найти инструмент</string>
+    <string name="tool_label_device_shell">Команда устройства</string>
+    <string name="tool_label_terminal_exec">Команда терминала</string>
+    <string name="tool_label_termux_exec">Команда Termux</string>
+    <string name="tool_label_quick_note_add">Новая заметка</string>
+    <string name="tool_label_quick_note_list">Быстрые заметки</string>
+    <string name="tool_label_read_file">Читать файл</string>
+    <string name="tool_label_schedule_reminder">Напоминание</string>
+    <string name="tool_label_search_memory">Поиск в памяти</string>
+    <string name="tool_label_send_sms">Отправить SMS</string>
+    <string name="tool_label_set_alarm">Будильник</string>
+    <string name="tool_label_set_timer">Таймер</string>
+    <string name="tool_label_show_card">Показать карточку</string>
+    <string name="tool_label_speak_text">Озвучивание</string>
+    <string name="tool_label_subagent_task">Подзадача</string>
+    <string name="tool_label_translate">Перевод</string>
+    <string name="tool_label_web_search">Поиск в интернете</string>
+    <string name="tool_label_write_file">Записать файл</string>
+    <string name="tool_label_workspace_write">Запись в рабочую область</string>
+    <string name="tool_trace_running">Выполняется…</string>
+    <string name="tool_trace_empty">Пустой результат</string>
+    <string name="plugin_market_load_failed">Не удалось загрузить каталог</string>
+    <string name="plugin_market_state_invalid">Состояние каталога устарело. Обновите каталог</string>
+    <string name="plugin_download_failed">Не удалось скачать плагин</string>
+    <string name="plugin_review_failed">Не удалось проверить пакет плагина</string>
+    <string name="plugin_install_failed">Не удалось установить</string>
+    <string name="plugin_json_too_large">JSON плагина поставщика превышает лимит размера (%1$dKB)</string>
+    <string name="plugin_file_read_failed">Не удалось прочитать выбранный файл</string>
+    <string name="plugin_public_key_invalid">Недействительный открытый ключ</string>
+    <string name="plugin_rollback_failed">Не удалось выполнить откат</string>
+    <string name="tool_target_all_tools">все инструменты</string>
+</resources>

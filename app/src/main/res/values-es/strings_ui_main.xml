@@ -1,0 +1,929 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- ===== Assistant detail pages AssistantDetailPages ===== -->
+    <string name="assistant_detail_title_default">Detalles del asistente</string>
+    <string name="assistant_detail_unnamed">(Sin nombre)</string>
+    <string name="assistant_detail_loading">Cargando...</string>
+    <string name="assistant_detail_basic">Básico</string>
+    <string name="assistant_detail_basic_desc">Nombre / Avatar / Modelo / Muestreo</string>
+    <string name="assistant_detail_prompt">Inmediato</string>
+    <string name="assistant_detail_prompt_desc">systemPrompt / Plantilla de mensaje / Mensajes preestablecidos</string>
+    <string name="assistant_detail_extensions">Extensiones</string>
+    <string name="assistant_detail_extensions_desc">Mensajes rápidos / Libro de historia / Inyección / Habilidades / MCP</string>
+    <string name="assistant_detail_memory">Memoria</string>
+    <string name="assistant_detail_memory_desc">Alternar memoria/Memoria global/Referencia de chat reciente/Recordatorio de tiempo</string>
+    <string name="assistant_detail_advanced">Avanzado</string>
+    <string name="assistant_detail_advanced_desc">Antecedentes / Solicitud personalizada / Etiquetas</string>
+    <string name="assistant_detail_avatar_save_failed">No se pudo guardar el avatar</string>
+    <string name="assistant_detail_no_image_app">No hay ninguna aplicación disponible para abrir imágenes.</string>
+    <string name="assistant_detail_pick_image">Seleccionar imagen</string>
+    <string name="assistant_detail_clear">Claro</string>
+    <string name="assistant_detail_avatar">Avatar</string>
+    <string name="assistant_detail_avatar_image_set">Conjunto de avatar de imagen</string>
+    <string name="assistant_detail_avatar_emoji">Usando avatar emoji</string>
+    <string name="assistant_detail_avatar_initial">Usando la inicial del nombre</string>
+    <string name="assistant_detail_name">Nombre</string>
+    <string name="assistant_detail_avatar_emoji_label">Avatar Emoji (1-2 caracteres, opcional)</string>
+    <string name="assistant_detail_global_default">Valor predeterminado global</string>
+    <string name="assistant_detail_exclusive_model">Modelo Exclusivo</string>
+    <string name="assistant_detail_temperature">Temperatura: %1$s</string>
+    <string name="assistant_detail_default">Por defecto</string>
+    <string name="assistant_detail_use_default">Usar predeterminado</string>
+    <string name="assistant_detail_top_p_label">Top P (dejar vacío por defecto, 0-1)</string>
+    <string name="assistant_detail_max_tokens_label">Tokens máximos (déjelo vacío por defecto)</string>
+    <string name="assistant_detail_context_message_count">Recuento de mensajes de contexto: %1$d</string>
+    <string name="assistant_detail_reasoning_level">Nivel de razonamiento</string>
+    <string name="assistant_detail_stream_output">Salida de flujo</string>
+    <string name="assistant_detail_stream_output_desc">Cuando está desactivado, devuelve la respuesta completa a la vez.</string>
+    <!-- v1.0.19: Assistant field completion (summary / useAssistantName / allowGroupChat) -->
+    <string name="assistant_detail_summary">Resumen de una línea</string>
+    <string name="assistant_detail_summary_hint">Se utiliza para la lista de chat grupal y el subtítulo de la tarjeta de asistente.</string>
+    <string name="assistant_detail_use_assistant_name">Mostrar el nombre del asistente en el chat</string>
+    <string name="assistant_detail_use_assistant_name_desc">Cuando está activado, reemplaza el nombre del modelo con el nombre del asistente.</string>
+    <string name="assistant_detail_allow_group_chat">Permitir unirse al chat grupal</string>
+    <string name="assistant_detail_allow_group_chat_desc">Cuando esté desactivado, este asistente no aparecerá en la selección de miembros del chat grupal</string>
+    <string name="assistant_detail_select_model">Seleccionar modelo exclusivo</string>
+    <string name="assistant_detail_close">Cerca</string>
+    <string name="assistant_detail_global_default_selected">Valor predeterminado global (seleccionado)</string>
+    <string name="assistant_detail_model_selected">%1$s (Seleccionado)</string>
+    <!-- Phase 6: Model picker UX improvements -->
+    <string name="assistant_detail_use_global_default_card">Utilice el modelo predeterminado global</string>
+    <string name="assistant_detail_using_global_model">Actualmente se utiliza el modelo predeterminado global: %1$s</string>
+    <string name="assistant_detail_model_hint">Consejo: puedes elegir un modelo dedicado para cada asistente en la configuración del asistente.</string>
+    <string name="assistant_detail_system_prompt_label">Aviso del sistema (rol/reglas)</string>
+    <string name="assistant_detail_message_template_label">Plantilla de mensaje (admite {{date}} {{time}} {{session_id}}, etc.)</string>
+    <string name="assistant_detail_preset_messages_label">Mensajes preestablecidos JSON (avanzado, por ejemplo, [{\"role\":\"system\",\"content\":\"...\"}])</string>
+    <string name="assistant_detail_ext_quick_message">Mensajes rápidos</string>
+    <string name="assistant_detail_ext_lorebook">libro de historia</string>
+    <string name="assistant_detail_ext_mode_injection">Inyección inmediata</string>
+    <string name="assistant_detail_ext_skill">Habilidad</string>
+    <string name="assistant_detail_ext_mcp_server">Servidor MCP</string>
+    <string name="assistant_detail_ext_tool">Herramienta</string>
+    <string name="assistant_detail_no_options">No hay opciones disponibles</string>
+    <string name="assistant_detail_done">Hecho</string>
+    <string name="assistant_detail_select_all">Seleccionar todo</string>
+    <string name="assistant_detail_clear_all">Borrar todo</string>
+    <string name="assistant_detail_selected_count">%1$d seleccionado</string>
+    <string name="assistant_detail_enable_memory">Habilitar memoria</string>
+    <string name="assistant_detail_enable_memory_desc">Cuando está apagado, este asistente no inyectará memoria a largo plazo</string>
+    <string name="assistant_detail_use_global_memory">Usar memoria global</string>
+    <string name="assistant_detail_use_global_memory_desc">Al activarlo, este asistente también usa el perfil compartido, los recuerdos fijados y las experiencias. Sus hechos y chats recientes propios siguen disponibles. Está desactivado por defecto en asistentes nuevos.</string>
+    <string name="assistant_detail_recent_chats_reference">Referencia de chat reciente</string>
+    <string name="assistant_detail_recent_chats_reference_desc">Inyecte resúmenes de chats recientes como contexto en el mensaje</string>
+    <string name="assistant_detail_time_reminder">Recordatorio de tiempo</string>
+    <string name="assistant_detail_time_reminder_desc">Inyectar la hora actual en la conversación</string>
+    <string name="assistant_detail_manual_memory">Memoria Manual</string>
+    <string name="assistant_detail_add_memory">Agregar memoria</string>
+    <string name="assistant_detail_add_memory_desc">Ingrese manualmente hechos/conocimientos para referencia de IA</string>
+    <string name="assistant_detail_saved_memory_count">Memorias guardadas (%1$d)</string>
+    <string name="assistant_detail_global_pinned_count">Memorias globales fijadas (%1$d)</string>
+    <string name="assistant_detail_global_pinned_enabled">La memoria global está activada; estas entradas se incluyen para este asistente.</string>
+    <string name="assistant_detail_global_pinned_disabled">Solo lectura. La memoria global está desactivada y estas entradas no se incluyen para este asistente.</string>
+    <string name="assistant_detail_saved_memory_interaction_hint">Toca para expandir · Mantén pulsado para editar</string>
+    <string name="assistant_detail_no_memory">Aún no hay recuerdos</string>
+    <string name="assistant_detail_delete_cd">Borrar</string>
+    <string name="assistant_detail_delete_memory">Eliminar memoria</string>
+    <string name="assistant_detail_add_memory_dialog_title">Agregar memoria</string>
+    <string name="assistant_detail_memory_edit_missing">Esta memoria ya no existe o el contenido no es válido</string>
+    <string name="assistant_detail_edit_memory_dialog_title">Editar memoria</string>
+    <string name="assistant_detail_input_fact">Introduzca hecho/conocimiento</string>
+    <string name="assistant_detail_save">Ahorrar</string>
+    <string name="assistant_detail_cancel">Cancelar</string>
+    <string name="assistant_detail_background_url_label">URL de la imagen de fondo (vacía si no hay fondo)</string>
+    <string name="assistant_detail_background_opacity">Opacidad del fondo: %1$d%%</string>
+    <string name="assistant_detail_gradient_background">Fondo degradado</string>
+    <string name="assistant_detail_gradient_background_desc">Superponer máscara de degradado en la imagen de fondo (mejora la legibilidad)</string>
+    <string name="assistant_detail_custom_headers_label">Encabezados personalizados JSON (por ejemplo, {\"X-Custom\":\"value\"})</string>
+    <string name="assistant_detail_custom_bodies_label">JSON de cuerpo personalizado (por ejemplo, {\"user\":\"abc\"})</string>
+    <string name="assistant_detail_tags_label">Etiquetas (separadas por comas, por ejemplo, escritura, traducción, código)</string>
+
+    <!-- ===== Memory screen MemoryScreen ===== -->
+    <string name="memory_screen_title">Memoria</string>
+    <string name="memory_screen_back_cd">Atrás</string>
+    <string name="memory_screen_search_fact_hint">Buscar metahechos…</string>
+    <string name="memory_screen_search_cd">Buscar</string>
+    <string name="memory_screen_add_fact_cd">Agregar metahecho</string>
+    <string name="memory_screen_compile_now_cd">compilar ahora</string>
+    <string name="memory_screen_compile_now">compilar ahora</string>
+    <string name="memory_tab_today">Hoy</string>
+    <string name="memory_tab_week">Corto plazo</string>
+    <string name="memory_tab_longterm">A largo plazo</string>
+    <string name="memory_tab_facts">Hechos</string>
+    <!-- v1.0.51: memory backfill migration progress -->
+    <string name="memory_backfill_in_progress">Organizando recuerdos históricos %1$d/%2$d</string>
+    <string name="memory_backfill_done">Memorias históricas organizadas, %1$d resúmenes restaurados</string>
+    <string name="memory_screen_layer_summary">Resumen de la sesión</string>
+    <string name="memory_screen_layer_compile">Artefacto compilado</string>
+    <string name="memory_screen_layer_memory">Memoria</string>
+    <string name="memory_screen_delete_layer">Eliminar %1$s</string>
+    <string name="memory_screen_confirm_delete_layer">¿Está seguro de que desea eliminar este %1$s?</string>
+    <string name="memory_screen_delete">Borrar</string>
+    <string name="memory_screen_cancel">Cancelar</string>
+    <string name="memory_screen_edit_fact">Editar metahecho</string>
+    <string name="memory_screen_edit_summary">Editar resumen de sesión</string>
+    <string name="memory_open_conversation">Abrir conversación</string>
+    <string name="memory_conversation_meta">Asistente %1$s · Espacio %2$s</string>
+    <string name="memory_screen_edit_compile">Editar artefacto compilado</string>
+    <string name="memory_screen_edit_memory">Editar memoria</string>
+    <string name="memory_screen_no_match">No se encontraron recuerdos coincidentes</string>
+    <string name="memory_screen_search_results">Resultados de la búsqueda (%1$d)</string>
+    <string name="memory_screen_fact_section">① Metahechos (hecho)</string>
+    <string name="memory_screen_no_fact">Aún no hay metahechos</string>
+    <string name="memory_screen_fact_limit">Mostrando los primeros 50 de %1$d</string>
+    <string name="memory_screen_summary_section">② Resúmenes de sesiones (Resumen)</string>
+    <string name="memory_screen_no_summary">Aún no hay resúmenes de sesiones</string>
+    <string name="memory_screen_compile_section">③ Artefactos compilados (compilar)</string>
+    <string name="memory_screen_no_compile">Aún no hay artefactos compilados (esperando la compilación programada)</string>
+    <string name="memory_screen_deep_section">④ Memoria profunda (profunda)</string>
+    <string name="memory_screen_deep_desc">La capa profunda es una capa de procesamiento sin almacenamiento independiente.</string>
+    <string name="memory_screen_fact_total">• Total de metahechos: %1$d</string>
+    <string name="memory_screen_summary_total">• Resúmenes totales de sesiones: %1$d</string>
+    <string name="memory_screen_last_updated">• Última actualización: %1$s</string>
+    <string name="memory_screen_none">Ninguno</string>
+    <string name="memory_screen_collapse">Colapsar</string>
+    <string name="memory_screen_expand">Expandir</string>
+    <string name="memory_screen_edit_cd">Editar</string>
+    <string name="memory_pin_cd">Fijar</string>
+    <string name="memory_unpin_cd">Desfijar</string>
+    <string name="memory_screen_delete_cd">Borrar</string>
+    <string name="memory_screen_load_failed">Error de carga: detalles completos del error</string>
+    <string name="memory_screen_copied_trace">Seguimiento de pila completo copiado al portapapeles</string>
+    <string name="memory_screen_copy_trace_cd">Copiar seguimiento de pila completo</string>
+    <string name="memory_screen_retry">Rever</string>
+    <string name="memory_screen_input_content">Introduce el contenido...</string>
+    <string name="memory_screen_save">Ahorrar</string>
+    <string name="memory_screen_not_running">no corriendo</string>
+    <string name="memory_screen_has_error">Problemas encontrados</string>
+    <string name="memory_screen_normal">Normal</string>
+    <string name="memory_screen_overview">Descripción general de la memoria</string>
+    <string name="memory_screen_fact_total_label">Metahechos totales</string>
+    <string name="memory_screen_last_compile">Última recopilación</string>
+    <string name="memory_screen_no_compile_time">Ninguno todavía</string>
+    <string name="memory_screen_health">Estado de salud</string>
+    <string name="memory_screen_collapse_steps">Contraer detalles del paso</string>
+    <string name="memory_screen_view_steps">Ver detalles del paso</string>
+    <string name="memory_screen_failed_times">Falló %1$d veces</string>
+    <string name="memory_screen_last_success">Último éxito: %1$s</string>
+    <string name="memory_screen_error">Error: %1$s</string>
+    <!-- Cadenas específicas de MemorySectionViews.kt -->
+    <string name="memory_screen_input_hint">Introduce el contenido…</string>
+    <string name="memory_screen_empty_content">Aún no hay contenido</string>
+    <string name="memory_screen_empty_short_term">Aún no hay recuerdos a corto plazo</string>
+    <string name="memory_screen_input_day_hint">Introduce el contenido del día…</string>
+    <string name="memory_screen_system_status">Estado del sistema de memoria</string>
+    <string name="memory_screen_no_status_data">Aún no hay datos de estado</string>
+    <string name="memory_screen_error_compact">Error: %1$s</string>
+    <string name="memory_screen_recent_error">Fallo reciente: %1$s</string>
+    <string name="memory_screen_recent_success">Éxito reciente: %1$s</string>
+    <!-- ===== Asistente de permisos (PermissionWizardScreen) ===== -->
+    <string name="permission_sui_detected">Backend de Sui detectado (los usuarios root no necesitan instalar el APK de Shizuku; Sui ofrece una interfaz compatible con Shizuku)</string>
+    <string name="permission_global_action_title">Acciones globales (action_id de ui_global_action)</string>
+    <string name="permission_refresh_status">Actualizar estado</string>
+    <string name="permission_termux_title">Canal de extensión Termux</string>
+    <string name="permission_termux_apk_installed">Termux instalado</string>
+    <string name="permission_termux_apk_not_installed">Termux no instalado (canal opcional)</string>
+    <string name="permission_termux_permission_ok">Permiso de ejecución concedido</string>
+    <string name="permission_termux_permission_missing">Permiso de ejecución no concedido</string>
+    <string name="permission_termux_probe_ok">Configuración externa correcta</string>
+    <string name="permission_termux_probe_failed">Configuración externa no lista</string>
+    <string name="permission_termux_probe_unchecked">Configuración sin detectar</string>
+    <string name="permission_termux_get_btn">Obtener Termux</string>
+    <string name="permission_termux_open_btn">Abrir Termux</string>
+    <string name="permission_termux_grant_btn">Conceder permiso</string>
+    <string name="permission_termux_config_hint">En Termux ejecuta echo \'allow-external-apps = true\' &gt;&gt; ~/.termux/termux.properties y reinicia Termux</string>
+    <string name="shizuku_apk_installed">APK de Shizuku instalado</string>
+    <string name="shizuku_apk_not_installed">APK de Shizuku no instalado</string>
+    <string name="shizuku_service_running">Servicio de Shizuku en ejecución</string>
+    <string name="shizuku_service_not_running">Servicio de Shizuku no en ejecución (inícialo en la aplicación de Shizuku)</string>
+    <string name="shizuku_status_unauthorized_long">Muse no está autorizado a usar Shizuku</string>
+    <string name="permission_open_shizuku_service">Abrir Shizuku para iniciar el servicio</string>
+    <string name="permission_action_id_help">1 = Volver (BACK)\n2 = Inicio (HOME)\n3 = Tareas recientes (RECENTS)\n4 = Panel de notificaciones (NOTIFICATIONS)\n5 = Ajustes rápidos (QUICK_SETTINGS)\n6 = Diálogo de encendido (POWER_DIALOG)\n10 = Cerrar panel de notificaciones (DISMISS_NOTIFICATION_SHADE)\n\nHerramientas rápidas: ui_back (action_id=1), ui_home (action_id=2)</string>
+    <string name="memory_screen_ai_understanding">La comprensión que la IA tiene de ti</string>
+    <string name="memory_screen_no_summary_hint">Aún no hay resumen;</string>
+    <string name="memory_screen_click_collapse">Toca para colapsar</string>
+    <string name="memory_screen_click_expand">Toque para expandir el resumen completo de la memoria</string>
+    <!-- v1.98: Experience library -->
+    <string name="memory_screen_experience_title">Biblioteca de experiencias</string>
+    <string name="memory_screen_experience_desc">Mejores prácticas y conocimientos acumulados;</string>
+    <string name="memory_screen_experience_empty">Aún no hay entradas.</string>
+    <string name="memory_screen_experience_add_cd">Añadir experiencia</string>
+    <string name="memory_screen_experience_count">%1$d entradas</string>
+    <string name="memory_screen_experience_add_dialog_title">Nueva experiencia</string>
+    <string name="memory_screen_experience_edit_dialog_title">Editar experiencia</string>
+    <string name="memory_screen_experience_title_label">Título</string>
+    <string name="memory_screen_experience_title_hint">Breve descripción, p.e.</string>
+    <string name="memory_screen_experience_content_label">Detalles</string>
+    <string name="memory_screen_experience_content_hint">Pasos, advertencias, fragmentos de código, etc.</string>
+    <string name="memory_screen_experience_category_label">Categoría (opcional)</string>
+    <string name="memory_screen_experience_tags_label">Etiquetas (separadas por comas, opcionales)</string>
+    <string name="memory_screen_experience_delete_confirm">¿Eliminar esta experiencia?</string>
+
+    <!-- v2.0: overview stat card -->
+    <string name="memory_overview_total">Hechos totales</string>
+    <string name="memory_overview_important">Importante/Crítico</string>
+    <string name="memory_overview_layers">Capas de memoria</string>
+
+    <!-- ===== Settings screen SettingsScreen ===== -->
+    <string name="settings_screen_title">Ajustes</string>
+    <string name="settings_screen_back_cd">Atrás</string>
+    <string name="settings_screen_appearance_group_cd">grupo general</string>
+    <string name="settings_screen_appearance">Apariencia &amp; Personalización</string>
+    <string name="settings_screen_group_assistants">Mis asistentes</string>
+    <string name="settings_screen_group_models">Modelos y capacidades</string>
+    <string name="settings_screen_group_chat_display">Chat y pantalla</string>
+    <string name="settings_screen_group_memory">Memoria y mensajes proactivos</string>
+    <string name="settings_screen_group_data_privacy">Datos y privacidad</string>
+    <string name="settings_screen_group_tools">Herramientas y conexiones</string>
+    <string name="settings_screen_group_about">Acerca de y ayuda</string>
+    <string name="settings_screen_user_profile_cd">Perfil, nombre/persona, toque para ingresar</string>
+    <string name="settings_screen_user_profile">Perfil</string>
+    <string name="settings_screen_user_profile_desc">Nombre / Nombre del asistente / Persona del usuario</string>
+    <string name="settings_screen_appearance_cd">Apariencia, tema/tamaño de fuente, toque para ingresar</string>
+    <string name="settings_screen_appearance_label">Apariencia</string>
+    <string name="settings_screen_appearance_desc">Tema/Tamaño de fuente</string>
+    <string name="settings_screen_chat_cd">Chat, visualización de mensajes/interacción/avanzado, toque para ingresar</string>
+    <string name="settings_screen_chat">Charlar</string>
+    <string name="settings_screen_chat_desc">Visualización de mensajes / Interacción / Avanzado</string>
+    <string name="settings_screen_media_cd">Medios, voz/TTS/salida de audio, toque para ingresar</string>
+    <string name="settings_screen_media">Reproducción de voz</string>
+    <string name="settings_screen_media_desc">Voz / TTS / Salida de audio</string>
+    <string name="settings_screen_memory_data_group_cd">Memoria &amp; Grupo de base de conocimientos</string>
+    <string name="settings_screen_memory_data">Memoria &amp; Datos</string>
+    <string name="settings_screen_memory_notification_cd">Centro de memoria, ver/editar memoria · parámetros de memoria · compilar ahora, toque para ingresar</string>
+    <string name="settings_screen_memory_notification">Centro de Memoria</string>
+    <string name="settings_screen_memory_notification_desc">Hoy / Corto plazo / Largo plazo · Hechos · Parámetros</string>
+    <string name="settings_screen_data_backup_cd">Datos &amp; Copia de seguridad, copia de seguridad en la nube/servidor web, toque para ingresar</string>
+    <string name="settings_screen_data_backup">Datos &amp; Copia de seguridad</string>
+    <string name="settings_screen_data_backup_desc">Copia de seguridad en la nube/servidor web</string>
+    <string name="settings_screen_data_import_cd">Importación de datos, migra datos de otras aplicaciones, toca para ingresar</string>
+    <string name="settings_screen_data_import">Importación de datos</string>
+    <string name="settings_screen_data_import_desc">Migrar desde RikkaHub / Kelivo</string>
+    <string name="settings_screen_rag_cd">Recuperación de conocimientos, configuración RAG/Incrustación/parámetros de fragmentos, toque para ingresar</string>
+    <string name="settings_screen_rag">Recuperación de conocimientos</string>
+    <string name="settings_screen_rag_desc">Configuración RAG / Incrustación / Parámetros de fragmentos</string>
+    <!-- Data &amp; Privacy group (PII Guard) -->
+    <string name="settings_screen_privacy_group_cd">Datos &amp; Grupo de privacidad</string>
+    <string name="settings_screen_pii_guard_cd">Protección de privacidad de PII, enmascarar información confidencial antes de enviar, alternar</string>
+    <string name="settings_screen_pii_guard">Protección de privacidad de IIP</string>
+    <string name="settings_screen_pii_guard_desc">Enmascarar automáticamente el teléfono/correo electrónico/tarjeta de identificación, etc. antes de enviar</string>
+    <string name="settings_screen_model_service">Modelos &amp; Servicios</string>
+    <string name="settings_screen_model_service_group_cd">Modelos &amp; Grupo de servicios</string>
+    <string name="settings_screen_provider_cd">Proveedores, administre proveedores de servicios de IA, toque para ingresar</string>
+    <string name="settings_screen_provider">Proveedores</string>
+    <string name="settings_screen_model_catalog_desc">Revisa y corrige contexto, capacidades y salida maxima de los modelos</string>
+    <string name="settings_screen_task_routing_desc">Modelos por niveles para tareas en segundo plano</string>
+    <string name="settings_screen_provider_desc">Administrar proveedores de modelos, claves API y búsqueda web</string>
+    <string name="settings_screen_assistant_cd">Asistentes, administrar asistentes/libros mundiales, toque para ingresar</string>
+    <string name="settings_screen_assistant">Asistentes</string>
+    <string name="settings_screen_assistant_desc">Gestionar asistentes, modelos, personajes y libros del mundo.</string>
+    <string name="settings_screen_agent_cd">Agente, selección de asistente/colaboración/mensajes proactivos, toque para ingresar</string>
+    <string name="settings_screen_agent_desc">Selección de asistente / Colaboración / Mensajes proactivos</string>
+    <string name="settings_screen_advanced_group_cd">grupo avanzado</string>
+    <string name="settings_screen_advanced">Avanzado</string>
+    <string name="settings_screen_security_desc">Plantilla de compartir / Ajustes de exportación</string>
+    <string name="settings_screen_proxy_cd">%1$s, %2$s, toque para ingresar</string>
+    <string name="settings_screen_experiments_cd">Alternancia de funciones experimentales e inestables, toque para ingresar</string>
+    <string name="settings_screen_experiments">Experimental</string>
+    <string name="settings_screen_experiments_desc">Alternancias de funciones inestables</string>
+    <string name="settings_screen_stats_cd">Estadísticas, ver estadísticas de uso y mapa de calor, toque para ingresar</string>
+    <string name="settings_screen_stats">Estadística</string>
+    <string name="settings_screen_stats_desc">Ver estadísticas de uso y mapa de calor</string>
+    <string name="quota_title">Cuota Diaria</string>
+    <string name="quota_plan_free">Gratis</string>
+    <string name="quota_plan_pro">Pro</string>
+    <string name="quota_chats">Charlas</string>
+    <string name="quota_images">Generación de imágenes</string>
+    <string name="quota_searches">Búsqueda web</string>
+    <!-- v1.0.4: Notification listener -->
+    <string name="settings_screen_notification_listener">Oyente de notificaciones</string>
+    <string name="connection_center_title">Centro de conexiones</string>
+    <string name="connection_center_desc">Canales, MCP, plugins y aprobación de herramientas</string>
+    <string name="channel_page_title">Canales de mensajes</string>
+    <string name="message_action_annotate">Anotar</string>
+    <string name="message_annotate_title">Notas del mensaje</string>
+    <string name="message_annotate_hint">Escribe una nota…</string>
+    <string name="connector_page_title">Conectores</string>
+    <string name="connector_intro">Conecta servicios externos (calendario/notas/código). Rellena los endpoints y credenciales de la app registrada; la autorización usa el navegador del sistema y las credenciales se cifran.</string>
+    <string name="connector_add">Añadir conector</string>
+    <string name="connector_connect">Conectar</string>
+    <string name="connector_connect_success">Conectado %1$s</string>
+    <string name="connector_connect_failed">Error de conexión: %1$s</string>
+    <string name="connector_empty">Aún no hay conectores.</string>
+    <string name="connector_config_corrupt">La configuración está dañada, datos preservados, puedes reimportar</string>
+    <string name="connector_field_authorize">URL de autorización</string>
+    <string name="connector_field_token">URL de token</string>
+    <string name="connector_field_scope">Scope</string>
+    <string name="connector_field_client_id">Client ID</string>
+    <string name="connector_field_client_secret">Client Secret</string>
+    <string name="channel_inbox_title">Recibidos recientemente</string>
+    <string name="channel_intro_title">Envía mensajes a tu IM</string>
+    <string name="channel_intro">Una vez configurado, el asistente puede enviar mensajes a canales Feishu/QQ. Las credenciales se cifran y guardan solo en este dispositivo.</string>
+    <string name="channel_add">Añadir canal</string>
+    <string name="channel_edit_title">Editar canal</string>
+    <string name="channel_edit">Editar</string>
+    <string name="channel_delete_confirm">¿Eliminar este canal?</string>
+    <string name="channel_empty">Aún no hay canales. Toca el botón de arriba para añadir.</string>
+    <string name="channel_save">Guardar</string>
+    <string name="channel_field_platform">Plataforma</string>
+    <string name="channel_field_name">Nombre</string>
+    <string name="channel_field_app_id">App ID</string>
+    <string name="channel_field_app_secret">App Secret</string>
+    <string name="channel_webhook_receive">Activar webhooks de la plataforma</string>
+    <string name="channel_webhook_receive_desc">Desactivado de forma predeterminada. Actívalo solo después de configurar una URL de callback externa.</string>
+    <string name="channel_webhook_verification_token">Token de verificación</string>
+    <string name="channel_webhook_feishu_hint">Solo para callbacks de eventos de Feishu configurados manualmente. Usa el mismo Verification Token de Feishu. Solo admite callbacks sin cifrar; deja Encrypt Key vacío. La conexión larga no necesita esta opción.</string>
+    <string name="channel_webhook_qq_hint">Solo para callbacks de QQ configurados manualmente. Define aquí un token aleatorio de alta entropía y añádelo a la URL del callback como ?token=... . También se exige una firma Ed25519 y una marca de tiempo recientes, verificadas con el App Secret anterior. La conexión larga no necesita esta opción.</string>
+    <string name="channel_field_target">ID de destino</string>
+    <string name="channel_field_qq_type">Tipo de destino QQ</string>
+    <string name="channel_type_group">Grupo</string>
+    <string name="channel_type_c2c">Directo</string>
+    <string name="channel_auto_reply">Respuesta automática</string>
+    <string name="channel_auto_reply_desc">Ejecuta el asistente automáticamente al recibir mensajes y responde (cada ronda consume cuota del modelo)</string>
+    <string name="channel_err_ai_timeout">Se agotó el tiempo de la llamada a la IA</string>
+    <string name="channel_err_no_assistant">No hay ningún asistente disponible para generar una respuesta automática</string>
+    <string name="channel_weclaw_bind">Vincular con código</string>
+    <string name="channel_weclaw_bind_title">Vincular WeChat ClawBot</string>
+    <string name="channel_weclaw_bind_hint">Escanea el código QR con WeChat para vincular</string>
+    <string name="channel_weclaw_bind_loading">Obteniendo código QR…</string>
+    <string name="channel_weclaw_bind_failed">Error al obtener el código QR: </string>
+    <string name="channel_weclaw_status_scaned">Escaneado, confirma en tu teléfono</string>
+    <string name="channel_weclaw_status_expired">El código QR caducó, inténtalo de nuevo</string>
+    <string name="channel_weclaw_unbound_hint">Sin vincular (escanea para obtener credenciales)</string>
+    <string name="channel_telegram_hint">En App Secret va el Bot Token de @BotFather; el destino es el chat_id (puedes dejarlo vacío, la respuesta automática vuelve al remitente).</string>
+    <string name="channel_dingtalk_hint">En App ID va el ClientID (AppKey) de la app y en App Secret el ClientSecret; configura el modo de recepción del bot como Stream (sin URL pública).</string>
+    <string name="settings_screen_notification_listener_desc">Autorizar a AI para leer las notificaciones de otras aplicaciones</string>
+    <!-- v1.0.4: AI tools -->
+    <string name="settings_screen_tools">Herramientas de IA</string>
+    <string name="settings_screen_tools_desc">Ver herramientas y permisos que la IA puede invocar</string>
+    <string name="settings_screen_about_group_cd">Acerca del grupo</string>
+    <string name="settings_screen_about">Acerca de</string>
+    <string name="settings_screen_tutorial_cd">Tutorial, guía de incorporación, toque para ingresar</string>
+    <string name="settings_screen_tutorial">Tutorial</string>
+    <string name="settings_screen_tutorial_desc">Incorporación/Guía de funciones</string>
+    <string name="settings_screen_about_cd">Acerca de, versión/licencias de código abierto, toque para ingresar</string>
+    <string name="settings_screen_about_desc">Versión / Licencias de código abierto</string>
+    <string name="settings_screen_debug_log_cd">Registro de depuración, ver registros y errores de aplicaciones, tocar para ingresar</string>
+    <string name="settings_screen_debug_log">Registro de depuración</string>
+    <string name="settings_screen_debug_log_desc">Ver registros y errores de la aplicación</string>
+
+    <!-- v1.133: Check for updates entry in About group -->
+    <string name="settings_screen_check_update_cd">Busque actualizaciones, verifique manualmente la última versión de GitHub, toque para activar</string>
+    <string name="settings_screen_check_update">Buscar actualizaciones</string>
+    <string name="settings_screen_check_update_desc">Consulte GitHub para conocer nuevos lanzamientos</string>
+
+    <!-- v1.132: Settings search + group reorg -->
+    <string name="settings_search_cd">Configuración de búsqueda</string>
+    <string name="settings_search_hint">Configuración de búsqueda…</string>
+    <string name="settings_search_prompt">Escriba palabras clave para buscar todas las configuraciones</string>
+    <string name="settings_search_no_results">partidos</string>
+    <string name="settings_screen_cancel">Cancelar</string>
+    <string name="settings_screen_data_backup_group">Datos &amp; Copia de seguridad</string>
+
+    <!-- v1.97 gap8: Tools group (standalone translate page entry) -->
+    <string name="settings_screen_tools_group_cd">Grupo de herramientas</string>
+    <string name="settings_screen_translate_cd">AI Translate, herramienta de traducción independiente, toca para ingresar</string>
+    <string name="settings_screen_translate">Traductor AI</string>
+    <string name="settings_screen_translate_desc">Traducción multilingüe con selección/intercambio/reproducción de fuente</string>
+
+    <!-- v1.25: Vision Assist (let text-only models "see" images via vision model) -->
+    <string name="settings_screen_vision">Asistencia de visión</string>
+    <string name="settings_screen_vision_desc">Permita que los modelos de solo texto analicen imágenes a través del modelo de visión</string>
+    <string name="settings_vision_title">Asistencia de visión</string>
+    <string name="settings_vision_description">Cuando utilice un modelo de solo texto que no admita la entrada de imágenes, llame automáticamente a un modelo de visión para analizar imágenes e insertar descripciones en la conversación.</string>
+    <string name="settings_vision_enabled">Habilitar asistencia visual</string>
+    <string name="settings_vision_enabled_subtitle">Envíe automáticamente imágenes al modelo de visión para su análisis.</string>
+    <string name="settings_vision_model_section">Modelo de visión</string>
+    <string name="settings_vision_no_models">No se encontraron modelos con capacidad de visión.</string>
+    <string name="vision_analysis_starting">Análisis de imagen con modelo de visión.</string>
+    <string name="vision_analysis_done">%1$d imágenes analizadas con modelo de visión</string>
+    <string name="vision_analysis_failed">Error en el análisis de imagen: %1$s</string>
+    <string name="vision_assist_label">Asistencia de visión</string>
+    <string name="vision_assist_analyzing">Asistente de visión · Analizando %1$d/%2$d</string>
+    <string name="vision_assist_done">Asistencia visual · Listo</string>
+    <string name="vision_assist_failed">Asistencia de visión · Error</string>
+
+    <!-- ===== Search screen SearchScreen ===== -->
+    <string name="search_back_cd">Atrás</string>
+    <string name="search_cancel">Cancelar</string>
+    <string name="search_placeholder">Buscar sesiones/mensajes/configuraciones...</string>
+    <string name="search_empty_hint">Ingrese palabras clave para buscar sesiones, mensajes o configuraciones</string>
+    <string name="search_tab_sessions">Sesiones</string>
+    <string name="search_tab_message_content">Contenido del mensaje</string>
+    <string name="search_section_message_content">Contenido del mensaje</string>
+    <string name="search_section_translate">Traducciones</string>
+    <string name="search_section_quick_notes">Notas rápidas</string>
+    <string name="search_suggestion_backup">Respaldo</string>
+    <string name="search_suggestion_today">Hoy</string>
+    <string name="search_suggestion_summary">Resumen</string>
+    <string name="search_suggestion_report">Informe</string>
+    <string name="search_suggestion_idea">Ideas</string>
+    <string name="search_no_result">No hay resultados coincidentes</string>
+    <string name="search_try_other">Pruebe otras palabras clave</string>
+    <string name="search_section_sessions">Sesiones</string>
+    <string name="search_section_messages">Mensajes</string>
+    <string name="search_section_settings">Ajustes</string>
+    <string name="search_new_session">Nueva sesión</string>
+    <string name="search_time_today">Hoy %1$s</string>
+    <string name="search_time_yesterday">Ayer %1$s</string>
+    <string name="search_index_proactive_message">Mensajes proactivos</string>
+    <string name="search_index_chat_behavior">Configuración de comportamiento de chat</string>
+    <string name="search_index_deep_thinking">Pensamiento profundo</string>
+    <string name="search_index_web_server">Servidor Web</string>
+    <string name="search_index_data_backup">Datos &amp; Copia de seguridad</string>
+    <string name="search_index_cloud_backup">Copia de seguridad en la nube</string>
+    <string name="search_index_theme">Tema</string>
+    <string name="search_index_appearance">Configuración de apariencia</string>
+    <string name="search_index_font_size">Tamaño de fuente</string>
+    <string name="search_index_pin_lock">Bloqueo de PIN</string>
+    <string name="search_index_security">Seguridad &amp; Compartir</string>
+    <string name="search_index_assistant_manage">Subgerencia</string>
+    <string name="search_index_assistants_page">Asistentes</string>
+    <string name="search_index_memory">Memoria</string>
+    <string name="search_index_memory_settings">Memoria &amp; Configuración de notificación</string>
+    <string name="search_index_skill">Habilidad</string>
+    <string name="search_index_skill_manage">Gestión de habilidades</string>
+    <string name="search_index_knowledge">Base de conocimientos</string>
+    <string name="search_index_knowledge_page">Página de base de conocimientos</string>
+    <string name="search_index_scheduled_task">Tareas programadas</string>
+    <string name="search_index_scheduled_task_page">Página de tareas programadas</string>
+    <string name="search_index_mcp">MCP</string>
+    <string name="search_index_model_service">Modelos &amp; Servicios</string>
+    <string name="search_index_provider">Proveedor</string>
+    <string name="search_index_user_profile">Persona de usuario</string>
+    <string name="search_index_user_profile_edit">Editar persona de usuario</string>
+
+    <!-- ===== Skill screen SkillScreen ===== -->
+    <string name="skill_management">Gestión de habilidades</string>
+    <string name="skill_back_cd">Atrás</string>
+    <string name="skill_import_cd">Importar .skill.json</string>
+    <string name="skill_intro">Las habilidades son herramientas a las que el LLM puede recurrir.</string>
+    <string name="skill_no_skill_title">Aún no hay habilidades</string>
+    <string name="skill_no_skill_subtitle">Dile a la IA "crea una habilidad XX para mí", o toca + en la parte inferior derecha para importar un archivo</string>
+    <string name="skill_import_result">Importar resultado</string>
+    <string name="skill_got_it">Entiendo</string>
+    <string name="skill_importing">Importador</string>
+    <string name="skill_importing_detail">Leyendo y analizando documento...</string>
+    <string name="skill_open_picker_failed">No se puede abrir el selector de archivos: %1$s</string>
+    <string name="skill_imported">Importado: %1$s</string>
+    <string name="skill_recipe_export_cd">Exportar paquete</string>
+    <string name="skill_recipe_imported">Paquete importado: %1$d habilidades</string>
+    <string name="skill_recipe_empty">No hay habilidades propias para exportar</string>
+    <string name="skill_restore_default">Restaurar predeterminado</string>
+    <string name="skill_restored">Se restauraron los valores de %1$s</string>
+    <string name="skill_import_failed">No se pudo guardar: %1$s</string>
+    <string name="skill_import_error">Error de importación: %1$s</string>
+    <string name="skill_operation_failed">Operación fallida: %1$s</string>
+    <string name="skill_unnamed">(Sin nombre)</string>
+    <string name="skill_enabled">Activado</string>
+    <string name="skill_disabled">Desactivado</string>
+    <string name="skill_built_in">Incorporado</string>
+    <string name="skill_built_in_seed">Incorporado (semilla)</string>
+    <string name="skill_custom">Costumbre</string>
+    <string name="skill_detail_cd">Detalles</string>
+    <string name="skill_parameters_schema">Esquema de parámetros</string>
+    <string name="skill_use_cases">Casos de uso</string>
+    <string name="skill_label_category">Categoría</string>
+    <string name="skill_label_implementation">Implementación</string>
+    <string name="skill_label_source">Fuente</string>
+    <string name="skill_close">Cerca</string>
+    <string name="skill_row_cd">%1$s, %2$s, toque para ver detalles</string>
+    <string name="skill_use_case_read_file">Cuando necesite leer notas, configuraciones o archivos en caché en la aplicación, el LLM lo llamará automáticamente.</string>
+    <string name="skill_use_case_write_file">Cuando necesite guardar notas, generar documentos o conservar datos, el LLM lo llamará automáticamente.</string>
+    <string name="skill_use_case_http_get">Cuando necesite solicitar API externas (por ejemplo, clima, tipos de cambio), el LLM lo llamará automáticamente.</string>
+    <string name="skill_use_case_http_post">Cuando necesite enviar datos a servicios externos (por ejemplo, enviar un webhook), el LLM lo llamará automáticamente.</string>
+    <string name="skill_use_case_web_search">Cuando pregunte sobre información en tiempo real (noticias, datos de mercado, últimas actualizaciones), el LLM buscará en la web automáticamente.</string>
+    <string name="skill_use_case_web_fetch">Al proporcionar un enlace web, el LLM obtiene el texto de la página; los resultados largos se conservan completos y pueden leerse por páginas.</string>
+    <string name="skill_use_case_knowledge_search">Cuando su pregunta involucra documentos de la base de conocimientos, el LLM buscará en la base de conocimientos en lugar de adivinar.</string>
+    <string name="skill_use_case_arxiv_search">Cuando pregunte sobre artículos académicos o direcciones de investigación, el LLM buscará en el repositorio de preimpresiones de arXiv.</string>
+    <string name="skill_use_case_install_skill">Cuando describe una nueva necesidad de capacidad (por ejemplo, \"crear una habilidad para verificar los tipos de cambio\"), el LLM generará e instalará una nueva habilidad automáticamente.</string>
+    <!-- ===== Assistant detail: regex rules ===== -->
+    <string name="assistant_detail_regex_title">Reglas de reemplazo de expresiones regulares</string>
+    <string name="assistant_detail_regex_desc">Aplicar reemplazos de expresiones regulares en mensajes de usuario/asistente (reemplazo de nombre de función, filtrado de palabras confidenciales, normalización de formato, etc.)</string>
+    <string name="assistant_detail_regex_add">Agregar regla</string>
+    <string name="assistant_detail_regex_empty">Aún no hay reglas.</string>
+    <string name="assistant_detail_regex_edit_title">Editar regla</string>
+    <string name="assistant_detail_regex_name_label">Nombre de la regla</string>
+    <string name="assistant_detail_regex_name_hint">p.ej.</string>
+    <string name="assistant_detail_regex_find_label">encontrar expresiones regulares</string>
+    <string name="assistant_detail_regex_find_hint">p.ej.</string>
+    <string name="assistant_detail_regex_replace_label">Cuerda de repuesto</string>
+    <string name="assistant_detail_regex_replace_hint">p.ej.</string>
+    <string name="assistant_detail_regex_scope_label">Alcance</string>
+    <string name="assistant_detail_regex_scope_user">Solo mensajes de usuario</string>
+    <string name="assistant_detail_regex_scope_assistant">Solo mensajes del asistente</string>
+    <string name="assistant_detail_regex_scope_both">Ambos (usuario + asistente)</string>
+    <string name="assistant_detail_regex_visual_only">Solo reemplazo de pantalla (no afecta la entrada LLM)</string>
+    <string name="assistant_detail_regex_enabled">Activado</string>
+    <string name="assistant_detail_regex_delete_cd">Eliminar regla</string>
+    <string name="assistant_detail_regex_invalid">Sintaxis de expresiones regulares no válida</string>
+
+    <!-- ===== QR code share/scan ===== -->
+    <string name="qr_share_title">Compartir código QR del proveedor</string>
+    <string name="qr_share_cd">Código QR de configuración del proveedor</string>
+    <string name="qr_share_warning">Este código QR contiene la clave API en texto sin formato.</string>
+    <string name="qr_share_btn">Compartir código QR</string>
+    <string name="qr_scan_title">Escanear código QR</string>
+    <string name="qr_scan_pick_image">Elija una imagen de código QR de la galería</string>
+    <string name="qr_scan_pick_button">Escoger imagen</string>
+    <string name="qr_scan_scanning">Reconociendo…</string>
+    <string name="qr_scan_failed">No se pudo reconocer el código QR.</string>
+    <string name="qr_scan_btn">Escanea el código QR para importar</string>
+    <string name="qr_import_success">Proveedor importado: %1$s</string>
+    <string name="qr_import_invalid">Formato de código QR no válido;</string>
+
+    <!-- ===== Stats screen ===== -->
+    <string name="stats_unknown_model">Modelo desconocido</string>
+    <string name="stats_default_assistant">Asistente predeterminado</string>
+    <string name="stats_deleted_session">Sesión eliminada</string>
+
+    <!-- ===== Assistant detail pages AssistantDetailPages ===== -->
+
+    <!-- ===== Memory screen MemoryScreen ===== -->
+    <!-- v1.98: Experience library -->
+
+    <!-- ===== Settings screen SettingsScreen ===== -->
+
+    <!-- v1.97 gap8: Tools group (standalone translate page entry) -->
+
+    <!-- ===== Search screen SearchScreen ===== -->
+
+    <!-- ===== Skill screen SkillScreen ===== -->
+    <!-- ===== Assistant detail: regex rules ===== -->
+
+    <!-- ===== QR code share/scan ===== -->
+
+    <!-- ===== Stats screen ===== -->
+
+    <!-- ===== P1-6: OAuth login (ProviderEditPage) ===== -->
+    <string name="oauth_login">Iniciar sesión OAuth</string>
+    <string name="oauth_login_success">Inicio de sesión de OAuth exitoso</string>
+    <string name="oauth_login_failed">Error al iniciar sesión en OAuth: %1$s</string>
+    <string name="oauth_device_code_prompt">Visite %1$s e ingrese el código: %2$s</string>
+    <string name="oauth_polling">Esperando autorización...</string>
+    <string name="oauth_open_verification_uri">Abrir enlace</string>
+
+    <!-- ===== P2-11: OAuth credential isolation (revoke / auto refresh) ===== -->
+    <string name="oauth_revoke">Revocar acceso</string>
+    <string name="oauth_revoke_confirm">¿Confirmar revocar el acceso OAuth para este proveedor?</string>
+    <string name="oauth_revoke_success">Acceso revocado</string>
+    <string name="oauth_token_expired">La autorización expiró, inicie sesión nuevamente</string>
+    <string name="oauth_token_refreshed">Autorización actualizada automáticamente</string>
+    <string name="oauth_stored">Autorización almacenada</string>
+
+    <!-- ===== P1-4: Tablet adaptation (responsive layout) ===== -->
+    <string name="settings_adaptive_layout">Diseño adaptable</string>
+
+    <!-- ===== P2-2: Upstream model diff sheet (ModelDiffSheet) ===== -->
+    <string name="model_diff_title">Diferencia de modelo ascendente</string>
+    <string name="model_diff_new">Upstream Nuevo (%1$d)</string>
+    <string name="model_diff_removed">Eliminado (%1$d)</string>
+    <string name="model_diff_unchanged">Sin cambios (%1$d)</string>
+    <string name="model_diff_add_all">Agregar todo nuevo</string>
+    <string name="model_diff_remove_all">Eliminar todo lo eliminado</string>
+    <string name="model_diff_kept_badge">Eliminado (Conservado)</string>
+    <string name="model_diff_apply">Aplicar Seleccionado</string>
+    <string name="model_diff_empty_new">Sin nuevos modelos</string>
+    <string name="model_diff_empty_removed">No hay modelos eliminados</string>
+
+    <!-- ===== P2-3: Ollama vision/tools capability inference ===== -->
+    <string name="ollama_vision_inferred">Visión (inferida)</string>
+    <string name="ollama_tools_inferred">Uso de herramientas (inferido)</string>
+    <!-- ===== P2-1: Provider collision detection (ProviderSection warning card) ===== -->
+    <string name="provider_collision_warning">Se encontraron %1$d configuraciones de proveedor potencialmente duplicadas</string>
+
+    <!-- ===== P2-4: Audit log (AuditLogPage) ===== -->
+    <string name="settings_audit_log">Registro de auditoría</string>
+    <string name="audit_log_clear">Borrar registro</string>
+    <string name="audit_log_empty">Sin registros de registro</string>
+    <string name="audit_log_clear_confirm">¿Confirmar que se borraron todos los registros de auditoría?</string>
+    <string name="audit_log_category_all">Todo</string>
+    <string name="audit_log_category_api">Llamada API</string>
+    <string name="audit_log_category_user">Acción del usuario</string>
+    <string name="audit_log_category_auth">Autenticación</string>
+    <string name="audit_log_category_system">Sistema</string>
+    <string name="audit_log_search_hint">Acción de búsqueda/objetivo/detalle</string>
+    <string name="audit_log_clear_search">Borrar búsqueda</string>
+    <string name="audit_log_no_match">No hay registros coincidentes</string>
+    <string name="audit_log_result_count">Mostrando %1$d de %2$d</string>
+    <string name="audit_log_export">Exportar JSON</string>
+    <string name="audit_log_export_empty">No hay registros para exportar</string>
+    <string name="audit_log_export_subject">registros de auditoría de muse: %1$d entradas</string>
+    <string name="audit_log_export_chooser">Compartir registros de auditoría</string>
+    <string name="audit_log_export_failed">Error al exportar: no se puede obtener el URI del archivo</string>
+
+    <!-- ===== P2-8: Video Generation (SettingsScreen entry + VideoGenerationPage) ===== -->
+    <!-- Video generation default params entry (provider/model/duration/resolution) -->
+
+    <!-- ===== v1.133: 5 standalone sub-page entries split out from SettingsModelPage ===== -->
+    <string name="settings_screen_web_search">Búsqueda web</string>
+    <string name="settings_screen_web_search_desc">Motor de búsqueda/clave API/punto final</string>
+    <string name="settings_screen_channel_desc">Conecta mensajes con Feishu / QQ / WeChat y otras plataformas</string>
+    <string name="settings_screen_asr">Reconocimiento de voz</string>
+    <string name="settings_screen_asr_desc">Voz a texto (Sistema / DashScope / Paso)</string>
+    <string name="settings_screen_mcp">Servidores MCP</string>
+    <string name="settings_screen_mcp_desc">Servidores de herramientas de protocolo de contexto modelo</string>
+    <string name="settings_screen_assistant_resources">Recursos del asistente</string>
+    <string name="settings_screen_assistant_resources_desc">Favoritos / Libro de historia / Mensajes rápidos / Inyección rápida / Habilidades</string>
+    <string name="settings_assistant_resources_title">Recursos del asistente</string>
+    <string name="video_gen_title">Generación de vídeo</string>
+    <string name="video_gen_prompt">Describe el vídeo que deseas generar.</string>
+    <string name="video_gen_model">Modelo</string>
+    <string name="video_gen_duration">Duración</string>
+    <string name="video_gen_resolution">Resolución</string>
+    <string name="video_gen_reference_image">Imagen de referencia (opcional)</string>
+    <string name="video_gen_select_image">Elige entre locales</string>
+    <string name="video_gen_clear_image">Borrar imagen de referencia</string>
+    <string name="video_gen_image_compressed">Comprimido: %1$s</string>
+    <string name="video_gen_image_load_failed">No se pudo cargar la imagen: %1$s</string>
+    <string name="video_gen_submit">Generar vídeo</string>
+    <string name="video_gen_pending">Pendiente</string>
+    <string name="video_gen_processing">Generando...</string>
+    <string name="video_gen_success">Éxito</string>
+    <string name="video_gen_failed">Error: %1$s</string>
+    <string name="video_gen_timeout">Se acabó el tiempo</string>
+    <string name="video_gen_open_video">Abrir vídeo</string>
+    <string name="video_gen_no_app">No hay ninguna aplicación disponible para reproducir vídeo.</string>
+    <string name="video_gen_apikey_required">Se requiere clave API</string>
+    <string name="video_gen_provider">Proveedor</string>
+    <string name="video_gen_no_provider">No hay ningún proveedor disponible configurado.</string>
+
+    <!-- ===== P2-5: SiliconFlow free model fallback (PresetProviders / ProviderEditPage) ===== -->
+    <string name="preset_siliconflow">SiliconFlow</string>
+    <string name="preset_siliconflow_free">Modelos libres de SiliconFlow</string>
+    <string name="preset_siliconflow_free_desc">Modelos gratuitos de código abierto de SiliconFlow</string>
+    <string name="siliconflow_fill_free_models">Llenar modelos gratuitos</string>
+    <string name="siliconflow_fill_free_models_confirm">Reemplazar los modelos actuales con modelos gratuitos de SiliconFlow, ¿confirmar?</string>
+    <string name="memory_legacy_reset_hint">Los datos de memoria antiguos no eran compatibles y se han restablecido; se conservó una copia de seguridad</string>
+    <string name="free_model_service_unavailable">El servicio de cuota gratuita no está disponible. Añade una API Key o inténtalo más tarde.</string>
+
+    <!-- ===== P2-10: Provider plugin management (ProviderPluginPage) ===== -->
+    <string name="provider_plugins_title">Administrador de complementos</string>
+    <string name="muse_plugins_external">Complementos externos</string>
+    <string name="muse_plugins_manage">Gestión de plugins</string>
+    <string name="muse_plugins_imported">Paquete de plugin instalado</string>
+    <string name="muse_plugins_empty_hint">Sin plugins externos. Toca + para importar un paquete .muse-plugin o ZIP.</string>
+    <string name="muse_plugins_import_hint">Paquete de plugin instalado. Géstionelo en Complementos externos.</string>
+    <string name="provider_plugins_empty">Sin complementos</string>
+    <string name="provider_plugins_import">Complemento de importación</string>
+    <string name="provider_plugins_delete">Eliminar complemento</string>
+    <string name="provider_plugins_convert">Convertir a proveedor</string>
+    <string name="provider_plugins_import_failed">Error de importación: %1$s</string>
+    <string name="provider_plugins_import_success">Importación exitosa</string>
+    <string name="provider_plugins_delete_confirm">¿Confirmar eliminar este complemento?</string>
+    <string name="provider_plugins_delete_confirm_named">¿Eliminar el complemento «%1$s»? Ya no estará disponible. Vuelve a importar el paquete para restaurarlo.</string>
+    <string name="muse_plugins_publisher_fingerprint">Editor: %1$s · Huella de clave: %2$s</string>
+    <string name="muse_plugins_developer_info">Información de desarrollo</string>
+
+    <!-- ===== P2-7: Workspace (WorkspaceScreen + tool descriptions) ===== -->
+    <string name="workspace_title">Espacio de trabajo</string>
+    <string name="workspace_desc">Gestión de archivos locales y almacenamiento temporal.</string>
+    <string name="workspace_empty">El espacio de trabajo está vacío</string>
+    <string name="workspace_new_file">Nuevo archivo</string>
+    <string name="workspace_new_folder">Nueva carpeta</string>
+    <string name="workspace_file_name">Nombre del archivo</string>
+    <string name="workspace_delete_confirm">¿Confirmar la eliminación de \"%1$s\"?</string>
+    <string name="workspace_rename">Rebautizar</string>
+    <string name="workspace_read_only_too_large">Archivo demasiado grande para obtener una vista previa (límite de 1 MB)</string>
+    <string name="workspace_path_copied">Ruta copiada</string>
+
+    <string name="browser_address_bar">Ingrese la URL o busque</string>
+    <string name="browser_run_js">Ejecutar JavaScript</string>
+    <string name="browser_back">Atrás</string>
+    <string name="browser_forward">Adelante</string>
+    <string name="browser_refresh">Refrescar</string>
+    <string name="browser_close">Cerca</string>
+
+    <!-- ===== P2-9: Voice Cloning (VoiceCloningPage + MediaSettingsPage entry) ===== -->
+    <string name="voice_cloning_title">Clonación de voz</string>
+    <string name="voice_cloning_provider">Proveedor</string>
+    <string name="voice_cloning_api_key">Clave API</string>
+    <string name="voice_cloning_new_voice">Clonar nueva voz</string>
+    <string name="voice_cloning_voice_name">Nombre de voz</string>
+    <string name="voice_cloning_select_audio">Seleccionar audio de muestra</string>
+    <string name="voice_cloning_submit">Iniciar clonación</string>
+    <string name="voice_cloning_list_empty">Sin voces clonadas</string>
+    <string name="voice_cloning_list_title">Voces clonadas</string>
+    <string name="voice_cloning_delete_confirm">¿Confirmar eliminar esta voz clonada?</string>
+    <string name="voice_cloning_success">Éxito de la clonación</string>
+    <string name="voice_cloning_failed">Error de clonación: %1$s</string>
+    <string name="voice_cloning_audio_required">Seleccione primero el audio de muestra</string>
+
+    <!-- ===== P2-13: Desktop adaptation (ChromeOS / Android Desktop) ===== -->
+    <!-- Shortcut descriptions (shown in settings/help pages) -->
+    <string name="desktop_shortcuts_send">Ingresar: Enviar</string>
+    <string name="desktop_shortcuts_newline">Mayús+Entrar: Nueva línea</string>
+    <string name="desktop_shortcuts_search">Ctrl+K: Buscar</string>
+    <string name="desktop_shortcuts_new_chat">Ctrl+N: Nuevo chat</string>
+    <string name="desktop_shortcuts_settings">Ctrl+,: Configuración</string>
+    <string name="desktop_shortcuts_copy_reply">Ctrl+Mayús+C: Copiar respuesta</string>
+    <string name="desktop_shortcuts_close">Esc: Cerrar</string>
+    <!-- Right-click context menu items -->
+    <string name="desktop_context_copy">Copiar</string>
+    <string name="desktop_context_regenerate">Regenerado</string>
+    <string name="desktop_context_delete">Borrar</string>
+    <string name="desktop_context_share">Compartir</string>
+
+    <!-- P2-12 Rich Text Input -->
+    <string name="settings_rich_input">Entrada de texto enriquecido</string>
+    <string name="settings_rich_input_desc">Mostrar la barra de herramientas de formato Markdown encima del cuadro de entrada</string>
+    <string name="rich_input_format">Formato</string>
+    <string name="rich_input_bold">Atrevido</string>
+    <string name="rich_input_italic">Itálico</string>
+    <string name="rich_input_inline_code">Código en línea</string>
+    <string name="rich_input_code_block">Bloque de código</string>
+    <string name="rich_input_quote">Cita</string>
+    <string name="rich_input_ulist">Lista desordenada</string>
+    <string name="rich_input_olist">Lista ordenada</string>
+    <string name="rich_input_link">Enlace</string>
+    <string name="rich_input_link_text">Texto del enlace</string>
+    <string name="rich_input_link_url">URL del enlace</string>
+    <string name="rich_input_link_insert">Insertar enlace</string>
+    <string name="chat_compressing_banner">Compresión del historial…</string>
+    <string name="chat_updating_memory_banner">Actualizando memoria…</string>
+    <string name="chat_draft_restored">Borrador restaurado</string>
+    <string name="chat_loading_more_history">Cargando más historial…</string>
+    <string name="chat_performance_indicator">Mostrando %1$d de %2$d</string>
+    <string name="chat_video_generating">Generando video, puede tardar decenas de segundos…</string>
+    <string name="ocr_processing_hint">Reconociendo texto de la imagen…</string>
+    <string name="search_searching">Buscando…</string>
+    <string name="settings_screen_quick_notes">Notas rápidas</string>
+    <string name="settings_screen_quick_notes_cd">Notas rápidas: anota ideas, toca para abrir</string>
+    <string name="settings_screen_quick_notes_desc">Anota ideas, con categorías/recordatorios/cifrado</string>
+    <string name="settings_vision_manual_selected">Seleccionar manualmente</string>
+    <string name="settings_vision_probe_button">Probar el modelo de visión seleccionado</string>
+    <string name="settings_vision_probe_desc">Envía una imagen de prueba integrada al modelo de visión seleccionado para verificar que admite entrada visual.</string>
+    <string name="settings_vision_probe_disabled">Activa Asistente de visión y selecciona primero un modelo de visión.</string>
+    <string name="settings_vision_probe_failed">Error de prueba: %1$s</string>
+    <string name="settings_vision_probe_no_model">Selecciona primero un modelo de visión.</string>
+    <string name="settings_vision_probe_running">Probando…</string>
+    <string name="settings_vision_probe_section">Prueba de sonda</string>
+    <string name="settings_vision_probe_success">Prueba correcta: el modelo de visión devolvió una descripción de %1$d caracteres.</string>
+    <string name="settings_vision_show_all_models">Mostrar todos los modelos</string>
+    <string name="settings_vision_show_all_models_subtitle">Modo avanzado del relay: muestra todos los modelos y permite elegir manualmente uno no detectado</string>
+    <string name="skill_delete">Eliminar</string>
+    <string name="skill_delete_confirm_message">¿Eliminar «%1$s»? Esta acción no se puede deshacer.</string>
+    <string name="skill_delete_confirm_title">Confirmar eliminación</string>
+    <string name="skill_delete_failed_ui">Error al eliminar: %1$s</string>
+    <string name="tool_resume_starting">Reanudando llamada de herramienta interrumpida…</string>
+    <string name="tool_resume_step">Ejecutando %1$s (%2$d/%3$d)…</string>
+    <string name="tts_not_ready">TTS se está inicializando, inténtalo más tarde</string>
+    <string name="chat_jump_to_unread">Ir al primer no leído · %1$d</string>
+    <string name="chat_list_reorder">Arrastrar para reordenar</string>
+    <!-- 前端修复 (i18n-3.x): 设置页搜索索引 SettingsEntry title i18n(临时复制中文,后续补译) -->
+    <string name="settings_screen_entry_tts_playback">Reproducción de voz TTS</string>
+    <string name="settings_screen_entry_api_key">API Key</string>
+    <string name="settings_screen_entry_ocr">Reconocimiento de texto OCR</string>
+    <string name="settings_screen_entry_archived">Chats archivados</string>
+    <string name="settings_screen_entry_font_size">Tamaño de fuente</string>
+    <string name="settings_screen_entry_theme_mode">Modo de tema</string>
+    <string name="settings_screen_entry_scheduled_theme">Tema programado</string>
+    <string name="settings_screen_entry_enter_send">Enviar con Enter</string>
+    <string name="settings_screen_entry_auto_scroll">Desplazamiento automático</string>
+    <string name="settings_screen_entry_timestamps">Marcas de tiempo</string>
+    <string name="settings_screen_entry_tts_speed">Velocidad TTS</string>
+    <string name="settings_screen_entry_memory_toggle">Interruptor de memoria</string>
+    <string name="settings_screen_entry_proxy_switch">Interruptor de proxy</string>
+    <string name="settings_screen_entry_rag_model">Modelo de recuperación</string>
+    <string name="settings_screen_entry_chunking">Estrategia de fragmentación</string>
+    <string name="settings_screen_entry_tool_approval">Modo de aprobación de herramientas</string>
+    <string name="settings_screen_entry_collab">Asistente colaborativo</string>
+    <string name="settings_screen_archived_desc">Ver y restaurar conversaciones archivadas</string>
+    <string name="settings_screen_share">Compartir</string>
+    <string name="settings_share_page_title">Compartir</string>
+    <string name="settings_search_result_count">%1$d resultados encontrados</string>
+    <string name="settings_screen_miniphone_desc">Versión inicial de una función experimental</string>
+    <string name="model_diff_clear_add">Limpiar modelos nuevos</string>
+    <string name="model_diff_clear_remove">Limpiar modelos eliminados</string>
+    <!-- v1.0.85: release localization -->
+    <string name="workspace_import_file">Importar desde el gestor de archivos</string>
+    <string name="workspace_import_success">Importados %1$d</string>
+    <string name="workspace_import_failed">Error al importar el archivo: %1$s</string>
+    <string name="chat_fork_success">Se ha creado una nueva sesión a partir de la conversación actual</string>
+    <string name="chat_list_archived_empty">No hay sesiones archivadas</string>
+    <string name="chat_list_archived_entry">Archivado (%1$d)</string>
+    <string name="chat_list_archived_restore">Restaurar</string>
+    <string name="chat_list_archived_toast">Se ha archivado. Puedes restaurarlo en \"Archivado\".</string>
+    <string name="chat_list_edit">Editar</string>
+    <string name="chat_list_edit_archive">Archivar</string>
+    <string name="chat_list_edit_delete">Eliminar</string>
+    <string name="chat_list_edit_done">%1$d elementos procesados</string>
+    <string name="chat_list_edit_exit">Salir</string>
+    <string name="chat_list_edit_select_all">Seleccionar todo</string>
+    <string name="chat_list_restored_toast">Restaurado</string>
+    <string name="greeting_afternoon">Buenas tardes</string>
+    <string name="greeting_days_birthday">El cumpleaños es en %1$d días</string>
+    <string name="greeting_days_event">En %1$d días: %2$s — %3$s</string>
+    <string name="greeting_evening">Buenas noches</string>
+    <string name="greeting_late_night">Es muy tarde</string>
+    <string name="greeting_memory_0">%1$s aún no te conoce bien</string>
+    <string name="greeting_memory_few">%1$s te está conociendo poco a poco</string>
+    <string name="greeting_memory_huge">%1$s te entiende mejor que nadie y recuerda %2$d recuerdos</string>
+    <string name="greeting_memory_many">Tú y %1$s ya sois muy cercanos</string>
+    <string name="greeting_memory_max">%1$s habla de todo contigo</string>
+    <string name="greeting_memory_mid">%1$s ha recordado %2$d recuerdos y empieza a familiarizarse</string>
+    <string name="greeting_morning">Buenos días</string>
+    <string name="greeting_noon">Buen mediodía</string>
+    <string name="greeting_today_birthday">Hoy es el cumpleaños</string>
+    <string name="greeting_tomorrow_birthday">Mañana es el cumpleaños</string>
+    <string name="greeting_tomorrow_event">%1$s mañana: %2$s</string>
+    <string name="muse_plugins_confirmed">Plugin confirmado y activado</string>
+    <string name="muse_plugins_draft">Pendiente de confirmación (no se ejecutará)</string>
+    <string name="muse_plugins_draft_saved">Guardado como borrador deshabilitado</string>
+    <string name="muse_plugins_install_confirm_action">Confirmar instalación y activar</string>
+    <string name="muse_plugins_install_confirm_capabilities">Capacidades declaradas: %1$s</string>
+    <string name="muse_plugins_install_confirm_code">Punto de entrada %1$d bytes · %2$d archivos adicionales · SHA-256 de entrada: %3$s</string>
+    <string name="muse_plugins_install_confirm_summary">Versión %1$s · Autor %2$s · El código externo se ejecutará en una caja de arena JS restringida</string>
+    <string name="muse_plugins_install_confirm_title">Confirmar instalación: %1$s</string>
+    <string name="muse_plugins_install_confirm_tools">Proporciona herramientas: %1$s</string>
+    <string name="muse_plugins_install_confirm_warning">Código externo sin firmar. No accederá al navegador ni a la red; solo se instalará y activará tras tu confirmación.</string>
+    <string name="muse_plugins_install_save_draft">Solo guardar un borrador deshabilitado</string>
+    <string name="muse_plugins_install_trust_publisher_action">Confiar en el editor e instalar</string>
+    <string name="muse_plugins_install_trusted_warning">La firma es válida y el editor es de confianza en este dispositivo.</string>
+    <string name="muse_plugins_install_unsigned_warning">El código externo sin firmar solo puede guardarse como borrador deshabilitado; no se puede instalar ni ejecutar.</string>
+    <string name="muse_plugins_install_untrusted_warning">La firma se ha verificado pero el editor es desconocido (%1$s). Verifica la huella de la clave pública %2$s; solo se instalará y activará cuando confíes en él.</string>
+    <string name="muse_plugins_market_awaiting_confirm">Esperando confirmación</string>
+    <string name="muse_plugins_market_configure">Ajustes del catálogo</string>
+    <string name="muse_plugins_market_downgrade_blocked">Ya está instalada una versión superior %1$s</string>
+    <string name="muse_plugins_market_downloading">Descargando…</string>
+    <string name="muse_plugins_market_empty">Aún no hay plugins en el catálogo</string>
+    <string name="muse_plugins_market_entry_capabilities">Capacidades: %1$s</string>
+    <string name="muse_plugins_market_entry_meta">Versión %1$s · Editor %2$s</string>
+    <string name="muse_plugins_market_error_hint">Error al cargar el catálogo. Reinténtalo o revisa los ajustes del catálogo.</string>
+    <string name="muse_plugins_market_install_action">Instalación con un clic</string>
+    <string name="muse_plugins_market_install_failed">Error de instalación: %1$s</string>
+    <string name="muse_plugins_market_installed">Instalado</string>
+    <string name="muse_plugins_market_installing">Instalando…</string>
+    <string name="muse_plugins_market_invalid_url">La dirección del catálogo debe comenzar con https://</string>
+    <string name="muse_plugins_market_key_id_label">keyId de raíz de confianza personalizado</string>
+    <string name="muse_plugins_market_not_configured">Catálogo no configurado</string>
+    <string name="muse_plugins_market_not_configured_hint">Tras configurar la dirección del catálogo firmado y la clave pública de la raíz de confianza, podrás navegar e instalar plugins con un clic aquí.</string>
+    <string name="muse_plugins_market_preparing">Verificando y preparando la instalación…</string>
+    <string name="muse_plugins_market_public_key_label">Clave pública de la raíz de confianza (Base64)</string>
+    <string name="muse_plugins_market_refresh">Actualizar catálogo</string>
+    <string name="muse_plugins_market_settings_hint">El mercado de plugins usa por defecto el catálogo oficial integrado. Solo es necesario rellenar un catálogo personalizado y una raíz de confianza para pruebas o emergencias.</string>
+    <string name="muse_plugins_market_settings_saved">Ajustes del catálogo de plugins guardados</string>
+    <string name="muse_plugins_market_settings_title">Ajustes del catálogo de plugins</string>
+    <string name="muse_plugins_market_title">Mercado de plugins</string>
+    <string name="muse_plugins_tab_installed">Instalados</string>
+    <string name="muse_plugins_market_unsigned_package">Los paquetes de plugins del catálogo deben estar firmados por el editor antes de poder instalarse.</string>
+    <string name="muse_plugins_market_update_action">Actualizar a esta versión</string>
+    <string name="muse_plugins_market_url_label">Dirección del catálogo personalizado (déjala vacía para usar el catálogo oficial)</string>
+    <string name="muse_plugins_none">Ninguno</string>
+    <string name="muse_plugins_review_failed">Revisión de seguridad fallida: %1$s</string>
+    <string name="muse_plugins_review_tools">Herramientas: %1$s</string>
+    <string name="muse_plugins_rollback_action">Revertir a %1$s</string>
+    <string name="muse_plugins_rollback_confirm">Se revertirá %1$s a %2$s. El sistema volverá a verificar la firma y el resumen de contenido de esa versión; si la verificación falla, la versión actual no cambiará.</string>
+    <string name="muse_plugins_rollback_done">Se ha revertido a una versión anterior</string>
+    <string name="muse_plugins_rollback_title">Revertir a una versión anterior</string>
+    <string name="muse_plugins_security_rejected">El plugin no cumple con la política de seguridad de plugins externos</string>
+    <string name="muse_plugins_sign_enable_action">Firmar y activar</string>
+    <string name="muse_plugins_sign_enable_failed">Error al firmar y activar: %1$s</string>
+    <string name="muse_plugins_sign_enable_success">Plugin firmado y activado</string>
+    <string name="muse_plugins_sign_enable_summary">Nombre del plugin: %1$s · id: %2$s · Versión: %3$s</string>
+    <string name="muse_plugins_sign_enable_title">Firmar y activar plugin</string>
+    <string name="muse_plugins_sign_enable_tools">Lista de herramientas: %1$s</string>
+    <string name="muse_plugins_sign_enable_warning">Este código está firmado con la clave del autor local: tras firmarlo y activarlo, el asistente podrá llamar a estas herramientas. La primera vez que firmes, la clave pública del autor se añadirá a la raíz de confianza del dispositivo; a partir de entonces, los plugins firmados con la clave local serán todos de confianza. Revisa la lista de herramientas y el origen del código anteriores.</string>
+    <string name="muse_plugins_signature_invalid">Firma no válida</string>
+    <string name="muse_plugins_signature_status">Estado de la firma: %1$s</string>
+    <string name="muse_plugins_signature_trusted">Verificada y de confianza en este dispositivo</string>
+    <string name="muse_plugins_signature_unsigned">Sin firmar</string>
+    <string name="muse_plugins_signature_unsupported">Formato de firma no compatible</string>
+    <string name="muse_plugins_signature_untrusted">La firma es válida, pero el editor no es de confianza</string>
+    <string name="muse_plugins_trust_catalog_empty">Actualmente se usa la raíz de confianza oficial integrada; no hay raíces personalizadas.</string>
+    <string name="muse_plugins_trust_catalog_remove_action">Quitar</string>
+    <string name="muse_plugins_trust_catalog_removed">Se ha quitado la raíz de confianza del catálogo; la caché del mercado se ha limpiado</string>
+        <!-- B7-01: Plugin configuration contribution -->
+    <string name="muse_plugins_config">Configuración del plugin</string>
+    <string name="muse_plugins_open_panel">Abrir panel</string>
+    <string name="muse_plugins_config_save_success">Configuración guardada</string>
+    <string name="muse_plugins_config_load_failed">Error al cargar la configuración</string>
+    <string name="muse_plugins_trust_catalog_title">Raíz de confianza del catálogo</string>
+    <string name="muse_plugins_trust_publisher_fingerprint">Huella %1$s</string>
+    <string name="muse_plugins_trust_publishers_empty">Aún no has confiado en ningún editor. Al instalar un plugin de un editor desconocido se te pedirá que confirmes la confianza.</string>
+    <string name="muse_plugins_trust_publishers_title">Editores de confianza</string>
+    <string name="muse_plugins_trust_revoke_action">Revocar confianza</string>
+    <string name="muse_plugins_trust_revoke_confirm">Tras revocarla, los plugins instalados del editor %1$s se desactivarán automáticamente, y deberás volver a confiar explícitamente en él para reinstalarlos o actualizarlos.</string>
+    <string name="muse_plugins_trust_revoke_done">Se ha revocado la confianza en este editor; los plugins relacionados se han desactivado</string>
+    <string name="muse_plugins_trust_revoke_title">¿Revocar la confianza en el editor?</string>
+    <string name="muse_plugins_trust_title">Gestión de confianza</string>
+    <string name="muse_plugins_unknown_author">Desconocido</string>
+    <string name="muse_plugins_unsigned_draft_only">Sin firmar: solo puede guardarse como borrador deshabilitado</string>
+    <string name="settings_bubble_skin_plugin_disabled">Plugin deshabilitado; este skin no está disponible por ahora</string>
+    <string name="settings_bubble_skin_plugin_section">Skins de plugin</string>
+    <string name="settings_bubble_skin_plugin_source">Del plugin %1$s · v%2$s</string>
+    <string name="settings_bubble_skin_plugin_unavailable_fallback">El skin de plugin seleccionado no está disponible (plugin deshabilitado o desinstalado); se ha vuelto al skin predeterminado integrado</string>
+    <string name="connector_error_activity_unavailable">Activity no disponible</string>
+    <string name="channel_conversation_role_assistant">Asistente</string>
+    <string name="channel_conversation_role_user">Contacto</string>
+    <string name="channel_conversation_turn_line">%1$s: %2$s</string>
+    <!-- v2.2.1: proveedor de accesibilidad independiente (mejora opcional) -->
+    <string name="permission_a11y_provider_title">Proveedor de accesibilidad independiente</string>
+    <string name="permission_a11y_provider_installed">Versión independiente instalada (sobrevive a las actualizaciones)</string>
+    <string name="permission_a11y_provider_not_installed">No instalada (opcional)</string>
+    <string name="permission_a11y_provider_desc">Instalar la versión independiente mantiene el permiso de accesibilidad al actualizar o reinstalar la app principal. Opcional.</string>
+    <string name="permission_a11y_provider_install_btn">Instalar versión independiente</string>
+    <string name="permission_a11y_provider_install_failed">No se pudo abrir el instalador</string>
+    <!-- v2.2.1: vinculación por QR de WeChat — errores de red / renovación automática -->
+    <string name="channel_weclaw_status_unstable">Error de red, reintentando…</string>
+    <string name="channel_weclaw_status_refreshed">El código QR caducó y se renovó; vuelve a escanearlo</string>
+</resources>

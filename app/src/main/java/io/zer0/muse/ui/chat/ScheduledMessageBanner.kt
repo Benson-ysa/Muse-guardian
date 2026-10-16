@@ -1,0 +1,88 @@
+package io.zer0.muse.ui.chat
+
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.unit.dp
+import io.zer0.muse.R
+import io.zer0.muse.data.schedule.PendingMessage
+import io.zer0.muse.ui.common.form.MuseTactileButton
+import io.zer0.muse.ui.common.icons.MuseIcons
+import io.zer0.muse.ui.theme.MuseDateFormats
+import io.zer0.muse.ui.theme.MuseMotion
+import io.zer0.muse.ui.theme.MuseShapes
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+/**
+ * Phase 3 3E: 定时消息横幅 — 在聊天页顶部显示 scheduled message 状态。
+ *
+ * @param pendingMessages 当前待发送的定时消息列表
+ * @param onCancel 取消某条定时消息的回调
+ */
+@Composable
+fun ScheduledMessageBanner(pendingMessages: List<PendingMessage>, onCancel: (String) -> Unit = {}, modifier: Modifier = Modifier) {
+    AnimatedVisibility(
+        visible = pendingMessages.isNotEmpty(),
+        enter = MuseMotion.verticalSlideFadeEnter(initialOffsetY = { -it }),
+        modifier = modifier,
+    ) {
+        Surface(
+            color = MaterialTheme.colorScheme.tertiaryContainer,
+            shape = MuseShapes.medium,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 4.dp),
+        ) {
+            pendingMessages.forEach { msg ->
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Icon(
+                        imageVector = MuseIcons.clock,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                        modifier = Modifier.size(18.dp),
+                    )
+                    Text(
+                        text = formatScheduledLabel(msg),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onTertiaryContainer,
+                        modifier = Modifier.weight(1f),
+                        maxLines = 1,
+                    )
+                    MuseTactileButton(
+                        icon = MuseIcons.x,
+                        onClick = { onCancel(msg.id) },
+                        contentDescription = stringResource(R.string.schedule_msg_cancel),
+                        tint = MaterialTheme.colorScheme.onTertiaryContainer,
+                        size = 48.dp,
+                        iconSize = 14.dp,
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun formatScheduledLabel(msg: PendingMessage): String {
+    val time = SimpleDateFormat(MuseDateFormats.TIME_SHORT, Locale.getDefault()).format(Date(msg.sendAtMillis))
+    val preview = msg.content.take(30).let { if (msg.content.length > 30) "$it..." else it }
+    return "Scheduled for $time: $preview"
+}

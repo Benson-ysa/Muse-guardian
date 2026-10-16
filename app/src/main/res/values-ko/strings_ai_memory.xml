@@ -1,0 +1,218 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    i18n review summary for ai / memory / transformer modules:
+    - ai module (standalone Gradle module): user-visible error messages are delivered
+      to UI via Result.Error/exceptions, but cannot reference app's R.string directly.
+      Each source file is annotated with // TODO i18n pending extraction; extraction
+      requires an error-code enum approach.
+    - memory module (standalone Gradle module): validation errors (MemoryConfig.validate)
+      and isZh time labels (Key Facts/Timeline etc.) are user-visible, but cross-module
+      and some labels participate in LLM output parsing contracts.
+      Each source file is annotated with // TODO i18n pending extraction.
+    - transformer module (inside app): per file review, all Chinese strings are LLM
+      prompt content (SYSTEM messages sent to LLM), logger messages, code comments, or
+      internal exception messages. No directly user-visible UI strings; kept as-is per
+      the "LLM prompts not extracted" rule.
+    This file currently has no string entries; it serves as a placeholder and review record.
+-->
+<resources>
+    <string name="memory_meta_hit_count">%1$d회 사용</string>
+    <string name="memory_menu_history">변경 기록</string>
+    <string name="memory_revision_title">변경 로그</string>
+    <string name="memory_revision_empty">아직 변경 기록이 없습니다</string>
+    <string name="memory_revision_revert">이 버전으로 되돌리기</string>
+    <string name="memory_revision_reverted">해당 버전으로 되돌렸습니다</string>
+    <string name="memory_revision_revert_failed">되돌리기 실패</string>
+    <string name="memory_meta_last_hit">최근 사용 %1$d일 전</string>
+    <!-- v4: memory importance related -->
+    <string name="memory_importance_normal">정상</string>
+    <string name="memory_importance_important">중요한</string>
+    <string name="memory_importance_critical">비판적인</string>
+    <string name="memory_importance_set_title">중요도 설정</string>
+    <string name="memory_importance_normal_desc">일일 취향, 잊어버리면 해롭지 않음</string>
+    <string name="memory_importance_important_desc">중간 위험, 실수로 인해 불편함 발생</string>
+    <string name="memory_importance_critical_desc">위험도 높음, 실수로 해를 끼칠 수 있음(잊지 마세요)</string>
+    <string name="memory_source_session">소스: 세션 %1$s</string>
+    <string name="memory_created_today">오늘 추가됨</string>
+    <string name="memory_created_yesterday">어제 추가됨</string>
+    <string name="memory_created_days_ago">%1$d일 전에 추가됨</string>
+    <string name="memory_sync_never">아직 컴파일되지 않은 메모리, 장기 기억에 없는 대화</string>
+    <string name="memory_sync_recent">마지막으로 컴파일된 %1$d분 전, 메모리가 동기화되었습니다.</string>
+    <string name="memory_sync_stale">마지막으로 컴파일된 %1$d 분 전, 최근 대화가 아직 메모리에 없을 수 있습니다.</string>
+    <string name="memory_screen_experience_category_general">일반</string>
+    <string name="memory_chart_type_distribution_cd">메모리 유형 분포 도넛 차트</string>
+    <string name="memory_chart_daily_trend_cd">일일 메모리 추세 차트</string>
+    <string name="memory_sync_set_importance_cd">중요도 설정</string>
+
+    <!-- v6: MemoryViewModel CRUD error messages -->
+    <string name="memory_delete_failed">삭제 실패: %1$s</string>
+    <string name="memory_edit_failed">편집 실패: %1$s</string>
+    <string name="memory_set_failed">설정 실패: %1$s</string>
+    <string name="memory_add_failed">추가 실패: %1$s</string>
+    <string name="memory_add_experience_failed">경험 추가 실패: %1$s</string>
+    <string name="memory_edit_experience_failed">환경 편집 실패: %1$s</string>
+    <string name="memory_delete_experience_failed">경험 삭제 실패: %1$s</string>
+
+    <!-- v6: Compile section display titles -->
+    <string name="memory_compile_section_facts">사실 요약</string>
+    <string name="memory_compile_section_today">오늘</string>
+    <string name="memory_compile_section_week">이번 주</string>
+    <string name="memory_compile_section_longterm">장기</string>
+
+    <!-- v6: Summary item title -->
+    <string name="memory_summary_title">세션 %1$s</string>
+
+    <!-- v6: Error trace labels -->
+    <string name="memory_error_trace_header">== 뮤즈 메모리 오류 ==</string>
+    <string name="memory_error_trace_time">시간:</string>
+    <string name="memory_error_trace_exception">예외:</string>
+    <string name="memory_error_trace_message">메시지:</string>
+    <string name="memory_error_trace_device">장치:</string>
+    <string name="memory_error_trace_stack_header">== 스택 추적 ==</string>
+
+    <!-- v8: memory scope related -->
+    <string name="memory_scope_all">모두</string>
+    <string name="memory_scope_main">메인 어시스턴트</string>
+    <string name="memory_scope_assistant">어시스턴트 메모리</string>
+    <string name="memory_scope_label">메모리 범위</string>
+
+    <!-- v1.0.52 P2-2: memory space related -->
+    <string name="memory_space_manage_title">메모리 공간</string>
+    <string name="memory_space_create">공간 만들기</string>
+    <string name="memory_space_create_title">새로운 메모리 공간</string>
+    <string name="memory_space_rename">이름 바꾸기</string>
+    <string name="memory_space_rename_title">메모리 공간 이름 바꾸기</string>
+    <string name="memory_space_delete">삭제</string>
+    <string name="memory_space_name_label">공간 이름</string>
+    <string name="memory_space_fact_count">%1$d 사실</string>
+    <string name="memory_space_entry">메모리 공간</string>
+
+    <!-- MemoryScreen.kt: view mode toggle / export / stats card -->
+    <string name="memory_stats_view_list">목록</string>
+    <string name="memory_stats_view_timeline">타임라인</string>
+    <string name="memory_stats_export_title">메모리 내보내기</string>
+    <string name="memory_stats_export_format_hint">내보내기 형식 선택:</string>
+    <string name="memory_stats_section_title">메모리 통계</string>
+    <string name="memory_stats_total">총</string>
+    <string name="memory_stats_importance_distribution">중요도 분포</string>
+    <string name="memory_stats_top_sessions">가장 활동적인 세션</string>
+    <string name="memory_stats_session_count">%1$d 항목</string>
+    <string name="memory_stats_trend_30_days">지난 30일 추세</string>
+    <!-- 前端修复 (i18n-3.x): 群聊记忆 Tab + 时间轴筛选 i18n(临时复制中文,后续补译) -->
+    <string name="memory_group_chat_empty">아직 그룹 채팅 메모리가 없습니다</string>
+    <string name="memory_group_chat_count">총 %1$d개</string>
+    <string name="memory_group_chat_empty_hint">그룹 채팅에서 어시스턴트가 답변할 때마다 여기에 요약 메모리가 생성됩니다.\n어시스턴트 말투가 이상해지면 여기에서 삭제하거나 비울 수 있습니다.</string>
+    <string name="memory_group_chat_clear_title">모든 그룹 채팅 메모리 비우기</string>
+    <string name="memory_group_chat_clear_content">모든 그룹 채팅 메모리를 비우시겠습니까? 어시스턴트가 더 이상 그룹 채팅 요약을 참조하지 않습니다.</string>
+    <string name="memory_group_chat_delete_cd">삭제</string>
+    <string name="memory_timeline_filter_all">전체</string>
+    <string name="memory_timeline_filter_fact">사실</string>
+    <string name="memory_timeline_filter_summary">요약</string>
+    <string name="memory_timeline_filter_milestone">이정표</string>
+    <string name="memory_tab_group_chat">그룹 채팅</string>
+    <string name="memory_tab_graph">기억 나무</string>
+    <string name="memory_graph_preview_title">기억 나무</string>
+    <string name="memory_graph_preview_hint">기억을 눌러 연결된 항목을 확인하세요</string>
+    <string name="memory_graph_preview_selected">집중됨: %1$s</string>
+    <string name="memory_graph_preview_node_muse">Muse</string>
+    <string name="memory_graph_preview_node_android">Android 개발</string>
+    <string name="memory_graph_preview_node_local_ai">로컬 AI</string>
+    <string name="memory_graph_preview_node_photo">사진</string>
+    <string name="memory_graph_preview_node_camera">Nikon Z50 II</string>
+    <string name="memory_graph_preview_node_goal">장기 목표</string>
+    <string name="memory_graph_preview_node_writing">글쓰기</string>
+    <string name="memory_graph_empty_title">기억 관계 데이터 없음</string>
+    <string name="memory_graph_empty_subtitle">대화에서 기억이 누적되면 관계가 표시됩니다</string>
+    <string name="memory_graph_node_type_label">유형: %1$s</string>
+    <string name="memory_graph_node_pinned">고정됨</string>
+    <string name="memory_graph_node_expired">만료됨</string>
+    <string name="memory_graph_node_related">%1$d개 관련</string>
+    <string name="memory_graph_load_failed">로드 실패</string>
+    <string name="memory_graph_category_preference">선호</string>
+    <string name="memory_graph_category_identity">신원</string>
+    <string name="memory_graph_category_event">이벤트</string>
+    <string name="memory_graph_category_relationship">관계</string>
+    <string name="memory_graph_category_goal">목표</string>
+    <string name="memory_graph_category_medical">건강</string>
+    <string name="memory_graph_category_general">사실</string>
+    <string name="memory_graph_relation_related_to">관련</string>
+    <string name="memory_graph_relation_causes">영향</string>
+    <string name="memory_graph_relation_explains">설명</string>
+    <string name="memory_graph_relation_part_of">일부</string>
+    <string name="memory_graph_relation_contradicts">모순</string>
+    <string name="memory_graph_relation_supports">지원</string>
+    <string name="memory_graph_edge_weight">강도: %1$d%%</string>
+    <string name="memory_graph_edge_confirm">관계 확인</string>
+    <string name="memory_graph_edge_delete">관계 삭제</string>
+    <string name="memory_delete_group_chat_failed">그룹 채팅 기억을 삭제하지 못했습니다: %1$s</string>
+    <string name="memory_clear_group_chat_failed">그룹 채팅 기억을 지우지 못했습니다: %1$s</string>
+    <string name="memory_dedup_button">중복 기억 통합</string>
+    <string name="memory_dedup_result">중복 기억 %1$s개를 통합했습니다</string>
+    <string name="memory_dedup_failed">기억 중복 제거에 실패했습니다</string>
+    <string name="memory_compile_done">기억 편집이 완료되었습니다</string>
+    <string name="memory_compile_failed">기억 편집에 실패했습니다. 모델 설정을 확인하고 다시 시도하세요</string>
+    <string name="memory_menu_cd">더 많은 작업</string>
+    <string name="memory_menu_pin">상단 고정</string>
+    <string name="memory_menu_unpin">상단 고정 해제</string>
+    <string name="memory_menu_importance">중요도 설정</string>
+    <string name="memory_menu_edit">편집</string>
+    <string name="memory_menu_delete">삭제</string>
+    <string name="memory_center_fact_count">개 사실</string>
+    <string name="memory_center_summary_count">요약 %1$d개</string>
+    <string name="memory_center_updated">업데이트 %1$s</string>
+    <string name="memory_center_empty_title">아직 기억이 없습니다</string>
+    <string name="memory_center_empty_subtitle">Muse와 계속 대화하거나 “이걸 기억해”라고 말해 보세요.</string>
+    <string name="memory_center_ready_subtitle">Muse가 현재 보관 중인 당신에 대한 사실입니다.</string>
+    <string name="memory_center_open_facts">사실 보관함 열기</string>
+    <string name="memory_center_tab_stream">기억 흐름</string>
+    <string name="memory_center_tab_constellation">기억 별자리</string>
+    <string name="memory_center_stream_title">최근에 기억한 내용</string>
+    <string name="memory_center_library_title">사실 보관함</string>
+    <string name="memory_center_constellation_hint">중요한 사실은 중심에 가깝게 표시됩니다. 관계를 정리하기 전에도 사실은 보입니다.</string>
+    <string name="memory_center_constellation_empty">표시할 사실 노드가 아직 없습니다. 사실을 추가한 뒤 다시 확인해 주세요.</string>
+    <string name="memory_center_filter_empty">현재 범위나 공간에 사실이 없습니다. 위 필터를 바꿔 보세요.</string>
+    <string name="memory_center_scope_all">전체</string>
+    <string name="memory_center_space_default">기본</string>
+    <string name="memory_center_scope_line">%1$s · %2$s</string>
+    <string name="memory_center_filter_title">필터</string>
+    <string name="memory_center_filter_scope">범위</string>
+    <string name="memory_center_filter_space">기억 공간</string>
+    <string name="memory_compile_running">기억 정리 중…</string>
+    <string name="memory_organize_action">기억 정리</string>
+    <string name="memory_organize_stage_prepare">준비 중</string>
+    <string name="memory_organize_stage_compile">요약 컴파일 중</string>
+    <string name="memory_organize_stage_dedup">중복 병합 중</string>
+    <string name="memory_organize_stage_complete">정리 완료, %1$d개 병합</string>
+    <string name="memory_organize_stage_no_duplicates">정리 완료, 병합할 중복 기억이 없습니다</string>
+    <string name="memory_organize_stage_failed">정리에 실패했습니다. 다시 시도해 주세요</string>
+    <string name="memory_center_stream_subtitle">발생 시간별로 정리: 대화에서 자동으로 쌓인 사실을 시간순으로 표시</string>
+    <string name="memory_center_facts_subtitle">항목별 관리: 검색·추가·편집·삭제 가능</string>
+    <string name="memory_center_filter_advanced">고급 필터</string>
+    <string name="memory_center_filter_importance">중요도</string>
+    <string name="memory_center_filter_importance_all">전체</string>
+    <string name="memory_center_filter_time">기간</string>
+    <string name="memory_center_filter_time_30">최근 30일</string>
+    <string name="memory_center_filter_time_7">최근 7일</string>
+    <string name="memory_center_filter_time_90">최근 90일</string>
+    <string name="memory_center_filter_time_all">전체 기간</string>
+    <string name="memory_contradictions_dismiss_cd">확인 후 지우기</string>
+    <string name="memory_contradictions_title">확인 대기 중인 모순 메모리</string>
+    <string name="memory_delete_confirm_title">메모리 삭제</string>
+    <string name="memory_fact_source_label">원본 대화</string>
+    <string name="memory_pin_failed">고정에 실패했습니다. 다시 시도하세요.</string>
+    <string name="memory_stats_session_live">대화 %1$d</string>
+    <string name="memory_stream_mode_list">목록</string>
+    <string name="memory_stream_mode_timeline">타임라인</string>
+    <string name="memory_unpin_failed">고정 해제에 실패했습니다. 다시 시도하세요.</string>
+    <string name="memory_graph_reset_view">보기 초기화</string>
+    <!-- v2.2.1: 기억 라이브러리 아카이브/복구 안내 -->
+    <string name="memory_archive_rebuilt_hint">버전 변경으로 기억 라이브러리가 아카이브·재구축되었습니다. 일부 기록이 보존되지 않았을 수 있습니다</string>
+    <string name="memory_archive_recovered">버전 변경 아카이브에서 기억 %1$d건을 복구했습니다</string>
+    <string name="memory_archive_recovery_title">복구 가능한 메모리 아카이브</string>
+    <string name="memory_archive_recovery_message">버전 변경 아카이브에서 세션 요약 %1$d개와 컴파일된 섹션 %2$d개를 찾았습니다. 현재 메모리 데이터베이스가 비어 있어 안전하게 복구할 수 있습니다.</string>
+    <string name="memory_archive_recovery_action">아카이브 복구</string>
+    <string name="memory_archive_recovery_confirm_title">메모리 아카이브를 복구할까요?</string>
+    <string name="memory_archive_recovery_confirm">기존 데이터를 덮어쓰지 않고 현재 비어 있는 데이터베이스에 요약과 컴파일된 메모리를 복구합니다. 계속할까요?</string>
+    <string name="memory_archive_recovery_done">메모리 레코드 %1$d개를 복구했습니다</string>
+    <string name="memory_archive_recovery_failed">메모리 아카이브 복구 실패: %1$s</string>
+</resources>

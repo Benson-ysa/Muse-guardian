@@ -1,0 +1,475 @@
+package io.zer0.memory.deep
+
+import io.zer0.ai.core.Model
+import io.zer0.common.Logger
+import io.zer0.common.resultOf
+import io.zer0.memory.fact.FactStore
+import io.zer0.memory.llm.MemoryLlmClient
+import io.zer0.memory.prompt.FactExtractionPrompt
+import io.zer0.memory.prompt.PromptExampleGuard
+import io.zer0.memory.summary.SessionSummaryManager
+import io.zer0.memory.ticker.MemoryConfig
+import io.zer0.memory.time.TimeContext
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.json.Json
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicInteger
+
+private val ASSISTANT_ATTRIBUTED_LINE_REGEX =
+    Regex("""^\s*[-*+]\s*\[(?:助手|assistant)[^\]]*\].*$""", RegexOption.IGNORE_CASE)
+
+internal fun filterAssistantAttributedMemoryEntries(summary: String): String = summary.lineSequence()
+    .filterNot { ASSISTANT_ATTRIBUTED_LINE_REGEX.matches(it) }
+    .joinToString("\n")
+
+/**
+ * 深度记忆处理器。
+ *
+ * 每日遍历脏 session(summary !== snapshot),用 LLM 从 summary diff
+ * 抽取元事实,写入 [FactStore]。
+ *
+ * 关键设计:
+ *  - 并发: 最多 [MAX_CONCURRENT] 个 session 同时处理(Semaphore)
+ *  - 重试: 单 session 失败 [MAX_RETRIES] 次后 markProcessed 跳过,不再无限重试
+ *  - JSON 修复: LLM 输出可能带 ```json 围栏或 ictd 块,需清洗后解析
+ *  - 时间规范化: fact.time 必须在 source_time_range.localDates 内
+ *
+ * v0.22: 通过 [FactDbProvider] 按 summary.assistantId 获取对应 Assistant 的
+ * 独立 FactStore,实现 per-assistant facts.db 隔离。
+ */
+class DeepMemoryProcessor(
+    private val factDbProvider: io.zer0.memory.fact.FactDbProvider,
+    private val llmClient: MemoryLlmClient,
+) {
+
+    companion object {
+        const val MAX_CONCURRENT = 3
+        const val MAX_RETRIES = 3
+        const val FACT_EXTRACTION_MAX_TOKENS = 4096
+
+        // 连续 daily 失败达此上限后 markProcessed,不再重试(避免浪费 LLM 调用)
+        const val MAX_DAILY_FAILURES = 3
+    }
+
+    private val json = Json {
+        ignoreUnknownKeys = true
+        encodeDefaults = true
+    }
+    private val concurrency = Semaphore(MAX_CONCURRENT)
+
+    // session → 连续 daily 失败次数,成功时清除,达 MAX_DAILY_FAILURES 后 markProcessed 跳过
+    private val failureCounts = ConcurrentHashMap<String, Int>()
+
+    /** 处理结果。 */
+    data class ProcessResult(
+        val processed: Int,
+        val factsAdded: Int,
+        val failures: Int,
+    )
+
+    /**
+     * 遍历脏 session,diff 抽元事实写 FactStore。
+     *
+     * v0.32: 新增 [config] 参数,在每个 session 处理完后调用 [FactStore.applyDecay]
+     * 执行一次配置驱动的遗忘(decayPerDay / forgetSpeed 配置)。
+     * 默认 [MemoryConfig] 等价于旧行为(默认 cutoff 约 40 天,几乎不删)。
+     *
+     * @param summaryManager 摘要管理器
+     * @param model 目标模型
+     * @param locale 语言
+     * @param config 记忆配置(由 [io.zer0.memory.ticker.MemoryTicker] 透传)
+     * @return 处理统计
+     */
+    suspend fun processDirtySessions(
+        summaryManager: SessionSummaryManager,
+        model: Model?,
+        locale: String = "zh-CN",
+        config: MemoryConfig = MemoryConfig(),
+    ): ProcessResult = withContext(Dispatchers.IO) {
+        val dirty = summaryManager.getDirtySessions()
+        if (dirty.isEmpty()) return@withContext ProcessResult(0, 0, 0)
+
+        val processed = AtomicInteger(0)
+        val factsAdded = AtomicInteger(0)
+        val failures = AtomicInteger(0)
+
+        coroutineScope {
+            dirty.map { summary ->
+                async {
+                    concurrency.withPermit {
+                        // v1.78 (M2): 包装 suspend 调用必须用 resultOf,避免吞 CancellationException
+                        resultOf {
+                            processSingleSession(summary, summaryManager, model, locale, config)
+                        }.onSuccess { added ->
+                            processed.incrementAndGet()
+                            factsAdded.addAndGet(added)
+                        }.onError { msg, t ->
+                            // CancellationException 已被 resultOf 重抛,此处 t 不会是 CancellationException
+                            Logger.w("DeepMemoryProcessor", "processSingleSession failed for ${summary.sessionId.take(8)}…: $msg", t)
+                            failures.incrementAndGet()
+                        }
+                    }
+                }
+            }.awaitAll()
+        }
+
+        ProcessResult(processed.get(), factsAdded.get(), failures.get())
+    }
+
+    /**
+     * v1.0.51: 处理指定 session 的事实提取(用于会话结束后立即处理)。
+     *
+     * 与 [processDirtySessions] 的差异:
+     *  - 只处理指定 sessionId,不扫描全部 dirty sessions
+     *  - 供 [io.zer0.memory.ticker.MemoryTicker.notifySessionEnd] 在 rollingSummary 成功后调用
+     *  - 复用 [concurrency] Semaphore(3) 限制全局并发
+     *
+     * @return 新增 fact 数量(session 不存在/非 dirty/提取失败均返回 0)
+     */
+    suspend fun processSession(
+        sessionId: String,
+        summaryManager: SessionSummaryManager,
+        model: Model?,
+        locale: String = "zh-CN",
+        config: MemoryConfig = MemoryConfig(),
+    ): Int = withContext(Dispatchers.IO) {
+        val summary = summaryManager.getSummary(sessionId) ?: return@withContext 0
+        // 只处理 dirty session(summary !== snapshot)
+        if (summary.summary == summary.snapshot) return@withContext 0
+
+        concurrency.withPermit {
+            resultOf {
+                processSingleSession(summary, summaryManager, model, locale, config)
+            }.onSuccess { added ->
+                if (added > 0) {
+                    Logger.i("DeepMemoryProcessor", "processSession(${sessionId.take(8)}…): $added 条新事实")
+                }
+            }.onError { msg, t ->
+                Logger.w("DeepMemoryProcessor", "processSession(${sessionId.take(8)}…) 失败: $msg", t)
+            }.getOrNull() ?: 0
+        }
+    }
+
+    /** 处理单个 session。返回新增 fact 数量。 */
+    private suspend fun processSingleSession(
+        summary: SessionSummaryManager.SummaryData,
+        summaryManager: SessionSummaryManager,
+        model: Model?,
+        locale: String = "zh-CN",
+        config: MemoryConfig = MemoryConfig(),
+    ): Int {
+        // 连续 daily 失败达上限,标记为已处理不再重试(避免反复浪费 LLM 调用)
+        if (maybeSkipExhaustedSession(summary, summaryManager)) return 0
+
+        val summaryText = summary.summary
+        val prevSnapshot = summary.snapshot
+
+        // v0.22: 按 summary.assistantId 获取对应 Assistant 的独立 FactStore
+        val factStore = factDbProvider.getFactStore(summary.assistantId)
+
+        // 审查修复 (2.0 A-11): 墓碑过滤 — 用户删除的事实不得从 dirty session 摘要
+        // 重新抽回 facts 表(S-04 墓碑此前只作用于 compileFacts/compileToday,
+        // deepMemory 的输入摘要与 LLM 输出均未过滤,已删内容会"复活")。
+        val memoryScope = if (summary.assistantId.isBlank() || summary.assistantId == "default") "main" else summary.assistantId
+        val tombstones = resultOf { factStore.getTombstones(memoryScope, summary.spaceId) }.getOrNull() ?: emptyList()
+        val effectiveSummary = filterAssistantAttributedMemoryEntries(
+            FactStore.filterTombstonedLines(summaryText, tombstones),
+        )
+        val effectiveSnapshot = filterAssistantAttributedMemoryEntries(
+            FactStore.filterTombstonedLines(prevSnapshot, tombstones),
+        )
+        if (effectiveSummary == effectiveSnapshot) {
+            summaryManager.markProcessed(summary.sessionId)
+            return 0
+        }
+
+        // 构建 LLM 输入
+        val isZh = locale.startsWith("zh")
+        val hasPrevious = prevSnapshot.isNotBlank()
+        val systemPrompt = FactExtractionPrompt.buildSystemPrompt(locale, hasPrevious)
+        val userContent = buildExtractionUserContent(
+            isZh = isZh,
+            hasPrevious = hasPrevious,
+            timeContextText = renderTimeContext(summary, isZh),
+            effectiveSnapshot = effectiveSnapshot,
+            effectiveSummary = effectiveSummary,
+        )
+
+        // 调 LLM(带重试)
+        var lastError: Exception? = null
+        repeat(MAX_RETRIES) { attempt ->
+            try {
+                val rawResult = llmClient.callText(
+                    systemPrompt = systemPrompt,
+                    userContent = userContent,
+                    model = model,
+                    temperature = 0.3f,
+                    maxTokens = FACT_EXTRACTION_MAX_TOKENS,
+                )
+                val facts = parseFactExtractionResult(rawResult, summary, locale)
+                // v1.0.51: 解析失败(null)→ 不 markProcessed,抛异常走重试,避免永久跳过丢事实
+                if (facts == null) {
+                    throw RuntimeException("fact extraction 解析失败(rawLen=${rawResult.length})")
+                }
+                // v2.x: 示例泄漏防护 — 照抄提示词示例且摘要未提及的事实直接丢弃(示例被当记忆入库的用户反馈)
+                val guardInputText = "$effectiveSnapshot\n$effectiveSummary"
+                val guardedFacts = facts.filterNot {
+                    PromptExampleGuard.isUngroundedExample(it.fact, guardInputText)
+                }
+                if (guardedFacts.isEmpty()) {
+                    // LLM 合法判定无事实 → markProcessed,下次不再处理
+                    Logger.d(
+                        "DeepMemoryProcessor",
+                        "fact extraction returned empty (rawLen=${rawResult.length}, session=${summary.sessionId.take(8)}…)",
+                    )
+                    failureCounts.remove(summary.sessionId)
+                    summaryManager.markProcessed(summary.sessionId)
+                    return 0
+                }
+                // B-19: scope 口径与 autoSave 对齐 — 主助手("default"/空)归 "main",
+                // 子助手用 assistantId。此前 addBatch 不传 scope 恒落 "main",
+                // 子助手会话的深层事实串进主助手记忆(查询漏一半数据)。
+                val scope = memoryScope
+                // A-11: LLM 抽取输出按墓碑过滤 — 命中墓碑的事实直接丢弃,不再写回 facts 表
+                val filteredFacts = if (tombstones.isEmpty()) {
+                    guardedFacts
+                } else {
+                    guardedFacts.filter { f -> tombstones.none { t -> FactStore.matchesTombstone(f.fact, t) } }
+                }
+                if (filteredFacts.isEmpty()) {
+                    // 抽取结果全部命中墓碑:视为无可写事实,标记已处理避免每轮重抽
+                    val tombstoneSkipMsg = "fact extraction 全部命中墓碑(session=${summary.sessionId.take(8)}…),跳过写入"
+                    Logger.d("DeepMemoryProcessor", tombstoneSkipMsg)
+                    failureCounts.remove(summary.sessionId)
+                    summaryManager.markProcessed(summary.sessionId)
+                    return 0
+                }
+                // D6 第 2 期: 原子性校验 — 提取 prompt 已要求“一条一断言”,这里做兜底：
+                // 含连接词串联的多个断言的条目保守拆开(不改 schema,拆分失败原样保留)。
+                val atomicity = FactAtomicityValidator.enforce(filteredFacts)
+                if (atomicity.splitCount > 0) {
+                    Logger.i(
+                        "DeepMemoryProcessor",
+                        "原子性校验: 拆分 ${atomicity.splitCount} 条多断言事实(+${atomicity.addedCount} 条, " +
+                            "session=${summary.sessionId.take(8)}…)",
+                    )
+                }
+                // 摘要携带空间归属，深度提取不能再落入 default。
+                val added = factStore.addBatch(atomicity.facts, scope = scope, spaceId = summary.spaceId)
+                // v0.32: 接入 MemoryConfig —— 每个脏 session 处理完后顺手跑一次衰减,
+                // 让 decayPerDay / forgetSpeed / compileThreshold / baseImportance 真正生效。
+                // 单 session 的 fact 增量很小,applyDecay 的开销可忽略;失败也不阻塞主流程。
+                // v1.78 (H4): 包装 suspend 调用必须用 resultOf,避免吞 CancellationException
+                resultOf {
+                    factStore.applyDecay(config, scope = scope, spaceId = summary.spaceId)
+                }.onError { msg, t ->
+                    Logger.w("DeepMemoryProcessor", "applyDecay failed for ${summary.sessionId.take(8)}…: $msg", t)
+                }
+                failureCounts.remove(summary.sessionId)
+                summaryManager.markProcessed(summary.sessionId)
+                return added
+            } catch (e: CancellationException) {
+                // v1.78 (H5): 必须重抛,否则协程取消信号丢失,repeat 循环继续重试无法退出
+                throw e
+            } catch (e: Exception) {
+                lastError = e
+                Logger.w(
+                    "DeepMemoryProcessor",
+                    "fact extraction attempt ${attempt + 1}/$MAX_RETRIES failed for ${summary.sessionId.take(8)}…: ${e.message}",
+                )
+                // v1.78 (M6): 指数退避,避免 LLM 限流时立即重试加剧限流
+                if (attempt < MAX_RETRIES - 1) {
+                    delay(1000L * (1L shl attempt)) // 1s, 2s, 4s
+                }
+            }
+        }
+
+        // v1.78 (M5): 重试耗尽时不调 markProcessed —— 否则该 session 会被永久跳过,
+        // 真正的失败被掩盖。改为仅记录失败日志,让下次 daily pipeline 重新拾取重试。
+        // 递增连续失败计数,达 MAX_DAILY_FAILURES 后下次 daily 跳过该 session。
+        failureCounts[summary.sessionId] = (failureCounts[summary.sessionId] ?: 0) + 1
+        Logger.w(
+            "DeepMemoryProcessor",
+            "fact extraction 重试耗尽(${MAX_RETRIES}次),session=${summary.sessionId.take(8)}…," +
+                "连续 daily 失败 ${failureCounts[summary.sessionId]}/$MAX_DAILY_FAILURES," +
+                "下次 daily pipeline 将重试: ${lastError?.message}",
+            lastError,
+        )
+        throw lastError ?: RuntimeException("fact extraction failed after $MAX_RETRIES retries")
+    }
+
+    /** 构建事实抽取 LLM 输入(按语言/是否有上次快照)。 */
+    private fun buildExtractionUserContent(
+        isZh: Boolean,
+        hasPrevious: Boolean,
+        timeContextText: String,
+        effectiveSnapshot: String,
+        effectiveSummary: String,
+    ): String {
+        val timeContextLabel = if (isZh) "## 时间上下文" else "## Time Context"
+        return if (hasPrevious) {
+            val prevLabel = if (isZh) "## 上次快照" else "## Previous Snapshot"
+            val curLabel = if (isZh) "## 当前摘要" else "## Current Summary"
+            listOf(timeContextLabel, timeContextText, prevLabel, effectiveSnapshot, curLabel, effectiveSummary)
+                .joinToString("\n\n")
+        } else {
+            val curLabel = if (isZh) "## 摘要内容" else "## Summary Content"
+            "$timeContextLabel\n\n$timeContextText\n\n$curLabel\n\n$effectiveSummary"
+        }
+    }
+
+    /** 连续失败达上限的 session 标记已处理跳过,避免反复浪费 LLM 调用。 */
+    private suspend fun maybeSkipExhaustedSession(
+        summary: SessionSummaryManager.SummaryData,
+        summaryManager: SessionSummaryManager,
+    ): Boolean {
+        if ((failureCounts[summary.sessionId] ?: 0) < MAX_DAILY_FAILURES) return false
+        val skipMsg = "session=${summary.sessionId.take(8)}… 连续 daily 失败 ${MAX_DAILY_FAILURES} 次,标记为已处理跳过"
+        Logger.w("DeepMemoryProcessor", skipMsg)
+        summaryManager.markProcessed(summary.sessionId)
+        failureCounts.remove(summary.sessionId)
+        return true
+    }
+
+    /** 构建 time context 文本(供 LLM 参考)。 */
+    private fun renderTimeContext(summary: SessionSummaryManager.SummaryData, isZh: Boolean): String {
+        val range = summary.sourceTimeRange ?: return if (isZh) "（无时间信息）" else "(no time info)"
+        val localDatesLabel = if (isZh) "本地日期" else "Local dates"
+        val timezoneLabel = if (isZh) "时区" else "Timezone"
+        return "$timezoneLabel: ${range.timezone}\n$localDatesLabel: ${range.localDates.joinToString(", ")}"
+    }
+
+    /**
+     * 解析 fact extraction 结果。
+     * LLM 输出可能带 ```json 围栏或 <think> 块,需清洗。
+     *
+     * v1.0.51: 返回类型改 nullable —— 解析失败返回 null(调用方不应 markProcessed),
+     * LLM 合法判定无事实返回 emptyList(调用方可 markProcessed)。
+     * 修复"JSON 解析失败 → emptyList → markProcessed → session 永久跳过 → 事实丢失"的致命 bug。
+     */
+    // Phase 2.3: 改为 internal 以便单元测试 JSON 容错逻辑(无需通过 LLM 调用进入此方法)
+    internal fun parseFactExtractionResult(
+        raw: String,
+        summary: SessionSummaryManager.SummaryData,
+        locale: String,
+    ): List<FactStore.Fact>? {
+        if (raw.isBlank()) return emptyList()
+
+        // 1. 去前置 <think>...</think> 块
+        var s = raw
+        s = s.replace(Regex("<think(?:ing)?>[\\s\\S]*?</think(?:ing)?>", RegexOption.IGNORE_CASE), "")
+        // 2. 去 ```json ... ``` 围栏
+        val fenceMatch = Regex("""```(?:json)?\s*\n([\s\S]*?)\n```""").find(s)
+        if (fenceMatch != null) {
+            s = fenceMatch.groupValues[1]
+        } else {
+            s = s.trim()
+        }
+
+        // 3. 提取 JSON 数组(若不以 [ 开头,扫描括号深度)
+        if (!s.startsWith("[")) {
+            // v1.0.51: 找不到 JSON 数组候选 → 解析失败,返回 null 触发重试
+            val candidate = extractJsonArray(s)
+            if (candidate == null) {
+                Logger.w("DeepMemoryProcessor", "fact extraction 未找到 JSON 数组 (rawLen=${raw.length}, session=${summary.sessionId.take(8)}…)")
+                return null
+            }
+            s = candidate
+        }
+
+        // 4. 解析
+        val dtos = runCatching {
+            json.decodeFromString(ListSerializer(FactDto.serializer()), s)
+        }.getOrElse {
+            // v1.0.51: JSON 解析失败 → 返回 null,调用方不 markProcessed,下次 daily 重试
+            Logger.w(
+                "DeepMemoryProcessor",
+                "fact extraction JSON 解析失败 (rawLen=${raw.length}, session=${summary.sessionId.take(8)}…): ${it.message}",
+            )
+            return null
+        }
+
+        // 5. 时间规范化 + 转 Fact
+        val localDates = summary.sourceTimeRange?.localDates ?: emptyList()
+        val summaryTimes = io.zer0.memory.time.TimeContext.scanSummaryTimeSignals(summary.summary).dateTimes
+        val ctx = TimeContext.FactTimeContext(localDates, summaryTimes)
+
+        return dtos.mapNotNull { dto ->
+            val normalizedTime = io.zer0.memory.time.TimeContext.normalizeFactTimestamp(dto.time, ctx)
+            FactStore.Fact(
+                fact = dto.fact,
+                tags = dto.tags,
+                time = normalizedTime,
+                sessionId = summary.sessionId,
+                importance = dto.importance.coerceIn(0, 2),
+                category = dto.category.takeIf { it.isNotBlank() } ?: "general",
+                confidence = dto.confidence?.coerceIn(0f, 1f) ?: if (dto.source == "user_explicit") 1.0f else 0.7f,
+                source = dto.source.takeIf { it.isNotBlank() } ?: "inferred",
+                expiresAt = dto.expiresAt,
+                lastConfirmedAt = dto.lastConfirmedAt,
+                // H-MEM-2: 传递 LLM 提取的 entityKey,支持精确去重
+                entityKey = dto.entityKey,
+            )
+        }
+    }
+
+    /**
+     * 扫描字符串找出第一个完整 JSON 数组(括号深度状态机)。
+     */
+    private fun extractJsonArray(s: String): String? {
+        val start = s.indexOf('[')
+        if (start < 0) return null
+        var depth = 0
+        var inString = false
+        var escape = false
+        for (i in start until s.length) {
+            val c = s[i]
+            if (escape) {
+                escape = false
+                continue
+            }
+            if (inString) {
+                when (c) {
+                    '\\' -> escape = true
+                    '"' -> inString = false
+                }
+                continue
+            }
+            when (c) {
+                '"' -> inString = true
+                '[' -> depth++
+                ']' -> {
+                    depth--
+                    if (depth == 0) return s.substring(start, i + 1)
+                }
+            }
+        }
+        return null
+    }
+
+    /** fact extraction 的 JSON DTO。v5: 含 importance / category / confidence / source / expires_at / last_confirmed_at 字段。
+     * H-MEM-2: 新增 entityKey — LLM 提取时要求输出实体键,支持精确去重通道(v12+)。 */
+    @Serializable
+    private data class FactDto(
+        val fact: String,
+        val tags: List<String> = emptyList(),
+        val time: String? = null,
+        val importance: Int = 0,
+        val category: String = "general",
+        val confidence: Float? = null,
+        val source: String = "inferred",
+        val expiresAt: String? = null,
+        val lastConfirmedAt: String? = null,
+        val entityKey: String? = null,
+    )
+}

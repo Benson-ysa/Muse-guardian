@@ -1,0 +1,882 @@
+package io.zer0.muse.ui.taskcard
+
+import android.content.Context
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.IntrinsicSize
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.dp
+import io.zer0.muse.R
+import io.zer0.muse.tools.DelegationChainTracker
+import io.zer0.muse.ui.common.form.MuseTactileButton
+import io.zer0.muse.ui.common.formatToolDuration
+import io.zer0.muse.ui.common.icons.MuseIcons
+import io.zer0.muse.ui.common.state.MuseSpinner
+import io.zer0.muse.ui.theme.MuseMotion
+import io.zer0.muse.ui.theme.MuseShapes
+import io.zer0.muse.ui.theme.pill
+import io.zer0.muse.ui.theme.statusColors
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
+import kotlin.uuid.Uuid
+
+/**
+ * Phase 10.1: 任务卡完整调度。
+ *
+ * 在 Phase 8.8 基础上增强:
+ *  - 独立计划阶段(PLANNING / EXECUTING / DONE)
+ *  - 时间线(每步 startedAt / finishedAt,展示执行耗时)
+ *  - 展开 / 折叠交互(点击标题切换)
+ *  - 重试失败步骤(onRetry 回调)
+ *  - 视觉风格(primary 月桂绿渐变标题栏,适配"深夜台灯"调性)
+ *
+ * @param id 任务卡 id(绑定到 assistant 消息 id)
+ * @param title 任务标题
+ * @param steps 步骤列表
+ * @param phase 当前阶段
+ * @param isExpanded 是否展开(默认 true)
+ * @param createdAt 任务卡创建时间戳
+ */
+data class TaskCardData(
+    val id: String,
+    val title: String,
+    val steps: List<TaskStep>,
+    val phase: TaskCardPhase = TaskCardPhase.PLANNING,
+    val isExpanded: Boolean = false,
+    val createdAt: Long = System.currentTimeMillis(),
+) {
+    /** 整体进度(0..1),只算 SUCCESS。 */
+    val progress: Float
+        get() = if (steps.isEmpty()) {
+            0f
+        } else {
+            steps.count { it.status == TaskStepStatus.SUCCESS }.toFloat() / steps.size
+        }
+
+    /** 是否全部到达终态(SUCCESS / FAILED / CANCELLED / TIMED_OUT)。 */
+    val isAllDone: Boolean
+        get() = steps.isNotEmpty() && steps.all { it.status.isTerminal }
+
+    /** 是否有可重试的终态步骤(FAILED / TIMED_OUT)。 */
+    val hasFailedSteps: Boolean
+        get() = steps.any { it.status.isRetryable }
+
+    /** 是否存在仍可被用户暂停的待执行步骤。 */
+    val hasPausableSteps: Boolean
+        get() = steps.any { it.status == TaskStepStatus.PENDING }
+
+    /** 待执行步骤是否已全部设置暂停意图。 */
+    val allPausableStepsPaused: Boolean
+        get() = steps.filter { it.status == TaskStepStatus.PENDING }.let { pending ->
+            pending.isNotEmpty() && pending.all { it.pauseRequested }
+        }
+
+    /** 超时步骤数(折叠态摘要用)。 */
+    val timedOutSteps: Int
+        get() = steps.count { it.status == TaskStepStatus.TIMED_OUT }
+
+    /** 已取消步骤数(折叠态摘要用)。 */
+    val cancelledSteps: Int
+        get() = steps.count { it.status == TaskStepStatus.CANCELLED }
+
+    /** 总耗时(毫秒),所有已完成步骤的 finishedAt - startedAt 之和。 */
+    val totalDurationMs: Long
+        get() = steps.mapNotNull { s ->
+            if (s.startedAt != null && s.finishedAt != null) s.finishedAt - s.startedAt else null
+        }.sum()
+
+    companion object {
+        /**
+         * 从工具调用列表构建任务卡(PLANNING 阶段,所有步骤 PENDING)。
+         *
+         * @param context 用于取字符串资源(标题)
+         */
+        fun fromToolCalls(
+            context: Context,
+            assistantId: Uuid,
+            toolCalls: List<Pair<String, String>>,
+            toolCallIds: List<String> = emptyList(),
+        ): TaskCardData {
+            val steps = toolCalls.mapIndexed { idx, (name, args) ->
+                val delegateArgs = if (name == "delegate_agent") {
+                    parseDelegateAgentArgs(args)
+                } else {
+                    DelegateAgentArgs("", "")
+                }
+                val detail = if (name == "delegate_agent") {
+                    delegateArgs.task.take(60)
+                } else {
+                    args.take(200)
+                }
+                TaskStep(
+                    id = "${assistantId}_$idx",
+                    title = name,
+                    detail = detail,
+                    status = TaskStepStatus.PENDING,
+                    toolCallIndex = idx,
+                    source = delegateArgs.assistantId,
+                    // 审计修复 (2.6): 存完整参数供重试,detail 可能被截断
+                    rawArgs = args,
+                    toolCallId = toolCallIds.getOrNull(idx).orEmpty(),
+                )
+            }
+            return TaskCardData(
+                id = assistantId.toString(),
+                title = context.getString(R.string.task_card_plan_title, steps.size),
+                steps = steps,
+                phase = TaskCardPhase.PLANNING,
+            )
+        }
+
+        /**
+         * v1.25: 解析 delegate_agent 工具的参数,提取 assistantId 与 task。
+         */
+        fun parseDelegateAgentArgs(argumentsJson: String): DelegateAgentArgs {
+            return runCatching {
+                val obj = io.zer0.common.AppJson.decodeFromString(JsonObject.serializer(), argumentsJson)
+                val assistantId = (obj["assistantId"] as? JsonPrimitive)?.content?.trim().orEmpty()
+                val task = (obj["task"] as? JsonPrimitive)?.content?.trim().orEmpty()
+                DelegateAgentArgs(assistantId, task)
+            }.getOrDefault(DelegateAgentArgs("", ""))
+        }
+    }
+
+    /** v1.25: delegate_agent 参数解析结果。 */
+    data class DelegateAgentArgs(
+        val assistantId: String,
+        val task: String,
+    )
+}
+
+/** 单个步骤。 */
+data class TaskStep(
+    val id: String,
+    val title: String,
+    val detail: String = "",
+    val status: TaskStepStatus,
+    val result: String = "",
+    /** 开始执行时间戳(进入 RUNNING 时设置)。 */
+    val startedAt: Long? = null,
+    /** 结束时间戳(进入 SUCCESS / FAILED 时设置)。 */
+    val finishedAt: Long? = null,
+    /** 对应的 toolCall 索引(用于重试时定位)。 */
+    val toolCallIndex: Int = -1,
+    /** v0.49: 工具执行进度文本(如"正在搜索..."),null 或空时不显示。RUNNING 状态下由 SkillExecutor.onProgress 回调更新。 */
+    val progressText: String? = null,
+    /** v1.200: 步骤来源(Agent/团队名),用于泳道分组。 */
+    val source: String = "",
+    /** v1.200: 子步骤列表,用于团队/工作流结果下钻。 */
+    val subSteps: List<TaskStep> = emptyList(),
+    /** 审计修复 (2.6): 完整原始 tool 参数(JSON),用于重试。detail 是截断展示用。 */
+    val rawArgs: String = "",
+    /** 当前回合内稳定的 tool_call id,用于单工具暂停与执行状态关联。 */
+    val toolCallId: String = "",
+    /**
+     * 用户已请求暂停该步骤,但尚未执行真实工具。
+     *
+     * 仅 PENDING 步骤可被切换;正在执行的工具不做强杀,避免未知副作用。
+     */
+    val pauseRequested: Boolean = false,
+) {
+    /** 单步耗时(毫秒),null 表示未完成。 */
+    val durationMs: Long? get() = if (startedAt != null && finishedAt != null) finishedAt - startedAt else null
+}
+
+/** 步骤状态。 */
+enum class TaskStepStatus {
+    PENDING,
+    RUNNING,
+    SUCCESS,
+    FAILED,
+
+    /** 执行被取消(用户主动停止 / 流式中断),步骤未跑完。 */
+    CANCELLED,
+
+    /** 工具执行超时,被强制终止。 */
+    TIMED_OUT,
+
+    ;
+
+    /** 终态:状态不会再变化。 */
+    val isTerminal: Boolean
+        get() = this == SUCCESS || this == FAILED || this == CANCELLED || this == TIMED_OUT
+
+    /** 可重试:失败或超时(取消是用户主动停止,不主动提示重试)。 */
+    val isRetryable: Boolean
+        get() = this == FAILED || this == TIMED_OUT
+}
+
+/** 任务卡阶段。 */
+enum class TaskCardPhase(val labelRes: Int) {
+    PLANNING(R.string.task_card_phase_planning),
+    EXECUTING(R.string.task_card_phase_executing),
+    DONE(R.string.task_card_phase_done),
+}
+
+/**
+ * Phase 10.1: 任务卡 Composable(完整调度版)。
+ *
+ * 视觉:primary 月桂绿渐变标题栏 + 卡片底 + 时间线步骤行。
+ * 交互:点击标题切换展开/折叠;失败步骤显示"重试"按钮。
+ *
+ * @param data 任务卡数据
+ * @param onToggleExpand 切换展开/折叠回调
+ * @param onRetryStep 重试失败步骤回调(参数:stepId)
+ * @param delegationChain v1.201: 委派链路根节点列表(可选)。
+ *        非空时在步骤列表下方嵌入 [DelegationChainCard],可视化主助手 → 子助手链路。
+ *        传 null 或空列表则不渲染。
+ */
+@Composable
+fun TaskCard(
+    data: TaskCardData,
+    onToggleExpand: () -> Unit = {},
+    onRetryStep: (String) -> Unit = {},
+    onCancel: (() -> Unit)? = null,
+    onTogglePause: () -> Unit = {},
+    onToggleStepPause: (String) -> Unit = {},
+    // M-TC2 修复: 增加 modifier 参数,允许调用方自定义布局修饰
+    modifier: Modifier = Modifier,
+    // v1.201: 委派链路(可选,非空时在步骤列表下方渲染)
+    delegationChain: List<DelegationChainTracker.ChainNode>? = null,
+) {
+    val accent = when (data.phase) {
+        TaskCardPhase.DONE -> if (data.isAllDone) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error
+        TaskCardPhase.EXECUTING -> MaterialTheme.colorScheme.primary
+        TaskCardPhase.PLANNING -> MaterialTheme.colorScheme.tertiary
+    }
+
+    Surface(
+        modifier = modifier
+            .padding(vertical = 4.dp),
+        shape = MuseShapes.medium,
+        // CHAT-09: 消息内卡片统一规范 — 底色 + 1dp 描边 + 统一圆角(此前透明无边)
+        color = MaterialTheme.colorScheme.surface,
+        tonalElevation = 0.dp,
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+    ) {
+        Column(modifier = Modifier.padding(0.dp)) {
+            // ── 标题栏(可点击切换展开/折叠)── 统一为 outline 风格,不再用渐变填充。
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(onClick = onToggleExpand)
+                    .padding(horizontal = 12.dp, vertical = 10.dp),
+            ) {
+                // 图标徽章:阶段图标 + 浅色圆底
+                Box(
+                    modifier = Modifier
+                        .size(28.dp)
+                        .clip(CircleShape)
+                        .background(
+                            when (data.phase) {
+                                TaskCardPhase.DONE -> if (data.isAllDone) {
+                                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+                                } else {
+                                    MaterialTheme.colorScheme.errorContainer.copy(alpha = 0.5f)
+                                }
+                                TaskCardPhase.EXECUTING ->
+                                    MaterialTheme.colorScheme.primaryContainer.copy(alpha = 0.5f)
+                                TaskCardPhase.PLANNING ->
+                                    MaterialTheme.colorScheme.tertiaryContainer.copy(alpha = 0.5f)
+                            },
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    when (data.phase) {
+                        TaskCardPhase.PLANNING -> Icon(
+                            MuseIcons.edit,
+                            contentDescription = null,
+                            tint = accent,
+                            modifier = Modifier.size(16.dp),
+                        )
+                        TaskCardPhase.EXECUTING -> MuseSpinner(
+                            size = 16.dp,
+                            color = accent,
+                        )
+                        TaskCardPhase.DONE -> Icon(
+                            if (data.isAllDone) MuseIcons.circleCheck else MuseIcons.alertTriangle,
+                            contentDescription = null,
+                            tint = accent,
+                            modifier = Modifier.size(18.dp),
+                        )
+                    }
+                }
+                // 阶段标签 + 标题
+                Column(modifier = Modifier.weight(1f)) {
+                    // v2.0.1: 终态含失败时补充失败信息 — 避免"已完成"与"0/N"进度同时出现的矛盾观感
+                    val failedCount = data.steps.count {
+                        it.status == TaskStepStatus.FAILED || it.status == TaskStepStatus.TIMED_OUT
+                    }
+                    val phaseLabel = if (data.phase == TaskCardPhase.DONE && failedCount > 0) {
+                        stringResource(data.phase.labelRes) + " · " +
+                            stringResource(R.string.task_card_summary_failed, failedCount)
+                    } else {
+                        stringResource(data.phase.labelRes)
+                    }
+                    Text(
+                        text = phaseLabel,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = accent,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                    Text(
+                        text = data.title,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = MaterialTheme.colorScheme.onSurface,
+                        fontWeight = FontWeight.Medium,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                }
+                // 进度数字
+                val successCount = data.steps.count { it.status == TaskStepStatus.SUCCESS }
+                Text(
+                    text = "$successCount/${data.steps.size}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontWeight = FontWeight.Medium,
+                )
+                if (data.hasPausableSteps) {
+                    MuseTactileButton(
+                        icon = if (data.allPausableStepsPaused) MuseIcons.play else MuseIcons.pause,
+                        onClick = onTogglePause,
+                        contentDescription = stringResource(
+                            if (data.allPausableStepsPaused) R.string.task_card_resume else R.string.task_card_pause,
+                        ),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                        size = 32.dp,
+                        iconSize = 16.dp,
+                    )
+                }
+                Icon(
+                    imageVector = if (data.isExpanded) MuseIcons.chevronUp else MuseIcons.chevronDown,
+                    contentDescription = stringResource(
+                        if (data.isExpanded) R.string.action_collapse else R.string.action_expand,
+                    ),
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(20.dp),
+                )
+            }
+
+            // ── 折叠态紧凑步骤行(v1.0.52) ──
+            // 步骤数 ≥ 2 时显示单行步骤条,用户无需展开即可知晓进度。
+            // 全部完成 → "已完成 N 步";进行中 → 步骤名+状态图标水平排列。
+            AnimatedVisibility(
+                visible = !data.isExpanded && data.steps.size >= 2,
+                enter = MuseMotion.expandFadeEnter(),
+                exit = MuseMotion.expandFadeExit(),
+            ) {
+                CompactStepRow(
+                    data = data,
+                    modifier = Modifier
+                        .padding(horizontal = 12.dp, vertical = 4.dp),
+                )
+            }
+
+            // ── 卡片内容(展开时显示)──
+            AnimatedVisibility(
+                visible = data.isExpanded,
+                enter = MuseMotion.expandFadeEnter(),
+                exit = MuseMotion.expandFadeExit(),
+            ) {
+                Column(
+                    modifier = Modifier
+                        .padding(horizontal = 12.dp)
+                        .padding(bottom = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    // v1.200: 泳道说明(多个 source 时显示)
+                    val sources = remember(data.steps) {
+                        data.steps.map { it.source }.filter { it.isNotBlank() }.distinct()
+                    }
+                    if (sources.size > 1) {
+                        Text(
+                            text = stringResource(
+                                R.string.task_card_group_by_agent,
+                                sources.joinToString(", "),
+                            ),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    // 标题
+                    Text(
+                        text = data.title,
+                        style = MaterialTheme.typography.labelLarge,
+                        fontWeight = FontWeight.SemiBold,
+                        color = MaterialTheme.colorScheme.onSurface,
+                    )
+                    // 进度条(执行中显示)
+                    if (data.phase == TaskCardPhase.EXECUTING || (data.phase == TaskCardPhase.DONE && !data.isAllDone)) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(4.dp)
+                                .clip(MuseShapes.pill)
+                                .background(MaterialTheme.colorScheme.outlineVariant),
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxWidth(data.progress)
+                                    .fillMaxHeight()
+                                    .background(MaterialTheme.colorScheme.primary, MuseShapes.pill),
+                            )
+                        }
+                    }
+                    HorizontalDivider(
+                        modifier = Modifier.padding(vertical = 2.dp),
+                        color = MaterialTheme.colorScheme.outlineVariant,
+                    )
+                    // 步骤列表
+                    // R-UI-09: 执行中提供取消按钮,由调用方接入停止生成。
+                    if (data.phase == TaskCardPhase.EXECUTING && onCancel != null) {
+                        MuseTactileButton(
+                            icon = MuseIcons.x,
+                            onClick = onCancel,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.error,
+                            modifier = Modifier.padding(top = 2.dp),
+                        )
+                    }
+                    // L-TC6 修复: forEach 加 key,步骤状态变化时 Compose 能精准重组对应行
+                    data.steps.forEach { step ->
+                        key(step.id) {
+                            TaskStepRow(
+                                step = step,
+                                onRetry = { onRetryStep(step.id) },
+                                onTogglePause = { onToggleStepPause(step.id) },
+                            )
+                        }
+                    }
+                    // v1.201: 委派链路图(可选,非空时在步骤列表下方渲染)
+                    if (!delegationChain.isNullOrEmpty()) {
+                        DelegationChainCard(roots = delegationChain)
+                    }
+                    // 总耗时(DONE 阶段显示)
+                    if (data.phase == TaskCardPhase.DONE && data.totalDurationMs > 0) {
+                        HorizontalDivider(
+                            modifier = Modifier.padding(vertical = 2.dp),
+                            color = MaterialTheme.colorScheme.outlineVariant,
+                        )
+                        Text(
+                            text = stringResource(
+                                R.string.task_card_total_duration,
+                                formatToolDuration(data.totalDurationMs),
+                            ),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                    // 重试全部失败步骤按钮
+                    if (data.hasFailedSteps && data.phase == TaskCardPhase.DONE) {
+                        MuseTactileButton(
+                            icon = MuseIcons.refresh,
+                            onClick = { onRetryStep("ALL_FAILED") },
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(top = 4.dp),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+/** 阶段徽章(标题栏左侧)。 */
+@Composable
+private fun PhaseBadge(phase: TaskCardPhase, progress: Float) {
+    val onPrimary = MaterialTheme.colorScheme.onPrimary
+    // M-TC5 修复: DONE 分支原先两个分支返回值相同(progress>=1f 和 <1f 都是 0.3f)。
+    // 改为根据 progress 区分:全部成功(1.0)用较低 alpha 的"完成"色,
+    // 部分成功(<1.0,有失败步骤)用较高 alpha 的"警示"色。
+    val (text, bg) = when (phase) {
+        TaskCardPhase.PLANNING -> stringResource(phase.labelRes) to onPrimary.copy(alpha = 0.25f)
+        TaskCardPhase.EXECUTING -> stringResource(phase.labelRes) to onPrimary.copy(alpha = 0.35f)
+        TaskCardPhase.DONE -> if (progress >= 1f) {
+            // 全部成功:柔和完成色
+            stringResource(phase.labelRes) to onPrimary.copy(alpha = 0.3f)
+        } else {
+            // 部分成功/有失败:稍深背景强调"需关注"
+            stringResource(phase.labelRes) to onPrimary.copy(alpha = 0.5f)
+        }
+    }
+    Surface(
+        color = bg,
+        shape = MuseShapes.medium,
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelSmall,
+            color = onPrimary,
+            fontWeight = FontWeight.Medium,
+            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+        )
+    }
+}
+
+/** 单步步骤行(含状态图标 + 标题 + 详情 + 结果 + 耗时 + 重试按钮)。 */
+@Composable
+private fun TaskStepRow(
+    step: TaskStep,
+    onRetry: () -> Unit,
+    onTogglePause: () -> Unit = {},
+) {
+    var isResultExpanded by remember { mutableStateOf(false) }
+    val resultPreviewLength = 120
+
+    Row(
+        verticalAlignment = Alignment.Top,
+        horizontalArrangement = Arrangement.spacedBy(8.dp),
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        // 状态图标
+        Box(
+            modifier = Modifier
+                .size(20.dp)
+                .padding(top = 2.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            when (step.status) {
+                TaskStepStatus.PENDING -> Box(
+                    Modifier
+                        .size(16.dp)
+                        .clip(CircleShape)
+                        .background(MaterialTheme.colorScheme.outline.copy(alpha = 0.4f)),
+                )
+                TaskStepStatus.RUNNING -> MuseSpinner(
+                    size = 16.dp,
+                    color = MaterialTheme.colorScheme.secondary,
+                )
+                TaskStepStatus.SUCCESS -> Icon(
+                    MuseIcons.check,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.size(16.dp),
+                )
+                TaskStepStatus.FAILED -> Icon(
+                    MuseIcons.alertCircle,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.size(16.dp),
+                )
+                TaskStepStatus.CANCELLED -> Icon(
+                    MuseIcons.x,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.size(16.dp),
+                )
+                TaskStepStatus.TIMED_OUT -> Icon(
+                    MuseIcons.timer,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.error,
+                    modifier = Modifier.size(16.dp),
+                )
+            }
+        }
+        // 步骤内容
+        Column(modifier = Modifier.weight(1f)) {
+            // v1.200: 标题 + 来源徽章
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                Text(
+                    text = step.title,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    fontWeight = FontWeight.Medium,
+                )
+                if (step.source.isNotBlank()) {
+                    Text(
+                        text = step.source,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSecondaryContainer,
+                        modifier = Modifier
+                            .background(
+                                MaterialTheme.colorScheme.secondaryContainer,
+                                RoundedCornerShape(percent = 50),
+                            )
+                            .padding(horizontal = 6.dp, vertical = 2.dp),
+                    )
+                }
+            }
+            if (step.detail.isNotBlank()) {
+                Text(
+                    text = step.detail,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 2,
+                )
+            }
+            // v0.49: 工具执行进度文本(RUNNING 状态下由 SkillExecutor.onProgress 回调更新)
+            if (step.status == TaskStepStatus.RUNNING && !step.progressText.isNullOrBlank()) {
+                Text(
+                    text = step.progressText,
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(start = 8.dp, top = 2.dp),
+                )
+            }
+            // v1.200: 结果(可展开/收起) + 子步骤下钻
+            if (step.result.isNotBlank() && step.status != TaskStepStatus.PENDING) {
+                Spacer(Modifier.height(2.dp))
+                val showExpand = step.result.length > resultPreviewLength
+                val displayResult = if (isResultExpanded) step.result else step.result.take(resultPreviewLength)
+                Row(
+                    verticalAlignment = Alignment.Top,
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text(
+                        text = "→ $displayResult",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = if (step.status == TaskStepStatus.FAILED ||
+                            step.status == TaskStepStatus.TIMED_OUT
+                        ) {
+                            MaterialTheme.colorScheme.error
+                        } else {
+                            MaterialTheme.colorScheme.onSurfaceVariant
+                        },
+                        modifier = Modifier.weight(1f),
+                        // LAYOUT-01: Row 内文本取宽 + 限行，防放大字号下逐字换行；
+                        // 折叠态本就是预览(限 2 行)，展开态保留完整结果不截断
+                        maxLines = if (isResultExpanded) Int.MAX_VALUE else 2,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (showExpand) {
+                        Text(
+                            text = stringResource(
+                                if (isResultExpanded) R.string.action_collapse else R.string.action_expand,
+                            ),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier
+                                .padding(start = 4.dp)
+                                .clickable { isResultExpanded = !isResultExpanded },
+                        )
+                    }
+                }
+            }
+            // v1.200: 子步骤泳道
+            if (step.subSteps.isNotEmpty()) {
+                Spacer(Modifier.height(4.dp))
+                Row(
+                    modifier = Modifier.height(IntrinsicSize.Min),
+                    verticalAlignment = Alignment.Top,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .width(2.dp)
+                            .fillMaxHeight()
+                            .background(MaterialTheme.colorScheme.outlineVariant),
+                    )
+                    Spacer(Modifier.width(14.dp))
+                    Column(
+                        verticalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        step.subSteps.forEach { subStep ->
+                            key(subStep.id) {
+                                TaskStepRow(
+                                    step = subStep,
+                                    onRetry = {},
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+            // 耗时(完成后显示)
+            step.durationMs?.let { dur ->
+                if (dur > 0) {
+                    Text(
+                        text = stringResource(R.string.task_card_step_duration, formatToolDuration(dur)),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
+            }
+            // 重试按钮(FAILED / TIMED_OUT 步骤)
+            if (step.status.isRetryable) {
+                MuseTactileButton(
+                    icon = MuseIcons.refresh,
+                    onClick = onRetry,
+                    contentDescription = null,
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(top = 2.dp),
+                )
+            }
+        }
+        // 仅允许暂停尚未开始的工具;运行中的副作用不强杀。
+        if (step.status == TaskStepStatus.PENDING) {
+            MuseTactileButton(
+                icon = if (step.pauseRequested) MuseIcons.play else MuseIcons.pause,
+                onClick = onTogglePause,
+                contentDescription = stringResource(
+                    if (step.pauseRequested) R.string.task_card_resume_step else R.string.task_card_pause_step,
+                ),
+                tint = if (step.pauseRequested) {
+                    MaterialTheme.colorScheme.primary
+                } else {
+                    MaterialTheme.colorScheme.onSurfaceVariant
+                },
+                size = 32.dp,
+                iconSize = 16.dp,
+            )
+        }
+    }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// CompactStepRow — 折叠态步骤条(v1.0.52)
+// 步骤数 ≥2 时替代纯标题,水平排列各步骤状态图标 + 缩写名称。
+// ═══════════════════════════════════════════════════════════════════════
+
+/** 单步最大显示字符数(超长截断加省略号)。 */
+private const val STEP_NAME_MAX_CHARS = 8
+
+/**
+ * 紧凑步骤行 — 折叠态显示,水平排列各步骤的"图标 名称"。
+ *
+ * - 全部完成 → "已完成 N 步"
+ * - 进行中 → 每步 "✓/⏳/✗ 名称" 水平排列(箭头分隔)
+ * - 有失败步骤 → 失败步骤红色标记
+ */
+@Composable
+private fun CompactStepRow(data: TaskCardData, modifier: Modifier = Modifier) {
+    val colorScheme = MaterialTheme.colorScheme
+    if (data.steps.size < 2) return
+
+    // 全部到达终态:显示摘要
+    if (data.isAllDone) {
+        val failedCount = data.steps.count { it.status == TaskStepStatus.FAILED }
+        val timedOutCount = data.timedOutSteps
+        val cancelledCount = data.cancelledSteps
+        val hasIssues = failedCount + timedOutCount + cancelledCount > 0
+        Row(
+            modifier = modifier,
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Icon(
+                imageVector = if (hasIssues) MuseIcons.alertTriangle else MuseIcons.circleCheck,
+                contentDescription = null,
+                modifier = Modifier.size(14.dp),
+                tint = if (hasIssues) {
+                    MaterialTheme.statusColors.error
+                } else {
+                    MaterialTheme.statusColors.success
+                },
+            )
+            Spacer(Modifier.size(6.dp))
+            val summaryText = if (!hasIssues) {
+                stringResource(R.string.task_card_all_completed, data.steps.size)
+            } else {
+                val parts = mutableListOf<String>()
+                if (failedCount > 0) {
+                    parts += stringResource(R.string.task_card_summary_failed, failedCount)
+                }
+                if (timedOutCount > 0) {
+                    parts += stringResource(R.string.task_card_summary_timed_out, timedOutCount)
+                }
+                if (cancelledCount > 0) {
+                    parts += stringResource(R.string.task_card_summary_cancelled, cancelledCount)
+                }
+                stringResource(
+                    R.string.task_card_steps_summary,
+                    data.steps.size,
+                    parts.joinToString(" · "),
+                )
+            }
+            Text(
+                text = summaryText,
+                style = MaterialTheme.typography.labelSmall,
+                color = colorScheme.onSurfaceVariant,
+            )
+        }
+        return
+    }
+
+    // 进行中:步骤条
+    Row(
+        modifier = modifier,
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(2.dp),
+    ) {
+        data.steps.forEachIndexed { index, step ->
+            // 步骤图标(成功/进行中/待定/失败/超时/取消)
+            val (icon, tint) = when (step.status) {
+                TaskStepStatus.SUCCESS -> MuseIcons.circleCheck to MaterialTheme.statusColors.success
+                TaskStepStatus.RUNNING -> MuseIcons.circle to colorScheme.primary
+                TaskStepStatus.FAILED -> MuseIcons.x to MaterialTheme.statusColors.error
+                TaskStepStatus.TIMED_OUT -> MuseIcons.timer to MaterialTheme.statusColors.error
+                TaskStepStatus.CANCELLED -> MuseIcons.x to colorScheme.outline
+                TaskStepStatus.PENDING -> MuseIcons.circle to colorScheme.outline
+            }
+            Icon(
+                imageVector = icon,
+                contentDescription = step.title,
+                modifier = Modifier.size(12.dp),
+                tint = tint,
+            )
+            Spacer(Modifier.size(2.dp))
+            // 缩写名称
+            Text(
+                text = if (step.title.length > STEP_NAME_MAX_CHARS) {
+                    step.title.take(STEP_NAME_MAX_CHARS) + "…"
+                } else {
+                    step.title
+                },
+                style = MaterialTheme.typography.labelSmall,
+                fontWeight = if (step.status == TaskStepStatus.RUNNING) FontWeight.SemiBold else FontWeight.Normal,
+                color = if (step.status == TaskStepStatus.RUNNING) {
+                    colorScheme.onSurface
+                } else {
+                    colorScheme.onSurfaceVariant
+                },
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            // 步骤间箭头分隔(最后一步不加)
+            if (index < data.steps.size - 1) {
+                Icon(
+                    imageVector = MuseIcons.arrowRight,
+                    contentDescription = null,
+                    modifier = Modifier.size(10.dp),
+                    tint = colorScheme.outline,
+                )
+            }
+        }
+    }
+}

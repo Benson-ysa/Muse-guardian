@@ -1,0 +1,202 @@
+[versions]
+ktlint = "12.1.1"
+detekt = "1.23.8"
+# 工具链(本机已缓存:Gradle 9.4.1 + AGP 9.2.1 + Kotlin 2.4.0)
+agp = "9.2.1"
+kotlin = "2.4.0"
+ksp = "2.3.11"
+# Phase 2.1: Kover 覆盖率插件(用于 PR check 时生成 HTML/XML 报告,5 模块聚合到 root)
+kover = "0.9.9"
+# AndroidX — 选兼容 compileSdk 35 的稳定版(本机 SDK 仅到 android-36.1,装不了 37)
+coreKtx = "1.15.0"
+lifecycle = "2.8.7"
+activityCompose = "1.9.3"
+composeBom = "2026.02.01"
+# material3 独立版本线(与 Compose BOM 解耦):
+# 1.4.0 正式版把 MaterialExpressiveTheme/MotionScheme 移出(官方说明:expressive API 在 1.4.0 stable 起移入 1.5.0-alpha),
+# 项目主题依赖 expressive,因此停在仍保留该 API 的 alpha 线。
+material3 = "1.4.0-alpha04"
+navigationCompose = "2.8.5"
+koinBom = "4.0.0"
+room = "2.8.4"
+datastore = "1.1.1"
+coil = "2.7.0"
+okhttp = "5.3.2"
+# v1.94: Jsoup — HTML 解析(搜索结果 + web_fetch 正文提取)
+jsoup = "1.18.3"
+serialization = "1.7.3"
+coroutines = "1.9.0"
+junit = "4.13.2"
+# Phase 8.6: 文档解析 + OCR
+pdfboxAndroid = "2.0.27.0"
+mlkitTextRecognition = "16.0.1"
+# Knowledge archive import: bounded 7z decoding and RAR extraction.
+commonsCompress = "1.28.0"
+junrar = "8.1.1"
+xz = "1.12"
+# Phase 8.11: Ktor 嵌入式 Web 服务器
+ktor = "3.0.3"
+# Phase 8.11: JWT 鉴权(与 Ktor auth-jwt 配合)
+# v1.89: 从 3.18.1 升级至 4.4.0 — 修复 CVE-2023-52428(3.x 系列已 EOL)
+jwt = "4.4.0"
+# v1.55: 真实 tokenizer(OpenAI tiktoken 的 Java 实现,BPE 编码)
+jtokkit = "1.1.0"
+# Tabler Icons Compose(线条图标库,Maven Central)
+composeIcons = "1.1.1"
+# P3-3: Shizuku SDK(以 Shell 权限运行命令,无需 root;rikk.shizuku:api + provider)
+shizuku = "13.1.5"
+# v2.0.1: Haze — Compose 背景模糊(backdrop blur),设置页吸顶搜索栏玻璃效果(API 31+ 真模糊,低版本自动降级 scrim)
+haze = "1.5.3"
+
+# v2.6: 液态玻璃专用引擎(Compose 1.10+)。
+# backdrop: 液体玻璃(模糊+vibrancy+折射色散);liquid: RuntimeShader 水玻璃。
+# API 33+ 真玻璃,低版本回退到自绘玻璃。
+backdrop = "1.0.6"
+liquid = "1.1.1"
+
+# R-BUILD-06: app/memory 收编的硬编码版本
+coreSplashscreen = "1.0.1"
+appcompat = "1.7.0"
+biometric = "1.1.0"
+work = "2.9.0"
+glance = "1.1.1"
+onnxruntime = "1.16.3"
+mockk = "1.13.13"
+turbine = "1.2.0"
+robolectric = "4.17"
+androidxTest = "1.6.1"
+androidxTestRunner = "1.6.2"
+androidxTestJunit = "1.2.1"
+leakcanary = "2.14"
+zxing = "3.5.3"
+mlkitBarcode = "17.3.0"
+camera = "1.3.4"
+
+[libraries]
+# AndroidX Core
+androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
+androidx-lifecycle-runtime-ktx = { group = "androidx.lifecycle", name = "lifecycle-runtime-ktx", version.ref = "lifecycle" }
+androidx-lifecycle-viewmodel-compose = { group = "androidx.lifecycle", name = "lifecycle-viewmodel-compose", version.ref = "lifecycle" }
+androidx-lifecycle-process = { group = "androidx.lifecycle", name = "lifecycle-process", version.ref = "lifecycle" }
+androidx-activity-compose = { group = "androidx.activity", name = "activity-compose", version.ref = "activityCompose" }
+
+# Compose
+androidx-compose-bom = { group = "androidx.compose", name = "compose-bom", version.ref = "composeBom" }
+androidx-compose-ui = { group = "androidx.compose.ui", name = "ui" }
+androidx-compose-ui-graphics = { group = "androidx.compose.ui", name = "ui-graphics" }
+androidx-compose-ui-tooling = { group = "androidx.compose.ui", name = "ui-tooling" }
+androidx-compose-ui-tooling-preview = { group = "androidx.compose.ui", name = "ui-tooling-preview" }
+androidx-compose-material3 = { group = "androidx.compose.material3", name = "material3", version.ref = "material3" }
+androidx-compose-material-icons-extended = { group = "androidx.compose.material", name = "material-icons-extended" }
+androidx-compose-runtime = { group = "androidx.compose.runtime", name = "runtime" }
+androidx-navigation-compose = { group = "androidx.navigation", name = "navigation-compose", version.ref = "navigationCompose" }
+
+# Koin(BOM 统一版本)
+koin-bom = { group = "io.insert-koin", name = "koin-bom", version.ref = "koinBom" }
+koin-android = { group = "io.insert-koin", name = "koin-android" }
+koin-androidx-compose = { group = "io.insert-koin", name = "koin-androidx-compose" }
+
+# Room
+androidx-room-runtime = { group = "androidx.room", name = "room-runtime", version.ref = "room" }
+androidx-room-ktx = { group = "androidx.room", name = "room-ktx", version.ref = "room" }
+androidx-room-compiler = { group = "androidx.room", name = "room-compiler", version.ref = "room" }
+
+# DataStore
+androidx-datastore-preferences = { group = "androidx.datastore", name = "datastore-preferences", version.ref = "datastore" }
+
+# v2.0.1: Haze — Compose backdrop blur(设置页吸顶搜索栏玻璃;原料:胶囊内部模糊+半透明透视)
+haze = { group = "dev.chrisbanes.haze", name = "haze", version.ref = "haze" }
+
+# v2.6: 液态玻璃专用引擎
+backdrop = { group = "io.github.kyant0", name = "backdrop", version.ref = "backdrop" }
+liquid = { group = "io.github.fletchmckee.liquid", name = "liquid", version.ref = "liquid" }
+
+# Coil 2
+coil-compose = { group = "io.coil-kt", name = "coil-compose", version.ref = "coil" }
+coil-svg = { group = "io.coil-kt", name = "coil-svg", version.ref = "coil" }
+# Phase 11.1.6: GIF 动图解码(api19+ 用 GifDecoder,api28+ 自动用 ImageDecoderDecoder)
+coil-gif = { group = "io.coil-kt", name = "coil-gif", version.ref = "coil" }
+
+# OkHttp
+okhttp = { group = "com.squareup.okhttp3", name = "okhttp", version.ref = "okhttp" }
+okhttp-logging = { group = "com.squareup.okhttp3", name = "logging-interceptor", version.ref = "okhttp" }
+okhttp-sse = { group = "com.squareup.okhttp3", name = "okhttp-sse", version.ref = "okhttp" }
+
+# v1.94: Jsoup — HTML 解析(搜索结果 + web_fetch 正文提取)
+jsoup = { group = "org.jsoup", name = "jsoup", version.ref = "jsoup" }
+
+# Serialization
+kotlinx-serialization-json = { group = "org.jetbrains.kotlinx", name = "kotlinx-serialization-json", version.ref = "serialization" }
+
+# Coroutines
+kotlinx-coroutines-android = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-android", version.ref = "coroutines" }
+kotlinx-coroutines-test = { group = "org.jetbrains.kotlinx", name = "kotlinx-coroutines-test", version.ref = "coroutines" }
+
+# Testing
+junit = { group = "junit", name = "junit", version.ref = "junit" }
+
+# Phase 8.6: PDF 文本提取 / OCR
+tom-roush-pdfbox-android = { group = "com.tom-roush", name = "pdfbox-android", version.ref = "pdfboxAndroid" }
+google-mlkit-text-recognition-chinese = { group = "com.google.mlkit", name = "text-recognition-chinese", version.ref = "mlkitTextRecognition" }
+commons-compress = { group = "org.apache.commons", name = "commons-compress", version.ref = "commonsCompress" }
+junrar = { group = "com.github.junrar", name = "junrar", version.ref = "junrar" }
+xz = { group = "org.tukaani", name = "xz", version.ref = "xz" }
+
+# Phase 8.11: Ktor 嵌入式 Web 服务器(CIO 引擎 — 纯 Kotlin 协程实现,无 JNI,适合 Android)
+ktor-server-core = { group = "io.ktor", name = "ktor-server-core", version.ref = "ktor" }
+ktor-server-cio = { group = "io.ktor", name = "ktor-server-cio", version.ref = "ktor" }
+# v2.x: HTTPS 支持 — Netty 引擎(原生 sslConnector;CIO 引擎不支持 HTTPS)
+ktor-server-netty = { group = "io.ktor", name = "ktor-server-netty", version.ref = "ktor" }
+ktor-server-auth = { group = "io.ktor", name = "ktor-server-auth", version.ref = "ktor" }
+ktor-server-auth-jwt = { group = "io.ktor", name = "ktor-server-auth-jwt", version.ref = "ktor" }
+ktor-server-content-negotiation = { group = "io.ktor", name = "ktor-server-content-negotiation", version.ref = "ktor" }
+ktor-serialization-kotlinx-json = { group = "io.ktor", name = "ktor-serialization-kotlinx-json", version.ref = "ktor" }
+ktor-server-cors = { group = "io.ktor", name = "ktor-server-cors", version.ref = "ktor" }
+ktor-server-status-pages = { group = "io.ktor", name = "ktor-server-status-pages", version.ref = "ktor" }
+ktor-server-websockets = { group = "io.ktor", name = "ktor-server-websockets", version.ref = "ktor" }
+# Phase 8.11: JWT 签发/验证(Ktor auth-jwt 依赖 com.auth0:java-jwt)
+auth0-java-jwt = { group = "com.auth0", name = "java-jwt", version.ref = "jwt" }
+# v1.55: 真实 tokenizer(BPE 编码,cl100k_base — GPT-4/3.5 通用,其他模型近似)
+jtokkit = { group = "com.knuddels", name = "jtokkit", version.ref = "jtokkit" }
+# Tabler Icons Compose(线条图标库)
+composeIcons-tablerIcons = { module = "br.com.devsrsouza.compose.icons:tabler-icons", version.ref = "composeIcons" }
+# P3-3: Shizuku SDK — 以 Shell 权限执行命令(无需 root),三通道路由之一
+shizuku-api = { group = "dev.rikka.shizuku", name = "api", version.ref = "shizuku" }
+shizuku-provider = { group = "dev.rikka.shizuku", name = "provider", version.ref = "shizuku" }
+
+# R-BUILD-06: app/memory 附加依赖
+androidx-core-splashscreen = { group = "androidx.core", name = "core-splashscreen", version.ref = "coreSplashscreen" }
+androidx-appcompat = { group = "androidx.appcompat", name = "appcompat", version.ref = "appcompat" }
+androidx-biometric = { group = "androidx.biometric", name = "biometric", version.ref = "biometric" }
+androidx-work-runtime-ktx = { group = "androidx.work", name = "work-runtime-ktx", version.ref = "work" }
+androidx-glance-appwidget = { group = "androidx.glance", name = "glance-appwidget", version.ref = "glance" }
+androidx-glance-material3 = { group = "androidx.glance", name = "glance-material3", version.ref = "glance" }
+onnxruntime-android = { group = "com.microsoft.onnxruntime", name = "onnxruntime-android", version.ref = "onnxruntime" }
+mockk = { group = "io.mockk", name = "mockk", version.ref = "mockk" }
+turbine = { group = "app.cash.turbine", name = "turbine", version.ref = "turbine" }
+androidx-room-testing = { group = "androidx.room", name = "room-testing", version.ref = "room" }
+robolectric = { group = "org.robolectric", name = "robolectric", version.ref = "robolectric" }
+androidx-test-core-ktx = { group = "androidx.test", name = "core-ktx", version.ref = "androidxTest" }
+androidx-test-runner = { group = "androidx.test", name = "runner", version.ref = "androidxTestRunner" }
+androidx-test-ext-junit = { group = "androidx.test.ext", name = "junit", version.ref = "androidxTestJunit" }
+leakcanary-android = { group = "com.squareup.leakcanary", name = "leakcanary-android", version.ref = "leakcanary" }
+zxing-core = { group = "com.google.zxing", name = "core", version.ref = "zxing" }
+mlkit-barcode-scanning = { group = "com.google.mlkit", name = "barcode-scanning", version.ref = "mlkitBarcode" }
+
+# v1.0.72: CameraX — 加号菜单"拍照预览"(Telegram 风格实时取景)
+camera-core = { group = "androidx.camera", name = "camera-core", version.ref = "camera" }
+camera-camera2 = { group = "androidx.camera", name = "camera-camera2", version.ref = "camera" }
+camera-lifecycle = { group = "androidx.camera", name = "camera-lifecycle", version.ref = "camera" }
+camera-view = { group = "androidx.camera", name = "camera-view", version.ref = "camera" }
+
+[plugins]
+ktlint = { id = "org.jlleitschuh.gradle.ktlint", version.ref = "ktlint" }
+detekt = { id = "io.gitlab.arturbosch.detekt", version.ref = "detekt" }
+android-application = { id = "com.android.application", version.ref = "agp" }
+android-library = { id = "com.android.library", version.ref = "agp" }
+kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
+kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+kotlin-serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
+# Phase 2.1: Kover 覆盖率插件 — 5 模块应用,root 作为 merging module 汇总报告
+kover = { id = "org.jetbrains.kotlinx.kover", version.ref = "kover" }

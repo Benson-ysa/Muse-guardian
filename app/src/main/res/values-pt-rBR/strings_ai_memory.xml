@@ -1,0 +1,218 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    i18n review summary for ai / memory / transformer modules:
+    - ai module (standalone Gradle module): user-visible error messages are delivered
+      to UI via Result.Error/exceptions, but cannot reference app's R.string directly.
+      Each source file is annotated with // TODO i18n pending extraction; extraction
+      requires an error-code enum approach.
+    - memory module (standalone Gradle module): validation errors (MemoryConfig.validate)
+      and isZh time labels (Key Facts/Timeline etc.) are user-visible, but cross-module
+      and some labels participate in LLM output parsing contracts.
+      Each source file is annotated with // TODO i18n pending extraction.
+    - transformer module (inside app): per file review, all Chinese strings are LLM
+      prompt content (SYSTEM messages sent to LLM), logger messages, code comments, or
+      internal exception messages. No directly user-visible UI strings; kept as-is per
+      the "LLM prompts not extracted" rule.
+    This file currently has no string entries; it serves as a placeholder and review record.
+-->
+<resources>
+    <string name="memory_meta_hit_count">Usada %1$d×</string>
+    <string name="memory_menu_history">Histórico</string>
+    <string name="memory_revision_title">Registro de alterações</string>
+    <string name="memory_revision_empty">Ainda não há alterações</string>
+    <string name="memory_revision_revert">Restaurar esta versão</string>
+    <string name="memory_revision_reverted">Versão restaurada</string>
+    <string name="memory_revision_revert_failed">Falha ao restaurar</string>
+    <string name="memory_meta_last_hit">Último uso há %1$d d</string>
+    <!-- v4: memory importance related -->
+    <string name="memory_importance_normal">Normal</string>
+    <string name="memory_importance_important">Importante</string>
+    <string name="memory_importance_critical">Crítico</string>
+    <string name="memory_importance_set_title">Definir importância</string>
+    <string name="memory_importance_normal_desc">Preferências diárias, inofensivas se esquecidas</string>
+    <string name="memory_importance_important_desc">Risco médio, erros causam transtornos</string>
+    <string name="memory_importance_critical_desc">Alto risco, erros causam danos (nunca se esqueça)</string>
+    <string name="memory_source_session">Fonte: Sessão %1$s</string>
+    <string name="memory_created_today">Adicionado hoje</string>
+    <string name="memory_created_yesterday">Adicionado ontem</string>
+    <string name="memory_created_days_ago">Adicionado %1$d dias atrás</string>
+    <string name="memory_sync_never">Memória ainda não compilada, conversas que não estão na memória de longo prazo</string>
+    <string name="memory_sync_recent">Última compilação %1$d min atrás, memória sincronizada</string>
+    <string name="memory_sync_stale">Compilada pela última vez há %1$d min, as conversas recentes podem ainda não estar na memória.</string>
+    <string name="memory_screen_experience_category_general">Geral</string>
+    <string name="memory_chart_type_distribution_cd">Gráfico de rosca de distribuição de tipos de memória</string>
+    <string name="memory_chart_daily_trend_cd">Gráfico de tendência diária de memória</string>
+    <string name="memory_sync_set_importance_cd">Definir importância</string>
+
+    <!-- v6: MemoryViewModel CRUD error messages -->
+    <string name="memory_delete_failed">Falha na exclusão: %1$s</string>
+    <string name="memory_edit_failed">Falha na edição: %1$s</string>
+    <string name="memory_set_failed">Falha na configuração: %1$s</string>
+    <string name="memory_add_failed">Falha na adição: %1$s</string>
+    <string name="memory_add_experience_failed">Falha ao adicionar experiência: %1$s</string>
+    <string name="memory_edit_experience_failed">Falha na experiência de edição: %1$s</string>
+    <string name="memory_delete_experience_failed">Falha ao excluir experiência: %1$s</string>
+
+    <!-- v6: Compile section display titles -->
+    <string name="memory_compile_section_facts">Resumo dos fatos</string>
+    <string name="memory_compile_section_today">Hoje</string>
+    <string name="memory_compile_section_week">Essa semana</string>
+    <string name="memory_compile_section_longterm">Longo prazo</string>
+
+    <!-- v6: Summary item title -->
+    <string name="memory_summary_title">Sessão %1$s</string>
+
+    <!-- v6: Error trace labels -->
+    <string name="memory_error_trace_header">== Erro de memória do Muse ==</string>
+    <string name="memory_error_trace_time">Tempo:</string>
+    <string name="memory_error_trace_exception">Exceção:</string>
+    <string name="memory_error_trace_message">Mensagem:</string>
+    <string name="memory_error_trace_device">Dispositivo:</string>
+    <string name="memory_error_trace_stack_header">== Rastreamento de pilha ==</string>
+
+    <!-- v8: memory scope related -->
+    <string name="memory_scope_all">Todos</string>
+    <string name="memory_scope_main">Assistente Principal</string>
+    <string name="memory_scope_assistant">Memória Assistente</string>
+    <string name="memory_scope_label">Escopo de memória</string>
+
+    <!-- v1.0.52 P2-2: memory space related -->
+    <string name="memory_space_manage_title">Espaços de memória</string>
+    <string name="memory_space_create">Criar espaço</string>
+    <string name="memory_space_create_title">Novo espaço de memória</string>
+    <string name="memory_space_rename">Renomear</string>
+    <string name="memory_space_rename_title">Renomear espaço de memória</string>
+    <string name="memory_space_delete">Excluir</string>
+    <string name="memory_space_name_label">Nome do Espaço</string>
+    <string name="memory_space_fact_count">%1$d fatos</string>
+    <string name="memory_space_entry">Espaços de memória</string>
+
+    <!-- MemoryScreen.kt: view mode toggle / export / stats card -->
+    <string name="memory_stats_view_list">Lista</string>
+    <string name="memory_stats_view_timeline">Linha do tempo</string>
+    <string name="memory_stats_export_title">Exportar memória</string>
+    <string name="memory_stats_export_format_hint">Selecione o formato de exportação:</string>
+    <string name="memory_stats_section_title">Estatísticas de memória</string>
+    <string name="memory_stats_total">Total</string>
+    <string name="memory_stats_importance_distribution">Distribuição de Importância</string>
+    <string name="memory_stats_top_sessions">Sessões mais ativas</string>
+    <string name="memory_stats_session_count">%1$d entradas</string>
+    <string name="memory_stats_trend_30_days">Tendência dos últimos 30 dias</string>
+    <!-- 前端修复 (i18n-3.x): 群聊记忆 Tab + 时间轴筛选 i18n(临时复制中文,后续补译) -->
+    <string name="memory_group_chat_empty">Ainda não há memória do chat em grupo</string>
+    <string name="memory_group_chat_count">%1$d itens no total</string>
+    <string name="memory_group_chat_empty_hint">Após cada resposta do assistente em um chat em grupo, uma memória de resumo é gerada aqui.\nSe o estilo do assistente ficar estranho, você pode excluir ou limpar aqui.</string>
+    <string name="memory_group_chat_clear_title">Limpar todas as memórias do chat em grupo</string>
+    <string name="memory_group_chat_clear_content">Limpar todas as memórias do chat em grupo? O assistente não fará mais referência a resumos anteriores do grupo.</string>
+    <string name="memory_group_chat_delete_cd">Excluir</string>
+    <string name="memory_timeline_filter_all">Todos</string>
+    <string name="memory_timeline_filter_fact">Fatos</string>
+    <string name="memory_timeline_filter_summary">Resumo</string>
+    <string name="memory_timeline_filter_milestone">Marcos</string>
+    <string name="memory_tab_group_chat">Chat em grupo</string>
+    <string name="memory_tab_graph">Árvore de memórias</string>
+    <string name="memory_graph_preview_title">Árvore de memórias</string>
+    <string name="memory_graph_preview_hint">Toque em uma memória para ver suas conexões</string>
+    <string name="memory_graph_preview_selected">Em foco: %1$s</string>
+    <string name="memory_graph_preview_node_muse">Muse</string>
+    <string name="memory_graph_preview_node_android">Desenvolvimento Android</string>
+    <string name="memory_graph_preview_node_local_ai">IA local</string>
+    <string name="memory_graph_preview_node_photo">Fotografia</string>
+    <string name="memory_graph_preview_node_camera">Nikon Z50 II</string>
+    <string name="memory_graph_preview_node_goal">Meta de longo prazo</string>
+    <string name="memory_graph_preview_node_writing">Escrita</string>
+    <string name="memory_graph_empty_title">Sem dados de relações</string>
+    <string name="memory_graph_empty_subtitle">Quando as memórias se acumularem, as relações aparecerão aqui</string>
+    <string name="memory_graph_node_type_label">Tipo: %1$s</string>
+    <string name="memory_graph_node_pinned">Fixado</string>
+    <string name="memory_graph_node_expired">Expirado</string>
+    <string name="memory_graph_node_related">%1$d relacionadas</string>
+    <string name="memory_graph_load_failed">Falha ao carregar</string>
+    <string name="memory_graph_category_preference">Preferência</string>
+    <string name="memory_graph_category_identity">Identidade</string>
+    <string name="memory_graph_category_event">Evento</string>
+    <string name="memory_graph_category_relationship">Relação</string>
+    <string name="memory_graph_category_goal">Objetivo</string>
+    <string name="memory_graph_category_medical">Saúde</string>
+    <string name="memory_graph_category_general">Fato</string>
+    <string name="memory_graph_relation_related_to">Relacionado</string>
+    <string name="memory_graph_relation_causes">Influencia</string>
+    <string name="memory_graph_relation_explains">Explica</string>
+    <string name="memory_graph_relation_part_of">Parte de</string>
+    <string name="memory_graph_relation_contradicts">Contradiz</string>
+    <string name="memory_graph_relation_supports">Apoia</string>
+    <string name="memory_graph_edge_weight">Força: %1$d%%</string>
+    <string name="memory_graph_edge_confirm">Confirmar relação</string>
+    <string name="memory_graph_edge_delete">Excluir relação</string>
+    <string name="memory_delete_group_chat_failed">Falha ao excluir a memória do grupo: %1$s</string>
+    <string name="memory_clear_group_chat_failed">Falha ao limpar a memória do grupo: %1$s</string>
+    <string name="memory_dedup_button">Mesclar memórias duplicadas</string>
+    <string name="memory_dedup_result">%1$s memórias duplicadas mescladas</string>
+    <string name="memory_dedup_failed">Falha ao deduplicar memórias</string>
+    <string name="memory_compile_done">Compilação de memória concluída</string>
+    <string name="memory_compile_failed">Falha na compilação de memória. Verifique a configuração do modelo e tente novamente</string>
+    <string name="memory_menu_cd">Mais ações</string>
+    <string name="memory_menu_pin">Fixar</string>
+    <string name="memory_menu_unpin">Desafixar</string>
+    <string name="memory_menu_importance">Definir importância</string>
+    <string name="memory_menu_edit">Editar</string>
+    <string name="memory_menu_delete">Excluir</string>
+    <string name="memory_center_fact_count">fatos</string>
+    <string name="memory_center_summary_count">%1$d resumos</string>
+    <string name="memory_center_updated">Atualizado %1$s</string>
+    <string name="memory_center_empty_title">Ainda não há memórias</string>
+    <string name="memory_center_empty_subtitle">Continue conversando com Muse ou diga “lembre disso” para adicionar um fato.</string>
+    <string name="memory_center_ready_subtitle">Estes são os fatos que Muse mantém atualmente sobre você.</string>
+    <string name="memory_center_open_facts">Abrir biblioteca de fatos</string>
+    <string name="memory_center_tab_stream">Fluxo de memória</string>
+    <string name="memory_center_tab_constellation">Constelação</string>
+    <string name="memory_center_stream_title">Lembrado recentemente</string>
+    <string name="memory_center_library_title">Biblioteca de fatos</string>
+    <string name="memory_center_constellation_hint">Fatos importantes ficam perto do centro. Os fatos continuam visíveis antes das relações serem organizadas.</string>
+    <string name="memory_center_constellation_empty">Ainda não há fatos para exibir. Adicione ou crie um fato e volte aqui.</string>
+    <string name="memory_center_filter_empty">Não há fatos neste escopo ou espaço. Tente mudar os filtros acima.</string>
+    <string name="memory_center_scope_all">Todos</string>
+    <string name="memory_center_space_default">Padrão</string>
+    <string name="memory_center_scope_line">%1$s · %2$s</string>
+    <string name="memory_center_filter_title">Filtrar</string>
+    <string name="memory_center_filter_scope">Escopo</string>
+    <string name="memory_center_filter_space">Espaço de memória</string>
+    <string name="memory_compile_running">Organizando a memória…</string>
+    <string name="memory_organize_action">Organizar memória</string>
+    <string name="memory_organize_stage_prepare">Preparando</string>
+    <string name="memory_organize_stage_compile">Compilando resumos</string>
+    <string name="memory_organize_stage_dedup">Mesclando duplicados</string>
+    <string name="memory_organize_stage_complete">Organizado, %1$d mesclados</string>
+    <string name="memory_organize_stage_no_duplicates">Organizado, nenhuma memória duplicada encontrada</string>
+    <string name="memory_organize_stage_failed">Falha ao organizar, tente novamente</string>
+    <string name="memory_center_stream_subtitle">Agrupados por data: fatos acumulados dos seus chats, exibidos em uma linha do tempo</string>
+    <string name="memory_center_facts_subtitle">Gerenciamento por item: pesquise, adicione, edite ou exclua memórias individuais</string>
+    <string name="memory_center_filter_advanced">Filtro avançado</string>
+    <string name="memory_center_filter_importance">Importância</string>
+    <string name="memory_center_filter_importance_all">Tudo</string>
+    <string name="memory_center_filter_time">Período</string>
+    <string name="memory_center_filter_time_30">Últimos 30 dias</string>
+    <string name="memory_center_filter_time_7">Últimos 7 dias</string>
+    <string name="memory_center_filter_time_90">Últimos 90 dias</string>
+    <string name="memory_center_filter_time_all">Todo o período</string>
+    <string name="memory_contradictions_dismiss_cd">Confirmar e limpar</string>
+    <string name="memory_contradictions_title">Memórias contraditórias aguardando confirmação</string>
+    <string name="memory_delete_confirm_title">Excluir memória</string>
+    <string name="memory_fact_source_label">Conversa de origem</string>
+    <string name="memory_pin_failed">Falha ao fixar. Tente novamente.</string>
+    <string name="memory_stats_session_live">Conversa %1$d</string>
+    <string name="memory_stream_mode_list">Lista</string>
+    <string name="memory_stream_mode_timeline">Linha do tempo</string>
+    <string name="memory_unpin_failed">Falha ao desafixar. Tente novamente.</string>
+    <string name="memory_graph_reset_view">Redefinir vista</string>
+    <!-- v2.2.1: avisos de arquivo/recuperação da biblioteca de memória -->
+    <string name="memory_archive_rebuilt_hint">A biblioteca de memória foi arquivada e reconstruída devido a uma mudança de versão; parte do histórico pode não ter sido mantida</string>
+    <string name="memory_archive_recovered">Recuperadas %1$d memórias do arquivo de mudança de versão</string>
+    <string name="memory_archive_recovery_title">Arquivo de memória recuperável</string>
+    <string name="memory_archive_recovery_message">Foi encontrado um arquivo de mudança de versão com %1$d resumos de sessão e %2$d seções compiladas. O banco de memória atual está vazio e pode ser restaurado com segurança.</string>
+    <string name="memory_archive_recovery_action">Restaurar arquivo</string>
+    <string name="memory_archive_recovery_confirm_title">Restaurar o arquivo de memória?</string>
+    <string name="memory_archive_recovery_confirm">Isso restaura resumos e memória compilada no banco atual vazio sem substituir dados existentes. Continuar?</string>
+    <string name="memory_archive_recovery_done">%1$d registros de memória restaurados</string>
+    <string name="memory_archive_recovery_failed">Falha ao restaurar o arquivo de memória: %1$s</string>
+</resources>
