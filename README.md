@@ -303,21 +303,7 @@ python ci/script/validate_release_apks.py --apk "app/build/outputs/apk/release/*
 
 Muse 由独立开发者维护，免费开源、无内购、无账号体系。如果它对你有帮助，欢迎自愿支持项目持续开发：
 
-**请作者喝咖啡**（微信 / 支付宝扫码）：
 
-<p align="center">
-  <img src="art/support/wechat-pay.png" width="200" alt="微信收款码">
-  <img src="art/support/alipay.jpg" width="200" alt="支付宝收款码">
-</p>
-
-**加入交流群**（欢迎来聊）：
-
-<p align="center">
-  <img src="art/support/wechat-group.jpg" width="200" alt="微信群二维码">
-  <img src="art/support/qq-group.jpg" width="200" alt="QQ 群二维码">
-</p>
-
-> 赞助完全自愿，不与任何功能、额度或更新挂钩；不赞助不影响正常使用。
 
 ## 许可证
 
